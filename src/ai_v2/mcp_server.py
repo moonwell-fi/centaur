@@ -8,6 +8,7 @@ import asyncpg
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from .cli_tools import ALLOWED_CLIS, run_cli
 from .deps import EmbeddingService
 
 mcp = FastMCP(
@@ -239,3 +240,32 @@ async def sync_status() -> str:
             """
         )
     return _serialize(rows)
+
+
+# --- CLI tool wrappers ---
+
+
+@mcp.tool()
+async def cli(tool: str, args: list[str]) -> str:
+    """Run a Paradigm CLI tool. Use list_tools() to see available tools and their descriptions.
+
+    Examples:
+        cli("slack", ["search", "reth benchmarks"])
+        cli("slack", ["channel", "engineering", "-n", "20"])
+        cli("slack", ["thread", "https://slack.com/archives/C01/p1234"])
+        cli("reshift", ["notes", "search", "deal memo"])
+        cli("reshift", ["db", "SELECT * FROM funds LIMIT 5"])
+        cli("gsuite", ["gmail", "search", "term sheet"])
+        cli("gsuite", ["calendar", "today"])
+        cli("linear", ["issues", "--state", "In Progress"])
+        cli("parchiver", ["search", "data room", "--limit", "10"])
+        cli("allium", ["sql-examples"])
+        cli("defillama", ["stablecoins"])
+    """
+    return await run_cli(tool, args)
+
+
+@mcp.tool()
+async def list_tools() -> str:
+    """List all available CLI tools and their descriptions."""
+    return json.dumps(ALLOWED_CLIS, indent=2)

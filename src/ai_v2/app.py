@@ -12,7 +12,7 @@ from starlette.responses import JSONResponse
 from .config import settings
 from .db import close_pool, create_pool
 from .mcp_server import mcp, set_pool
-from .routers import health, query, search, secrets, sync
+from .routers import health, query, search, secrets, sync, tools
 
 log = structlog.get_logger()
 
@@ -50,6 +50,7 @@ app.include_router(search.router)
 app.include_router(query.router)
 app.include_router(sync.router)
 app.include_router(secrets.router)
+app.include_router(tools.router)
 
 _mcp_starlette = mcp.streamable_http_app()
 
