@@ -5,13 +5,25 @@ from typing import Annotated
 import asyncpg
 from fastapi import APIRouter, Depends
 
-from api.deps import get_pool
+from api.deps import get_pool, verify_api_key
 
 router = APIRouter()
 
 
 @router.get("/health")
 async def health(pool: Annotated[asyncpg.Pool, Depends(get_pool)]) -> dict:
+    """Unauthenticated liveness check — no sensitive data."""
+    try:
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        return {"status": "ok"}
+    except Exception:
+        return {"status": "degraded"}
+
+
+@router.get("/health/detail", dependencies=[Depends(verify_api_key)])
+async def health_detail(pool: Annotated[asyncpg.Pool, Depends(get_pool)]) -> dict:
+    """Authenticated health check with sync run details."""
     db_ok = False
     last_syncs: list[dict] = []
     try:

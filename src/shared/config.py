@@ -24,4 +24,5 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["*"]
 
 
+
 settings = Settings()
