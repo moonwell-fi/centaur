@@ -523,30 +523,80 @@ class PluginManager:
 
         return tools
 
-    def register_mcp_tools(self, mcp: Any) -> int:
-        """Register all loaded plugin tools as MCP tools."""
-        count = 0
-        for plugin in self.plugins.values():
-            for tool in plugin.tools:
-                _register_mcp_tool(mcp, tool)
-                count += 1
-        log.info("mcp_plugin_tools_registered", count=count)
-        return count
-
-    def list_mcp_tools(self) -> list[dict[str, str]]:
-        """Return all loaded plugin tools that are exposed to MCP."""
-        items: list[dict[str, str]] = []
+    def list_plugins(self) -> list[dict[str, Any]]:
+        """List all loaded plugins with their tool names (no schemas)."""
+        items: list[dict[str, Any]] = []
         for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
-            for tool in sorted(plugin.tools, key=lambda t: t.tool_name):
-                items.append(
-                    {
-                        "name": tool.qualified_name,
-                        "plugin": plugin.name,
-                        "tool": tool.tool_name,
-                        "description": tool.fn.__doc__ or "",
-                    }
-                )
+            items.append(
+                {
+                    "plugin": plugin.name,
+                    "description": plugin.description,
+                    "tools": [t.tool_name for t in sorted(plugin.tools, key=lambda t: t.tool_name)],
+                }
+            )
         return items
+
+    def describe_plugin(self, plugin_name: str) -> dict[str, Any]:
+        """Return full method schemas for a plugin's tools."""
+        plugin = self.plugins.get(plugin_name)
+        if not plugin:
+            return {"error": f"Plugin '{plugin_name}' not found"}
+        tools: list[dict[str, Any]] = []
+        for tool in sorted(plugin.tools, key=lambda t: t.tool_name):
+            sig = inspect.signature(tool.fn)
+            params: dict[str, Any] = {}
+            for pname, param in sig.parameters.items():
+                if pname == "self":
+                    continue
+                ptype = "any"
+                if param.annotation is not inspect.Parameter.empty:
+                    ptype = str(param.annotation)
+                pinfo: dict[str, Any] = {"type": ptype}
+                if param.default is not inspect.Parameter.empty:
+                    pinfo["default"] = param.default
+                else:
+                    pinfo["required"] = True
+                params[pname] = pinfo
+            tools.append(
+                {
+                    "name": tool.tool_name,
+                    "description": (tool.fn.__doc__ or "").strip().split("\n")[0],
+                    "parameters": params,
+                }
+            )
+        return {
+            "plugin": plugin.name,
+            "description": plugin.description,
+            "tools": tools,
+        }
+
+    async def call_tool(self, plugin_name: str, tool_name: str, args: dict[str, Any]) -> str:
+        """Call a plugin tool by name and return the result as a JSON string."""
+        plugin = self.plugins.get(plugin_name)
+        if not plugin:
+            return json.dumps({"error": f"Plugin '{plugin_name}' not found"})
+
+        tool = next((t for t in plugin.tools if t.tool_name == tool_name), None)
+        if not tool:
+            return json.dumps(
+                {"error": f"Tool '{tool_name}' not found in plugin '{plugin_name}'"}
+            )
+
+        token = set_plugin_context(tool.ctx)
+        try:
+            if inspect.iscoroutinefunction(tool.fn):
+                result = await tool.fn(**args)
+            else:
+                result = tool.fn(**args)
+            if isinstance(result, str):
+                return result
+            return json.dumps(result, default=str)
+        except Exception as e:
+            return json.dumps(
+                {"error": str(e), "plugin": plugin_name, "tool": tool_name}
+            )
+        finally:
+            reset_plugin_context(token)
 
     def create_rest_router(self) -> APIRouter:
         """Create a FastAPI router with all plugin tools as POST endpoints."""
@@ -557,7 +607,15 @@ class PluginManager:
 
         for plugin in self.plugins.values():
             for tool in plugin.tools:
-                _register_rest_endpoint(router, tool)
+                try:
+                    _register_rest_endpoint(router, tool)
+                except Exception as exc:
+                    log.warning(
+                        "rest_endpoint_register_failed",
+                        plugin=plugin.name,
+                        tool=tool.tool_name,
+                        error=str(exc),
+                    )
 
         # List endpoint
         @router.get("")

@@ -191,7 +191,7 @@ class CoinbasePrimeClient:
 
 
 def _client() -> CoinbasePrimeClient:
-    from ai_v2.plugin_sdk import secret
+    from shared.plugin_sdk import secret
 
     return CoinbasePrimeClient(
         api_key=secret("COINBASE_API_KEY"),

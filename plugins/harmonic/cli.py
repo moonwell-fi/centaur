@@ -9,7 +9,7 @@ load_dotenv()
 
 import typer
 from rich.console import Console
-from ai_v2.cli_tables import Table
+from shared.cli_tables import Table
 
 app = typer.Typer(name="harmonic", help="Harmonic.AI API CLI for startup discovery and enrichment")
 console = Console()

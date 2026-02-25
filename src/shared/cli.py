@@ -12,6 +12,9 @@ from pathlib import Path
 import click
 import structlog
 import uvicorn
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 from etl.config import ETLSettings
 from etl.embeddings import EmbeddingService, hybrid_search

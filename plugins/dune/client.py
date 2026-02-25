@@ -114,6 +114,6 @@ class DuneClient:
 
 def _client() -> DuneClient:
     """Factory function for plugin SDK."""
-    from ai_v2.plugin_sdk import secret
+    from shared.plugin_sdk import secret
 
     return DuneClient(api_key=secret("DUNE_API_KEY"))

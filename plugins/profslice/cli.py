@@ -8,7 +8,7 @@ import json
 import re
 
 import typer
-from ai_v2.cli_tables import Table
+from shared.cli_tables import Table
 from rich.console import Console
 
 app = typer.Typer(

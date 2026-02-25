@@ -159,6 +159,6 @@ class BitGoClient:
 
 
 def _client() -> BitGoClient:
-    from ai_v2.plugin_sdk import secret
+    from shared.plugin_sdk import secret
 
     return BitGoClient(access_token=secret("BITGO_API_KEY"))

@@ -127,135 +127,26 @@ async def sql_query(query: str) -> str:
 
 
 @mcp.tool()
-async def get_slack_thread(channel: str, thread_ts: str) -> str:
-    """Fetch a full Slack thread by channel and thread timestamp."""
-    pool = _get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT DISTINCT ON (external_id)
-                external_id,
-                data->>'user' AS user_id,
-                data->>'text' AS text,
-                data->>'ts' AS slack_ts,
-                fetched_at
-            FROM raw_records
-            WHERE source = 'slack' AND kind = 'message'
-              AND data->>'channel' = $1
-              AND data->>'thread_ts' = $2
-            ORDER BY external_id, fetched_at DESC
-            """,
-            channel,
-            thread_ts,
-        )
-    return _serialize(rows)
-
-
-@mcp.tool()
-async def get_person(slug: str) -> str:
-    """Get a person's profile and cross-source identities."""
-    pool = _get_pool()
-    async with pool.acquire() as conn:
-        person = await conn.fetchrow(
-            "SELECT slug, name, email, role, focus_area FROM people WHERE slug = $1",
-            slug,
-        )
-        if not person:
-            return json.dumps({"error": "Person not found"})
-
-        mappings = await conn.fetch(
-            "SELECT source, external_id FROM entity_mappings WHERE person_slug = $1",
-            slug,
-        )
-
-    result = {
-        **dict(person),
-        "identities": [dict(r) for r in mappings],
-    }
-    return json.dumps(result, default=str)
-
-
-@mcp.tool()
-async def get_timeline(days: int = 7, source: str | None = None) -> str:
-    """Recent raw records across sources."""
-    pool = _get_pool()
-    conditions = [f"fetched_at >= NOW() - INTERVAL '{days} days'"]
-    args: list[Any] = []
-    idx = 1
-
-    if source:
-        conditions.append(f"source = ${idx}")
-        args.append(source)
-        idx += 1
-
-    where = "WHERE " + " AND ".join(conditions)
-    args.append(100)
-
-    sql = f"""
-    SELECT DISTINCT ON (source, kind, external_id)
-        source, kind, external_id,
-        COALESCE(data->>'title', data->>'text', data->>'name') AS title,
-        COALESCE(data->>'url', data->>'html_url') AS url,
-        fetched_at
-    FROM raw_records
-    {where}
-    ORDER BY source, kind, external_id, fetched_at DESC
-    LIMIT ${idx}
-    """
-
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, *args)
-    return _serialize(rows)
-
-
-@mcp.tool()
-async def list_sources() -> str:
-    """List available data sources with record counts."""
-    pool = _get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT source, COUNT(*) AS record_count,
-                   COUNT(DISTINCT kind) AS kind_count
-            FROM raw_records
-            GROUP BY source
-            ORDER BY source
-            """
-        )
-    return _serialize(rows)
-
-
-@mcp.tool()
-async def sync_status() -> str:
-    """Current sync status per source."""
-    pool = _get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT
-                c.source,
-                c.cursor AS cursor_value,
-                c.updated_at AS cursor_updated_at,
-                r.status AS last_run_status,
-                r.started_at AS last_run_started,
-                r.finished_at AS last_run_finished,
-                r.records_synced AS last_run_records
-            FROM sync_cursors c
-            LEFT JOIN LATERAL (
-                SELECT status, started_at, finished_at, records_synced
-                FROM sync_runs
-                WHERE source = c.source
-                ORDER BY started_at DESC
-                LIMIT 1
-            ) r ON TRUE
-            ORDER BY c.source
-            """
-        )
-    return _serialize(rows)
-
-
-@mcp.tool()
-async def list_plugin_tools() -> str:
-    """List all dynamically discovered in-process plugin tools exposed to MCP."""
+async def list_plugins() -> str:
+    """List all available plugins and their tool names. Call this first to discover
+    what plugins and tools are available, then use describe_plugin to get full
+    method schemas before calling call_plugin."""
     manager = _get_plugin_manager()
-    return json.dumps(manager.list_mcp_tools(), indent=2)
+    return json.dumps(manager.list_plugins(), indent=2)
+
+
+@mcp.tool()
+async def describe_plugin(plugin: str) -> str:
+    """Get full method schemas (parameters, types, defaults) for a plugin's tools.
+    Call this before call_plugin to know the exact arguments a tool expects."""
+    manager = _get_plugin_manager()
+    return json.dumps(manager.describe_plugin(plugin), indent=2, default=str)
+
+
+@mcp.tool()
+async def call_plugin(plugin: str, tool: str, args: dict | None = None) -> str:
+    """Call a plugin tool. Use list_plugins to discover plugins, describe_plugin
+    to get method schemas, then call this with the plugin name, tool name, and
+    a dict of arguments."""
+    manager = _get_plugin_manager()
+    return await manager.call_tool(plugin, tool, args or {})

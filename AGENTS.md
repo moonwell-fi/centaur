@@ -170,6 +170,12 @@ All secrets are loaded by the `PluginManager` and injected into `PluginContext`.
 - Methods starting with `_` or lifecycle methods (`close`, `connect`, `shutdown`) are excluded from tool registration.
 - Stub clients (for CLI-only tools) are acceptable but should have docstrings explaining planned capabilities.
 
+## tmux / subprocess rules
+
+- **Never use `sleep`** between `send-keys` and `capture-pane`. Use a tight polling loop with `capture-pane` — the loop itself is the wait mechanism.
+- **Never pipe remote commands through `2>&1 | tail` or similar** — this eats useful output. Run commands directly so output streams naturally to the terminal pane.
+- When launching Claude CLI subprocesses, always use `--dangerously-skip-permissions` so they don't hang waiting for user input.
+
 ## Rules
 
 - All imports must be at the top of the file, never inside functions

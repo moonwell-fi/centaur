@@ -10,7 +10,7 @@ import sys
 from datetime import datetime, timezone
 
 import typer
-from ai_v2.cli_tables import Table
+from shared.cli_tables import Table
 from rich.console import Console
 
 app = typer.Typer(name="ashby", help="Ashby ATS CLI for AI agents")

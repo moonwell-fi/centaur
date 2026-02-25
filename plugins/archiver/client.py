@@ -28,7 +28,7 @@ class ArchiverClient:
     def download(
         self,
         source_url: str,
-        output_dir: str | Path,
+        output_dir: str,
         company: str | None = None,
         account: str | None = None,
         password: str | None = None,
@@ -69,22 +69,22 @@ class ArchiverClient:
         tmp.write_text(json.dumps(data))
         return tmp
 
-    def parse(self, manifest_path: str | Path, context: dict | None = None) -> dict:
+    def parse(self, manifest_path: str, context: dict | None = None) -> dict:
         path = Path(manifest_path)
         path = self._manifest_with_context(path, context)
         return parse_manifest(path)
 
-    def embed(self, manifest_path: str | Path, context: dict | None = None) -> dict:
+    def embed(self, manifest_path: str, context: dict | None = None) -> dict:
         path = Path(manifest_path)
         path = self._manifest_with_context(path, context)
         return embed_manifest(path)
 
-    def archive(self, manifest_path: str | Path, context: dict | None = None) -> dict:
+    def archive(self, manifest_path: str, context: dict | None = None) -> dict:
         path = Path(manifest_path)
         path = self._manifest_with_context(path, context)
         return archive_manifest(path)
 
-    def ingest(self, manifest_path: str | Path, context: dict | None = None) -> dict:
+    def ingest(self, manifest_path: str, context: dict | None = None) -> dict:
         path = Path(manifest_path)
         path = self._manifest_with_context(path, context)
         return ingest_manifest(path)

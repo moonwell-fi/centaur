@@ -104,7 +104,7 @@ class MessariClient:
 
 
 try:
-    from ai_v2.plugin_sdk import secret
+    from shared.plugin_sdk import secret
 except ImportError:
 
     def secret(key: str, default: str | None = None) -> str:  # type: ignore[misc]

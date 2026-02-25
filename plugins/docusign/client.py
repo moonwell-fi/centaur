@@ -42,16 +42,16 @@ class DocuSignClient:
                 sys.exit(1)
 
         if not all([self.integration_key, self.user_id, self.private_key]):
-            print("Error: DocuSign authentication required", file=sys.stderr)
-            print("Set environment variables:", file=sys.stderr)
-            print("  DOCUSIGN_INTEGRATION_KEY - Integration Key (Client ID)", file=sys.stderr)
-            print("  DOCUSIGN_USER_ID - User ID for JWT", file=sys.stderr)
-            print(
-                "  DOCUSIGN_PRIVATE_KEY or DOCUSIGN_PRIVATE_KEY_PATH - RSA private key",
-                file=sys.stderr,
+            missing = []
+            if not self.integration_key:
+                missing.append("DOCUSIGN_INTEGRATION_KEY")
+            if not self.user_id:
+                missing.append("DOCUSIGN_USER_ID")
+            if not self.private_key:
+                missing.append("DOCUSIGN_PRIVATE_KEY or DOCUSIGN_PRIVATE_KEY_PATH")
+            raise RuntimeError(
+                f"DocuSign authentication required. Missing: {', '.join(missing)}"
             )
-            print("  DOCUSIGN_ACCOUNT_ID - Account ID", file=sys.stderr)
-            sys.exit(1)
 
         env = env or os.environ.get("DOCUSIGN_ENV", "demo")
         is_prod = env.lower() in ("production", "prod")

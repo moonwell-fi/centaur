@@ -7,7 +7,7 @@ import typer
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.status import Status
-from ai_v2.cli_tables import Table
+from shared.cli_tables import Table
 
 from .client import DuneClient
 

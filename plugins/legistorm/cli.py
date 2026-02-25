@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timedelta
 
 import typer
-from ai_v2.cli_tables import Table
+from shared.cli_tables import Table
 from rich.console import Console
 
 app = typer.Typer(name="legistorm", help="LegiStorm CLI for congressional data")

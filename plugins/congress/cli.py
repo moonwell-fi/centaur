@@ -8,7 +8,7 @@ import json
 
 import typer
 from rich.console import Console
-from ai_v2.cli_tables import Table
+from shared.cli_tables import Table
 
 from .client import CongressClient
 

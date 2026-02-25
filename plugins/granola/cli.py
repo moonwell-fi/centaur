@@ -10,7 +10,7 @@ import typer
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from ai_v2.cli_tables import Table
+from shared.cli_tables import Table
 
 app = typer.Typer(name="granola", help="Query Granola meeting notes and transcripts")
 console = Console()

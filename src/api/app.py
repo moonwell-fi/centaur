@@ -60,7 +60,6 @@ _plugins_dir = Path(os.environ.get("PLUGINS_DIR", _app_root / "plugins"))
 plugin_manager = PluginManager(_plugins_dir)
 plugin_manager.discover()
 set_plugin_manager(plugin_manager)
-plugin_manager.register_mcp_tools(mcp)
 app.include_router(plugin_manager.create_rest_router())
 
 _mcp_starlette = mcp.streamable_http_app()
