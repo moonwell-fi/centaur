@@ -1,0 +1,28 @@
+{
+  "name": "tempo-slackbot",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3001",
+    "build": "next build",
+    "start": "next start --port 3001",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "latest",
+    "@chat-adapter/slack": "latest",
+    "@chat-adapter/state-memory": "^4.14.0",
+    "@chat-adapter/state-redis": "latest",
+    "ai": "latest",
+    "chat": "latest",
+    "next": "^15",
+    "react": "^19",
+    "react-dom": "^19",
+    "zod": "^3"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "typescript": "^5"
+  }
+}
