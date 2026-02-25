@@ -1,0 +1,18 @@
+[project]
+name = "ai-v2-plugin-reth-log-analyzer"
+description = "Parse reth logs and generate performance graphs"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "pandas>=2.0.0",
+    "matplotlib>=3.7.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ai-v2-plugin]
+module = "client.py"

@@ -1,0 +1,1 @@
+"""Conference date monitor plugin."""
