@@ -144,4 +144,39 @@ async def _ensure_schema(pool: asyncpg.Pool) -> None:
             );
             """
         )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_sessions (
+                slack_thread_key TEXT PRIMARY KEY,
+                container_id     TEXT NOT NULL,
+                harness          TEXT NOT NULL DEFAULT 'amp',
+                agent_thread_id  TEXT,
+                state            TEXT NOT NULL DEFAULT 'running',
+                repo             TEXT,
+                created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+                last_activity    TIMESTAMPTZ NOT NULL DEFAULT now()
+            );
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_turns (
+                id               BIGSERIAL PRIMARY KEY,
+                slack_thread_key TEXT NOT NULL REFERENCES agent_sessions(slack_thread_key)
+                                     ON DELETE CASCADE,
+                turn_id          INT NOT NULL,
+                user_message     TEXT NOT NULL,
+                events           JSONB NOT NULL DEFAULT '[]',
+                result           TEXT NOT NULL DEFAULT '',
+                started_at       TIMESTAMPTZ NOT NULL,
+                finished_at      TIMESTAMPTZ,
+                exit_code        INT,
+                timed_out        BOOLEAN NOT NULL DEFAULT false,
+                duration_s       REAL NOT NULL DEFAULT 0,
+                UNIQUE (slack_thread_key, turn_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_turns_thread
+                ON agent_turns (slack_thread_key, turn_id);
+            """
+        )
     log.info("schema_ensured")

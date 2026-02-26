@@ -3,7 +3,7 @@ name = "ai-v2-plugin-agent"
 description = "Spawn Docker sandbox containers running agent harnesses (amp, claude-code, codex)"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["docker>=7.0.0"]
+dependencies = ["docker>=7.0.0", "psycopg2-binary>=2.9.0"]
 
 [build-system]
 requires = ["hatchling"]

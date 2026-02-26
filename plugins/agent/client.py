@@ -9,9 +9,12 @@ import contextlib
 import json
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 import docker
+import psycopg2
+import psycopg2.extras
 import structlog
 from docker.errors import NotFound
 
@@ -24,6 +27,91 @@ EXEC_TIMEOUT = int(os.getenv("AGENT_EXEC_TIMEOUT", "600"))
 
 # In-memory session registry: slack_thread_key → session dict
 _sessions: dict[str, dict[str, Any]] = {}
+
+
+# ---------------------------------------------------------------------------
+# Postgres persistence (best-effort — never breaks Docker operations)
+# ---------------------------------------------------------------------------
+def _pg_write(sql: str, params: tuple = ()) -> None:
+    """Execute a single write against Postgres. Silently skips on failure."""
+    url = os.getenv("DATABASE_URL", "")
+    if not url:
+        return
+    try:
+        conn = psycopg2.connect(url, connect_timeout=3)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.debug("pg_write_failed", error=str(exc))
+
+
+def _ts(epoch: float) -> datetime:
+    return datetime.fromtimestamp(epoch, tz=timezone.utc)
+
+
+def _persist_session(session: dict[str, Any], key: str) -> None:
+    _pg_write(
+        """
+        INSERT INTO agent_sessions
+            (slack_thread_key, container_id, harness, agent_thread_id,
+             state, created_at, last_activity)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (slack_thread_key) DO UPDATE SET
+            container_id    = EXCLUDED.container_id,
+            harness         = EXCLUDED.harness,
+            agent_thread_id = EXCLUDED.agent_thread_id,
+            state           = EXCLUDED.state,
+            last_activity   = EXCLUDED.last_activity
+        """,
+        (
+            key,
+            session["container_id"],
+            session["harness"],
+            session.get("agent_thread_id"),
+            session["state"],
+            _ts(session["created_at"]),
+            _ts(session["last_activity"]),
+        ),
+    )
+
+
+def _persist_turn(key: str, turn: dict[str, Any]) -> None:
+    events_json = json.dumps(turn.get("events", []), default=str)
+    _pg_write(
+        """
+        INSERT INTO agent_turns
+            (slack_thread_key, turn_id, user_message, events, result,
+             started_at, finished_at, exit_code, timed_out, duration_s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (slack_thread_key, turn_id) DO UPDATE SET
+            events      = EXCLUDED.events,
+            result      = EXCLUDED.result,
+            finished_at = EXCLUDED.finished_at,
+            exit_code   = EXCLUDED.exit_code,
+            timed_out   = EXCLUDED.timed_out,
+            duration_s  = EXCLUDED.duration_s
+        """,
+        (
+            key,
+            turn["turn_id"],
+            turn["user_message"],
+            events_json,
+            turn["result"],
+            _ts(turn["started_at"]),
+            _ts(turn["finished_at"]) if turn.get("finished_at") else None,
+            turn.get("exit_code"),
+            turn.get("timed_out", False),
+            turn.get("duration_s", 0),
+        ),
+    )
+
+
+def _delete_session(key: str) -> None:
+    _pg_write("DELETE FROM agent_sessions WHERE slack_thread_key = %s", (key,))
 
 
 def _docker_client() -> docker.DockerClient:
@@ -226,6 +314,7 @@ class AgentClient:
             "turns": [],
         }
         _sessions[slack_thread_key] = session
+        _persist_session(session, slack_thread_key)
 
         return {
             "session_id": slack_thread_key,
@@ -357,9 +446,11 @@ class AgentClient:
             "duration_s": round(time.time() - started_ts, 1),
         }
         session.setdefault("turns", []).append(turn)
+        _persist_turn(slack_thread_key, turn)
 
         session["state"] = "idle"
         session["last_activity"] = time.time()
+        _persist_session(session, slack_thread_key)
         log.info(
             "agent_exec_done",
             thread=slack_thread_key,
@@ -406,6 +497,7 @@ class AgentClient:
             pass
 
         del _sessions[slack_thread_key]
+        _delete_session(slack_thread_key)
         return {"session_id": slack_thread_key, "status": "stopped"}
 
     def threads(self) -> dict[str, Any]:
