@@ -1,13 +1,20 @@
-"""Thread viewer API — reads agent sessions and turns from Postgres."""
+"""Thread viewer API.
+
+Live threads are streamed from in-memory sessions via SSE.
+Historical/completed threads are read from Postgres.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Annotated, Any
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
+from starlette.responses import StreamingResponse
 
+from api.agent import _sessions
 from api.deps import get_pool, verify_api_key
 
 router = APIRouter(
@@ -15,6 +22,20 @@ router = APIRouter(
     tags=["threads"],
     dependencies=[Depends(verify_api_key)],
 )
+
+
+def _build_live_detail(key: str, session: dict[str, Any]) -> dict[str, Any]:
+    """Build thread detail from an in-memory session."""
+    return {
+        "slack_thread_key": key,
+        "container_id": session["container_id"][:12],
+        "harness": session["harness"],
+        "agent_thread_id": session.get("agent_thread_id"),
+        "state": session["state"],
+        "created_at": session["created_at"],
+        "last_activity": session["last_activity"],
+        "turns": session.get("turns", []),
+    }
 
 
 @router.get("")
@@ -71,8 +92,14 @@ async def get_thread(
     key: str,
     pool: Annotated[asyncpg.Pool, Depends(get_pool)],
 ) -> dict[str, Any]:
-    """Get full event stream for a specific thread."""
-    session = await pool.fetchrow(
+    """Get full thread detail. Prefers live in-memory data, falls back to PG."""
+    # Live session — return real-time data
+    session = _sessions.get(key)
+    if session:
+        return _build_live_detail(key, session)
+
+    # Historical — read from Postgres
+    row = await pool.fetchrow(
         """
         SELECT
             slack_thread_key,
@@ -87,7 +114,7 @@ async def get_thread(
         """,
         key,
     )
-    if not session:
+    if not row:
         raise HTTPException(status_code=404, detail=f"Thread '{key}' not found")
 
     turn_rows = await pool.fetch(
@@ -129,12 +156,54 @@ async def get_thread(
         )
 
     return {
-        "slack_thread_key": session["slack_thread_key"],
-        "container_id": session["container_id"][:12],
-        "harness": session["harness"],
-        "agent_thread_id": session["agent_thread_id"],
-        "state": session["state"],
-        "created_at": float(session["created_at"]),
-        "last_activity": float(session["last_activity"]),
+        "slack_thread_key": row["slack_thread_key"],
+        "container_id": row["container_id"][:12],
+        "harness": row["harness"],
+        "agent_thread_id": row["agent_thread_id"],
+        "state": row["state"],
+        "created_at": float(row["created_at"]),
+        "last_activity": float(row["last_activity"]),
         "turns": turns,
     }
+
+
+@router.get("/stream")
+async def stream_thread(key: str) -> StreamingResponse:
+    """SSE stream of live thread updates from in-memory sessions."""
+
+    async def generate():
+        last_event_count = -1
+        last_state = ""
+        idle_ticks = 0
+
+        while True:
+            session = _sessions.get(key)
+            if not session:
+                yield f"event: error\ndata: {json.dumps({'error': 'not_found'})}\n\n"
+                break
+
+            total_events = sum(
+                len(t.get("events", [])) for t in session.get("turns", [])
+            )
+            state = session.get("state", "")
+
+            if total_events != last_event_count or state != last_state:
+                detail = _build_live_detail(key, session)
+                yield f"data: {json.dumps(detail, default=str)}\n\n"
+                last_event_count = total_events
+                last_state = state
+                idle_ticks = 0
+            else:
+                idle_ticks += 1
+
+            # Stop streaming after 30s of no changes on an idle thread
+            if state == "idle" and idle_ticks > 100:
+                break
+
+            await asyncio.sleep(0.3)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

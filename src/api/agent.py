@@ -10,7 +10,7 @@ import json
 import os
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import docker
@@ -58,7 +58,7 @@ def _pg_write(sql: str, params: tuple = ()) -> None:
 
 
 def _ts(epoch: float) -> datetime:
-    return datetime.fromtimestamp(epoch, tz=timezone.utc)
+    return datetime.fromtimestamp(epoch, tz=UTC)
 
 
 def _persist_session(session: dict[str, Any], key: str) -> None:
@@ -714,9 +714,16 @@ class AgentClient:
         return {"session_id": slack_thread_key, "status": "interrupted"}
 
 
-def _client() -> AgentClient:
-    client = AgentClient()
-    # Pre-fill the container pool on startup
-    if POOL_SIZE > 0:
-        _refill_pool()
-    return client
+# ---------------------------------------------------------------------------
+# Module-level singleton
+# ---------------------------------------------------------------------------
+_agent: AgentClient | None = None
+
+
+def get_agent() -> AgentClient:
+    global _agent
+    if _agent is None:
+        _agent = AgentClient()
+        if POOL_SIZE > 0:
+            _refill_pool()
+    return _agent

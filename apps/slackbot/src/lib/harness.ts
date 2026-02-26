@@ -8,11 +8,11 @@
 const API_URL = process.env.AI_V2_API_URL || "http://api:8000";
 const API_KEY = process.env.AI_V2_API_KEY || "";
 
-async function pluginCall(
-  tool: string,
+async function agentCall(
+  endpoint: string,
   args: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
-  const res = await fetch(`${API_URL}/plugins/agent/${tool}`, {
+  const res = await fetch(`${API_URL}/agent/${endpoint}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${API_KEY}`,
@@ -23,13 +23,10 @@ async function pluginCall(
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`agent.${tool} failed (${res.status}): ${text}`);
+    throw new Error(`agent/${endpoint} failed (${res.status}): ${text}`);
   }
 
-  const data = await res.json();
-  // REST endpoint wraps result: { plugin, tool, result }
-  const result = data.result;
-  return typeof result === "string" ? JSON.parse(result) : result;
+  return await res.json();
 }
 
 export type Harness = "amp" | "claude-code" | "codex";
@@ -56,7 +53,7 @@ export async function spawn(
   harness: Harness = "amp",
   repo?: string
 ): Promise<{ sessionId: string; status: string }> {
-  const result = await pluginCall("spawn", {
+  const result = await agentCall("spawn", {
     slack_thread_key: threadKey,
     harness,
     ...(repo ? { repo } : {}),
@@ -73,7 +70,7 @@ export async function execute(
   message: string,
   harness: Harness = "amp"
 ): Promise<string> {
-  const result = await pluginCall("execute", {
+  const result = await agentCall("execute", {
     slack_thread_key: threadKey,
     message,
     harness,
@@ -83,10 +80,10 @@ export async function execute(
 
 /** Stop a session. */
 export async function stop(threadKey: string): Promise<void> {
-  await pluginCall("stop", { slack_thread_key: threadKey });
+  await agentCall("stop", { slack_thread_key: threadKey });
 }
 
 /** Interrupt a running command. */
 export async function interrupt(threadKey: string): Promise<void> {
-  await pluginCall("interrupt", { slack_thread_key: threadKey });
+  await agentCall("interrupt", { slack_thread_key: threadKey });
 }

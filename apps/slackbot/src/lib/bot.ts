@@ -11,7 +11,7 @@ import { Chat, parseMarkdown, type Root } from "chat";
 import { createSlackAdapter } from "@chat-adapter/slack";
 import { createRedisState } from "@chat-adapter/state-redis";
 import { createMemoryState } from "@chat-adapter/state-memory";
-import { extractHarness, execute } from "./harness";
+import { extractHarness, spawn, execute } from "./harness";
 
 const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "https://svc-ai.paradigm.xyz";
 
@@ -82,6 +82,13 @@ function createBot() {
     const { harness, cleanedText } = extractHarness(messageText);
     const threadKey = thread.id;
 
+    // On first message, spawn container and immediately post the viewer link
+    if (isFirstMessage) {
+      await spawn(threadKey, harness);
+      const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
+      await thread.post(renderSlackMessage(`[🔗 Thread Viewer](${viewerUrl})`));
+    }
+
     await thread.startTyping("Running...");
 
     // Prepend session context on first message
@@ -89,17 +96,10 @@ function createBot() {
       ? buildSessionContext(threadKey) + cleanedText
       : cleanedText;
 
-    // Execute message (auto-spawns container if needed)
+    // Execute message in the container
     const result = await execute(threadKey, message, harness);
 
-    // Append thread viewer link on the first reply
-    let finalMessage = result;
-    if (isFirstMessage) {
-      const viewerUrl = `${THREAD_VIEWER_URL}/threads/${encodeURIComponent(threadKey)}`;
-      finalMessage += `\n\n[🔗 Thread Viewer](${viewerUrl})`;
-    }
-
-    await thread.post(renderSlackMessage(finalMessage));
+    await thread.post(renderSlackMessage(result));
   }
 
   // First @mention — subscribe and run

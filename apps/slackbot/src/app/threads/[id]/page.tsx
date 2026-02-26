@@ -1,7 +1,7 @@
 /** @jsxImportSource react */
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
@@ -281,6 +281,8 @@ export default function ThreadDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const scrollRef = useRef<HTMLDivElement>(null);
+
   const fetchThread = useCallback(async () => {
     try {
       const res = await fetch(
@@ -304,11 +306,47 @@ export default function ThreadDetailPage() {
     }
   }, [threadKey]);
 
+  // SSE for live updates, fall back to polling for historical threads
   useEffect(() => {
+    // Initial fetch
     fetchThread();
-    const interval = setInterval(fetchThread, 3000);
-    return () => clearInterval(interval);
-  }, [fetchThread]);
+
+    const url = `${BASE}/api/threads/stream?key=${encodeURIComponent(threadKey)}`;
+    const es = new EventSource(url);
+    let sseConnected = false;
+
+    es.onmessage = (event) => {
+      sseConnected = true;
+      try {
+        const data = JSON.parse(event.data);
+        if (data.error) {
+          // Thread not in memory — fall back to polling
+          es.close();
+          return;
+        }
+        setThread(data);
+        setError(null);
+        setLoading(false);
+        // Auto-scroll to bottom on new events
+        requestAnimationFrame(() => {
+          scrollRef.current?.scrollIntoView({ behavior: "smooth" });
+        });
+      } catch {
+        /* ignore parse errors */
+      }
+    };
+
+    es.onerror = () => {
+      es.close();
+      // SSE unavailable (historical thread) — fall back to polling
+      if (!sseConnected) {
+        const interval = setInterval(fetchThread, 3000);
+        return () => clearInterval(interval);
+      }
+    };
+
+    return () => es.close();
+  }, [threadKey, fetchThread]);
 
   if (loading) {
     return (
@@ -396,6 +434,7 @@ export default function ThreadDetailPage() {
               harness={thread.harness}
             />
           ))}
+          <div ref={scrollRef} />
         </div>
       )}
     </main>
