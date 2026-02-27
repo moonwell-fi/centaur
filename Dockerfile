@@ -2,28 +2,49 @@ FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends git curl unzip && rm -rf /var/lib/apt/lists/*
 
-# Install 1Password CLI
-RUN curl -sSfo /tmp/op.zip "https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.3/op_linux_arm64_v2.30.3.zip" \
+# Install 1Password CLI (multi-arch)
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+        arm64) OP_ARCH="arm64" ;; \
+        amd64) OP_ARCH="amd64" ;; \
+        *)     OP_ARCH="amd64" ;; \
+    esac && \
+    curl -sSfo /tmp/op.zip "https://cache.agilebits.com/dist/1P/op2/pkg/v2.30.3/op_linux_${OP_ARCH}_v2.30.3.zip" \
     && unzip -o /tmp/op.zip -d /usr/local/bin/ op \
     && rm /tmp/op.zip \
     && chmod +x /usr/local/bin/op
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+COPY --from=ghcr.io/astral-sh/uv:0.7 /uv /uvx /usr/local/bin/
+
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 WORKDIR /app
 
-# Install core dependencies
+# 1. Install core dependencies (cached unless pyproject.toml/uv.lock change)
 COPY pyproject.toml uv.lock README.md ./
-RUN uv sync --frozen --no-install-project --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-install-project --no-dev
 
+# 2. Install project with source
 COPY src/ src/
-RUN uv sync --frozen --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --frozen --no-dev
 
-# Copy plugins
+# 3. Install plugin dependencies via bind mount (doesn't create a layer from plugins/)
+#    The uv cache mount means even on rebuild this is fast.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=plugins,target=/tmp/plugins \
+    python -c "\
+import tomllib, pathlib; \
+deps = set(); \
+[deps.update(tomllib.load(open(p,'rb')).get('project',{}).get('dependencies',[])) \
+ for p in pathlib.Path('/tmp/plugins').glob('*/pyproject.toml')]; \
+open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" \
+    && uv pip install -r /tmp/pd.txt --quiet \
+    && rm /tmp/pd.txt
+
+# 4. Copy plugin source
 COPY plugins/ plugins/
-
-# Install all plugin dependencies at build time
-RUN python -c "import tomllib, pathlib; deps = set(); [deps.update(tomllib.load(open(p,'rb')).get('project',{}).get('dependencies',[])) for p in pathlib.Path('plugins').glob('*/pyproject.toml')]; open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" && uv pip install -r /tmp/pd.txt --quiet && rm /tmp/pd.txt
 
 # Copy migrations
 COPY migrations/ migrations/

@@ -53,9 +53,23 @@ _OP_CACHE_TTL = 300  # 5 minutes
 # None = not checked yet, True/False = result of first check
 _op_available: bool | None = None
 
+# Whether 1Password lookups are enabled. Must be explicitly enabled via
+# ``enable_op_backend(True)`` — disabled by default to avoid interactive
+# prompts during plugin discovery or automated workflows.
+_op_enabled: bool = False
+
+
+def enable_op_backend(enabled: bool = True) -> None:
+    """Explicitly enable or disable 1Password secret lookups."""
+    global _op_enabled
+    _op_enabled = enabled
+
 
 def _ensure_op_auth() -> bool:
     """Ensure the 1Password CLI is available and has credentials.
+
+    Returns False immediately if the 1Password backend has not been explicitly
+    enabled via ``enable_op_backend(True)``.
 
     In containers the entrypoint.sh handles signin/signout and exports secrets
     as env vars before the process starts — op CLI is not needed at runtime.
@@ -63,6 +77,10 @@ def _ensure_op_auth() -> bool:
     Returns True if op CLI is available. Result is cached for the process lifetime.
     """
     global _op_available
+
+    if not _op_enabled:
+        return False
+
     if _op_available is not None:
         return _op_available
 
