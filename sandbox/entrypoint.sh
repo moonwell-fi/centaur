@@ -5,20 +5,10 @@ HOME_DIR="$(eval echo ~)"
 MCP_URL="${AI_V2_API_URL:-http://localhost:8000}/mcp/"
 MCP_KEY="${AI_V2_API_KEY:-}"
 
-# ── Write MCP configs directly (no template files needed) ────────────────────
-if [ -n "$MCP_KEY" ]; then
-    cat > "$HOME_DIR/.config/amp/settings.json" <<EOF
-{"amp.experimental.compaction":95,"amp.mcpServers":{"tempo-ai":{"url":"${MCP_URL}","headers":{"Authorization":"Bearer ${MCP_KEY}"}}}}
+# ── Write harness configs (no MCP — adds ~10s startup overhead) ───────────────
+cat > "$HOME_DIR/.config/amp/settings.json" <<EOF
+{"amp.experimental.compaction":95}
 EOF
-    cat > "$HOME_DIR/.claude.json" <<EOF
-{"mcpServers":{"tempo-ai":{"type":"http","url":"${MCP_URL}","headers":{"Authorization":"Bearer ${MCP_KEY}"}}}}
-EOF
-    cat > "$HOME_DIR/.codex/config.toml" <<EOF
-model_auto_compact_token_limit = 120000
-[mcp_servers.tempo-ai]
-url = "${MCP_URL}"
-EOF
-fi
 
 # ── Writable worktree ────────────────────────────────────────────────────────
 if [ -n "${AGENT_REPO:-}" ] && [ -d "$HOME_DIR/github/$AGENT_REPO/.git" ]; then
