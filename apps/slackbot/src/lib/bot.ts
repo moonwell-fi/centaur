@@ -217,12 +217,14 @@ function createBot() {
   }
 
   bot.onNewMention(async (thread, message) => {
+    if (message.author.isMe) return;
     thread.subscribe().catch(() => {});
     const attachments = message.attachments?.map((a) => ({ url: a.url, name: a.name }));
     await handleMessage(thread, message.text, true, attachments);
   });
 
   bot.onSubscribedMessage(async (thread, message) => {
+    if (message.author.isMe) return;
     if (!message.isMention) return;
     const attachments = message.attachments?.map((a) => ({ url: a.url, name: a.name }));
     await handleMessage(thread, message.text, false, attachments);
