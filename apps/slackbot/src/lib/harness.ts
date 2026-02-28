@@ -294,15 +294,21 @@ function splitThreadKey(threadKey: string): { channel: string; threadTs: string 
   throw new Error(`Invalid thread key: ${threadKey}`);
 }
 
+function canonicalizeThreadKey(threadKey: string): string {
+  const { channel, threadTs } = splitThreadKey(threadKey);
+  return `slack:${channel}:${threadTs}`;
+}
+
 export async function startEngineerFlow(
   threadKey: string,
   task: string,
   modelPreference?: string | null,
   attachments?: FileAttachment[]
-): Promise<{ status: string; runId?: string }> {
-  const { channel, threadTs } = splitThreadKey(threadKey);
+): Promise<{ status: string; runId?: string; error?: string }> {
+  const normalizedThreadKey = canonicalizeThreadKey(threadKey);
+  const { channel, threadTs } = splitThreadKey(normalizedThreadKey);
   const result = await apiCall("/slack/start", {
-    thread_key: threadKey,
+    thread_key: normalizedThreadKey,
     channel,
     thread_ts: threadTs,
     task,
@@ -312,6 +318,7 @@ export async function startEngineerFlow(
   return {
     status: (result.status as string) || "started",
     runId: result.run_id as string | undefined,
+    error: result.error as string | undefined,
   };
 }
 
@@ -320,8 +327,9 @@ export async function replyEngineerFlow(
   reply: string,
   attachments?: FileAttachment[]
 ): Promise<{ status: string }> {
+  const normalizedThreadKey = canonicalizeThreadKey(threadKey);
   const result = await apiCall("/slack/reply", {
-    thread_key: threadKey,
+    thread_key: normalizedThreadKey,
     reply,
     ...(attachments && attachments.length > 0 ? { attachments } : {}),
   });
