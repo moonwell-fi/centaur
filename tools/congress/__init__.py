@@ -1,1 +1,1 @@
-"""US Congress API plugin."""
+"""US Congress API."""

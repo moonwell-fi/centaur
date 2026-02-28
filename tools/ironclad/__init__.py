@@ -1,1 +1,1 @@
-"""Ironclad CLM contract management plugin."""
+"""Ironclad CLM contract management."""

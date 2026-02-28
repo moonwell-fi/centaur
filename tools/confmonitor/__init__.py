@@ -1,1 +1,1 @@
-"""Conference date monitor plugin."""
+"""Conference date monitor."""

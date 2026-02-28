@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-similarweb"
+name = "similarweb"
 description = "SimilarWeb web traffic and market intelligence"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -11,12 +11,12 @@ dependencies = [
 ]
 
 [project.scripts]
-similarweb-plugin = "similarweb_plugin.cli:app"
+similarweb = "similarweb.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

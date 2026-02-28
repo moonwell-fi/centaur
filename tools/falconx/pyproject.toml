@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-falconx"
+name = "falconx"
 description = "FalconX trading API — quotes, execution, balances, trade history"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -11,12 +11,12 @@ dependencies = [
 ]
 
 [project.scripts]
-falconx-plugin = "falconx_plugin.cli:app"
+falconx = "falconx.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

@@ -1,1 +1,1 @@
-"""Listen Notes podcast API plugin."""
+"""Listen Notes podcast API."""

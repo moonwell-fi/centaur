@@ -1,1 +1,1 @@
-"""NewsAPI headlines plugin."""
+"""NewsAPI headlines."""

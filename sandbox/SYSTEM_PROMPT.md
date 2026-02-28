@@ -30,8 +30,8 @@
 
 [API access]
 |url: $AI_V2_API_URL | no auth needed
-|pattern: curl -s -X POST -H "Content-Type: application/json" -d '{...}' "$AI_V2_API_URL/tools/{plugin}/{tool}"
-|other: POST /search {"query":"...","limit":20} | POST /query (SQL) | GET /tools/{plugin} (discover params)
+|pattern: curl -s -X POST -H "Content-Type: application/json" -d '{...}' "$AI_V2_API_URL/tools/{name}/{tool}"
+|other: POST /search {"query":"...","limit":20} | POST /query (SQL) | GET /tools/{name} (discover params)
 
 [API tools index]
 |anchorage: get_balances{}
@@ -63,7 +63,7 @@
 |similarweb: get_visits{domain}
 |slack: get_channel_history{channel,limit} | search_messages{query} | get_thread_replies{channel,thread_ts} | list_channels{} | send_message{channel,text}
 |unit410: get_balances{}
-|unlisted: GET /tools/{plugin} to discover
+|unlisted: GET /tools/{name} to discover
 
 [Finance domain]
 |CRITICAL: always check ALL custodians for balances: anchorage+coinbase+bitgo+unit410+falconx

@@ -1,1 +1,1 @@
-"""Alchemy blockchain API plugin."""
+"""Alchemy blockchain API."""

@@ -47,11 +47,11 @@ jobs:
           echo "$DIFF" | grep -qE '^(Dockerfile|pyproject.toml|uv.lock|docker-compose.yml|migrations/)' && echo "infra=true" >> "$GITHUB_OUTPUT" || true
 
       # Plugin-only change → zero-downtime reload (no container restart)
-      - name: Reload plugins
+      - name: Reload tools
         if: steps.changes.outputs.tools == 'true' && steps.changes.outputs.api != 'true' && steps.changes.outputs.infra != 'true'
         run: |
           API_SECRET_KEY=$(grep -E '^API_SECRET_KEY=' .env | tail -n1 | cut -d= -f2-)
-          curl -sf -X POST http://localhost:8000/admin/reload-plugins \
+          curl -sf -X POST http://localhost:8000/admin/reload-tools \
             -H "Authorization: Bearer $API_SECRET_KEY"
 
       # API core or infra change → rebuild container

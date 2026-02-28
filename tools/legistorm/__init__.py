@@ -1,1 +1,1 @@
-"""LegiStorm congressional data plugin."""
+"""LegiStorm congressional data."""

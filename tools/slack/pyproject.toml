@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-slack"
+name = "slack"
 description = "Search Slack messages, channels, threads, users"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -11,12 +11,12 @@ dependencies = [
 ]
 
 [project.scripts]
-slack-plugin = "slack_plugin.cli:app"
+slack = "slack.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

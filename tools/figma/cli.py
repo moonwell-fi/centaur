@@ -1,4 +1,4 @@
-"""CLI entrypoint for Figma plugin."""
+"""CLI entrypoint for Figma tool."""
 
 from dotenv import load_dotenv
 

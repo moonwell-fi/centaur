@@ -1,1 +1,1 @@
-"""Firefox Profiler data extraction plugin."""
+"""Firefox Profiler data extraction."""

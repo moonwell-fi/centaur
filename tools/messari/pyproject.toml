@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-messari"
+name = "messari"
 description = "Messari crypto asset data — prices, metrics, profiles, markets, news"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -11,12 +11,12 @@ dependencies = [
 ]
 
 [project.scripts]
-messari-plugin = "messari_plugin.cli:app"
+messari = "messari.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

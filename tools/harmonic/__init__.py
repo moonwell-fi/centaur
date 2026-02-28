@@ -1,1 +1,1 @@
-"""Harmonic.AI startup discovery and enrichment plugin."""
+"""Harmonic.AI startup discovery and enrichment."""

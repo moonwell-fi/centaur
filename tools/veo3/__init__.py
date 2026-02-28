@@ -1,1 +1,1 @@
-"""Google Veo 3 video generation plugin."""
+"""Google Veo 3 video generation."""

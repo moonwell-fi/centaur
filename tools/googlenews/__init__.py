@@ -1,1 +1,1 @@
-"""Google News RSS plugin."""
+"""Google News RSS."""

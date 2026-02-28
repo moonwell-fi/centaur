@@ -217,7 +217,7 @@ class AttioClient:
 
 
 def _client() -> AttioClient:
-    """Factory for plugin SDK integration."""
-    from shared.plugin_sdk import secret
+    """Factory for tool SDK integration."""
+    from shared.tool_sdk import secret
 
     return AttioClient(api_key=secret("ATTIO_API_KEY"))

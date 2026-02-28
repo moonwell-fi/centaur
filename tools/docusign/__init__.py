@@ -1,1 +1,1 @@
-"""DocuSign e-signatures plugin."""
+"""DocuSign e-signatures."""

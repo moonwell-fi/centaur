@@ -18,7 +18,7 @@ $ make deploy
   │
   │                                  Inside container:
   │                                    /run/secrets/op_token (tmpfs)
-  │                                    └─ plugin_sdk.py reads this
+  │                                    └─ tool_sdk.py reads this
   │                                    └─ calls `op read` for each secret
   │                                    └─ cached in-memory, 5min TTL
   │
@@ -83,9 +83,9 @@ make deploy
 
 ## How secrets are resolved
 
-`secret("KEY")` in plugin code uses this resolution order:
+`secret("KEY")` in tool code uses this resolution order:
 
-1. **PluginContext** — per-plugin overrides (rarely needed)
+1. **ToolContext** — per-tool overrides (rarely needed)
 2. **1Password** — `op read op://AI-V2/KEY/password`, cached 5min
 3. **os.environ** — fallback for local dev without 1PW
 

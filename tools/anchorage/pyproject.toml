@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-anchorage"
+name = "anchorage"
 description = "Anchorage Digital API — custody, vaults, staking, balances"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -12,12 +12,12 @@ dependencies = [
 ]
 
 [project.scripts]
-anchorage-plugin = "anchorage_plugin.cli:app"
+anchorage = "anchorage.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

@@ -1,4 +1,4 @@
-"""Shared table rendering helpers for AI v2 and plugin CLIs."""
+"""Shared table rendering helpers for AI v2 and tool CLIs."""
 
 from __future__ import annotations
 

@@ -1065,7 +1065,7 @@ class SlackClient:
 
 
 def _client() -> SlackClient:
-    from shared.plugin_sdk import secret
+    from shared.tool_sdk import secret
     return SlackClient(bot_token=secret("SLACK_BOT_TOKEN"))
 
 

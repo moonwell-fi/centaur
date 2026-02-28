@@ -1,1 +1,1 @@
-"""AlphaSense research plugin."""
+"""AlphaSense research."""

@@ -1,1 +1,1 @@
-"""CoinDesk news feed plugin."""
+"""CoinDesk news feed."""

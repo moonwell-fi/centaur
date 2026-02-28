@@ -1,4 +1,4 @@
-"""Plugin discovery, loading, and registration."""
+"""Tool discovery, loading, and registration."""
 
 from __future__ import annotations
 
@@ -25,21 +25,21 @@ from toon_format import encode as toon_encode
 from typer.main import get_command
 
 from api.deps import verify_api_key
-from shared.plugin_sdk import PluginContext, reset_plugin_context, set_plugin_context
+from shared.tool_sdk import ToolContext, reset_tool_context, set_tool_context
 
 log = structlog.get_logger()
 
 
 class LoadedTool:
-    def __init__(self, plugin_name: str, tool_name: str, fn: Callable, ctx: PluginContext):
-        self.plugin_name = plugin_name
+    def __init__(self, integration_name: str, tool_name: str, fn: Callable, ctx: ToolContext):
+        self.integration_name = integration_name
         self.tool_name = tool_name
         self.fn = fn
         self.ctx = ctx
 
     @property
     def qualified_name(self) -> str:
-        return f"{self.plugin_name}.{self.tool_name}"
+        return f"{self.integration_name}.{self.tool_name}"
 
 
 _LIFECYCLE_METHODS = frozenset({"close", "connect", "disconnect", "shutdown"})
@@ -91,20 +91,20 @@ def _friendly_type_name(annotation: Any) -> str:
     return str(annotation)
 
 
-class LoadedPlugin:
+class LoadedIntegration:
     def __init__(
         self,
         name: str,
         description: str,
-        plugin_dir: Path,
+        tool_dir: Path,
         cli_module: str,
         scripts: dict[str, str],
-        ctx: PluginContext,
+        ctx: ToolContext,
         tools: list[LoadedTool],
     ):
         self.name = name
         self.description = description
-        self.plugin_dir = plugin_dir
+        self.tool_dir = tool_dir
         self.cli_module = cli_module
         self.scripts = scripts
         self.ctx = ctx
@@ -112,11 +112,11 @@ class LoadedPlugin:
 
     @property
     def cli_path(self) -> Path:
-        return self.plugin_dir / self.cli_module
+        return self.tool_dir / self.cli_module
 
 
 def _install_deps(deps: list[str]) -> None:
-    """Install plugin dependencies into the current environment."""
+    """Install tool dependencies into the current environment."""
     if not deps:
         return
     uv = shutil.which("uv")
@@ -124,7 +124,7 @@ def _install_deps(deps: list[str]) -> None:
         cmd = [uv, "pip", "install", "--quiet", *deps]
     else:
         cmd = [sys.executable, "-m", "pip", "install", "--quiet", *deps]
-    log.info("installing_plugin_deps", deps=deps)
+    log.info("installing_tool_deps", deps=deps)
     subprocess.run(cmd, check=True, capture_output=True)
 
 
@@ -142,30 +142,30 @@ def _load_env_file(path: Path) -> dict[str, str]:
     return secrets
 
 
-class PluginManager:
+class ToolManager:
     def __init__(
         self,
-        plugins_dir: Path,
+        tools_dir: Path,
         root_env_path: Path | None = None,
     ):
-        self.plugins_dir = plugins_dir
-        self.plugins: dict[str, LoadedPlugin] = {}
+        self.tools_dir = tools_dir
+        self.integrations: dict[str, LoadedIntegration] = {}
         self._reload_lock = threading.Lock()
-        # Load root .env once — all plugins inherit these secrets
+        # Load root .env once — all tools inherit these secrets
         self._root_secrets: dict[str, str] = {}
         if root_env_path is None:
-            # Default: .env at the repo root (parent of plugins_dir)
-            root_env_path = plugins_dir.parent / ".env"
+            # Default: .env at the repo root (parent of tools_dir)
+            root_env_path = tools_dir.parent / ".env"
         self._root_secrets = _load_env_file(root_env_path)
 
-    def _collect_plugins(self, enabled: set[str] | None) -> list[tuple[Path, dict]]:
-        """Read pyproject.toml from each plugin dir, optionally filtering."""
-        plugins = []
-        for plugin_dir in sorted(self.plugins_dir.iterdir()):
-            if not plugin_dir.is_dir() or plugin_dir.name.startswith((".", "_")):
+    def _collect_integrations(self, enabled: set[str] | None) -> list[tuple[Path, dict]]:
+        """Read pyproject.toml from each tool dir, optionally filtering."""
+        tools = []
+        for tool_dir in sorted(self.tools_dir.iterdir()):
+            if not tool_dir.is_dir() or tool_dir.name.startswith((".", "_")):
                 continue
 
-            pyproject_path = plugin_dir / "pyproject.toml"
+            pyproject_path = tool_dir / "pyproject.toml"
             if not pyproject_path.exists():
                 continue
 
@@ -173,11 +173,11 @@ class PluginManager:
                 pyproject = tomllib.load(f)
 
             project = pyproject.get("project", {})
-            plugin_conf = pyproject.get("tool", {}).get("ai-v2-plugin", {})
+            tool_conf = pyproject.get("tool", {}).get("ai-v2", {})
 
-            name = plugin_dir.name
+            name = tool_dir.name
             if enabled is not None and name not in enabled:
-                log.debug("plugin_skipped", plugin=name)
+                log.debug("tool_skipped", tool=name)
                 continue
 
             meta = {
@@ -185,82 +185,82 @@ class PluginManager:
                 "description": project.get("description", ""),
                 "dependencies": project.get("dependencies", []),
                 "scripts": project.get("scripts", {}),
-                "module": plugin_conf.get("module", "tools.py"),
-                "cli_module": plugin_conf.get("cli_module", "cli.py"),
+                "module": tool_conf.get("module", "tools.py"),
+                "cli_module": tool_conf.get("cli_module", "cli.py"),
             }
-            plugins.append((plugin_dir, meta))
-        return plugins
+            tools.append((tool_dir, meta))
+        return integrations
 
     def discover(
         self,
-        only_plugins: set[str] | None = None,
-    ) -> list[LoadedPlugin]:
-        """Discover and load all plugins."""
-        if not self.plugins_dir.exists():
-            log.info("plugins_dir_missing", path=str(self.plugins_dir))
+        only_names: set[str] | None = None,
+    ) -> list[LoadedIntegration]:
+        """Discover and load all tools."""
+        if not self.tools_dir.exists():
+            log.info("tools_dir_missing", path=str(self.tools_dir))
             return []
 
-        enabled = only_plugins
-        plugin_entries = self._collect_plugins(enabled)
+        enabled = only_names
+        tool_entries = self._collect_integrations(enabled)
 
-        # Collect all dependencies across enabled plugins and install in one shot
+        # Collect all dependencies across enabled tools and install in one shot
         all_deps: list[str] = []
-        for _, meta in plugin_entries:
+        for _, meta in tool_entries:
             all_deps.extend(meta.get("dependencies", []))
         if all_deps:
             try:
                 _install_deps(list(set(all_deps)))
             except Exception as exc:
-                log.warning("plugin_deps_install_failed", deps=all_deps, error=str(exc))
+                log.warning("tool_deps_install_failed", deps=all_deps, error=str(exc))
 
-        # Now load each plugin
+        # Now load each tool
         loaded = []
-        for plugin_dir, meta in plugin_entries:
+        for tool_dir, meta in tool_entries:
             try:
-                plugin = self._load_plugin(plugin_dir, meta)
-                if plugin:
-                    loaded.append(plugin)
+                integration = self._load_integration(tool_dir, meta)
+                if integration:
+                    loaded.append(tool)
             except Exception as exc:
                 log.warning(
-                    "plugin_load_failed",
-                    plugin=meta.get("name", plugin_dir.name),
+                    "tool_load_failed",
+                    tool=meta.get("name", tool_dir.name),
                     error=str(exc),
                 )
 
-        self.plugins = {p.name: p for p in loaded}
+        self.integrations = {p.name: p for p in loaded}
         return loaded
 
     def reload(self) -> dict[str, Any]:
-        """Reload all plugins by clearing module caches and re-discovering."""
+        """Reload all tools by clearing module caches and re-discovering."""
         with self._reload_lock:
-            stale = [k for k in sys.modules if k.startswith("shared.plugins_runtime.")]
+            stale = [k for k in sys.modules if k.startswith("shared.tools_runtime.")]
             for k in stale:
                 del sys.modules[k]
 
             loaded = self.discover()
             return {
                 "reloaded": len(loaded),
-                "plugins": [p.name for p in loaded],
+                "tools": [p.name for p in loaded],
             }
 
-    def _load_plugin(self, plugin_dir: Path, manifest: dict) -> LoadedPlugin | None:
+    def _load_integration(self, tool_dir: Path, manifest: dict) -> LoadedIntegration | None:
         name = manifest["name"]
 
-        # Build secrets: root .env (base) → plugin .env (override)
+        # Build secrets: root .env (base) → tool .env (override)
         secrets: dict[str, str] = dict(self._root_secrets)
-        plugin_secrets = _load_env_file(plugin_dir / ".env")
-        secrets.update(plugin_secrets)
+        tool_secrets = _load_env_file(tool_dir / ".env")
+        secrets.update(tool_secrets)
 
-        ctx = PluginContext(name=name, secrets=secrets)
+        ctx = ToolContext(name=name, secrets=secrets)
 
-        # Register the plugin dir as a package so relative imports work
-        pkg_name = f"shared.plugins_runtime.{name}"
-        init_path = plugin_dir / "__init__.py"
+        # Register the tool dir as a package so relative imports work
+        pkg_name = f"shared.tools_runtime.{name}"
+        init_path = tool_dir / "__init__.py"
         if init_path.exists():
             pkg_spec = importlib.util.spec_from_file_location(
                 pkg_name,
                 init_path,
-                submodule_search_locations=[str(plugin_dir)],
+                submodule_search_locations=[str(tool_dir)],
             )
             if pkg_spec and pkg_spec.loader:
                 pkg_mod = importlib.util.module_from_spec(pkg_spec)
@@ -269,20 +269,20 @@ class PluginManager:
         else:
             # Create a virtual package
             pkg_mod = types.ModuleType(pkg_name)
-            pkg_mod.__path__ = [str(plugin_dir)]  # type: ignore[attr-defined]
+            pkg_mod.__path__ = [str(tool_dir)]  # type: ignore[attr-defined]
             sys.modules[pkg_name] = pkg_mod
 
         # Ensure parent namespace exists
-        if "shared.plugins_runtime" not in sys.modules:
-            ns = types.ModuleType("shared.plugins_runtime")
+        if "shared.tools_runtime" not in sys.modules:
+            ns = types.ModuleType("shared.tools_runtime")
             ns.__path__ = []  # type: ignore[attr-defined]
-            sys.modules["shared.plugins_runtime"] = ns
+            sys.modules["shared.tools_runtime"] = ns
 
-        # Import the plugin module
+        # Import the tool module
         module_file = manifest.get("module", "client.py")
-        module_path = plugin_dir / module_file
+        module_path = tool_dir / module_file
         if not module_path.exists():
-            log.warning("plugin_module_missing", plugin=name, module=module_file)
+            log.warning("tool_module_missing", tool=name, module=module_file)
             return None
 
         mod_name = f"{pkg_name}.{Path(module_file).stem}"
@@ -301,12 +301,12 @@ class PluginManager:
             original_env[key] = os.environ.get(key)
             os.environ[key] = value
 
-        # Set plugin context so _client() factories can call secret()
-        token = set_plugin_context(ctx)
+        # Set tool context so _client() factories can call secret()
+        token = set_tool_context(ctx)
         try:
             tools = self._collect_tools(name, module, ctx)
         finally:
-            reset_plugin_context(token)
+            reset_tool_context(token)
             for key, previous in original_env.items():
                 if previous is None:
                     os.environ.pop(key, None)
@@ -314,61 +314,61 @@ class PluginManager:
                     os.environ[key] = previous
 
         description = manifest.get("description", "")
-        plugin = LoadedPlugin(
+        integration = LoadedIntegration(
             name=name,
             description=description,
-            plugin_dir=plugin_dir,
+            tool_dir=tool_dir,
             cli_module=manifest.get("cli_module", "cli.py"),
             scripts=manifest.get("scripts", {}),
             ctx=ctx,
             tools=tools,
         )
         log.info(
-            "plugin_loaded",
-            plugin=name,
+            "tool_loaded",
+            tool=name,
             tools=[t.tool_name for t in tools],
         )
-        return plugin
+        return integration
 
-    def _resolve_plugin_for_cli(self, tool: str) -> LoadedPlugin | None:
-        plugin = self.plugins.get(tool)
-        if plugin:
-            return plugin
+    def _resolve_integration_for_cli(self, tool: str) -> LoadedIntegration | None:
+        integration = self.integrations.get(tool)
+        if integration:
+            return integration
 
-        # Allow script aliases from [project.scripts] to map back to plugins.
-        for candidate in self.plugins.values():
+        # Allow script aliases from [project.scripts] to map back to tools.
+        for candidate in self.integrations.values():
             if tool in candidate.scripts:
                 return candidate
         return None
 
     def list_cli_tools(self) -> dict[str, dict[str, Any]]:
-        """Return dynamic CLI tool metadata for all loaded plugins."""
+        """Return dynamic CLI tool metadata for all loaded tools."""
         cli_tools: dict[str, dict[str, Any]] = {}
-        for plugin in self.plugins.values():
-            if not plugin.cli_path.exists():
+        for integration in self.integrations.values():
+            if not integration.cli_path.exists():
                 continue
-            aliases = sorted(plugin.scripts.keys())
-            cli_tools[plugin.name] = {
-                "plugin": plugin.name,
-                "description": plugin.description,
-                "cli_path": str(plugin.cli_path),
-                "tool_count": len(plugin.tools),
+            aliases = sorted(integration.scripts.keys())
+            cli_tools[integration.name] = {
+                "tool": integration.name,
+                "description": integration.description,
+                "cli_path": str(integration.cli_path),
+                "tool_count": len(integration.tools),
                 "aliases": aliases,
             }
             for alias in aliases:
                 cli_tools[alias] = {
-                    "plugin": plugin.name,
-                    "description": plugin.description,
-                    "cli_path": str(plugin.cli_path),
-                    "tool_count": len(plugin.tools),
+                    "tool": integration.name,
+                    "description": integration.description,
+                    "cli_path": str(integration.cli_path),
+                    "tool_count": len(integration.tools),
                     "aliases": aliases,
                 }
         return cli_tools
 
     def run_cli(self, tool: str, args: list[str]) -> str:
-        """Run a plugin CLI dynamically without static allowlists."""
-        plugin = self._resolve_plugin_for_cli(tool)
-        if plugin is None:
+        """Run a tool CLI dynamically without static allowlists."""
+        integration = self._resolve_integration_for_cli(tool)
+        if integration is None:
             available = sorted(self.list_cli_tools().keys())
             return json.dumps(
                 {
@@ -377,31 +377,31 @@ class PluginManager:
                 }
             )
 
-        cli_path = plugin.cli_path
+        cli_path = integration.cli_path
         if not cli_path.exists():
             return json.dumps(
                 {
-                    "error": f"CLI not found for plugin '{plugin.name}'",
+                    "error": f"CLI not found for tool '{integration.name}'",
                     "expected_path": str(cli_path),
                 }
             )
 
-        cli_module_name = f"shared.plugins_runtime.{plugin.name}.{cli_path.stem}"
+        cli_module_name = f"shared.tools_runtime.{integration.name}.{cli_path.stem}"
         cli_spec = importlib.util.spec_from_file_location(cli_module_name, cli_path)
         if not cli_spec or not cli_spec.loader:
             return json.dumps(
                 {
-                    "error": f"Unable to load CLI module for plugin '{plugin.name}'",
+                    "error": f"Unable to load CLI module for tool '{integration.name}'",
                     "cli_path": str(cli_path),
                 }
             )
 
         cli_module = importlib.util.module_from_spec(cli_spec)
-        cli_module.__package__ = f"shared.plugins_runtime.{plugin.name}"  # type: ignore[attr-defined]
+        cli_module.__package__ = f"shared.tools_runtime.{integration.name}"  # type: ignore[attr-defined]
         sys.modules[cli_module_name] = cli_module
 
         original_env: dict[str, str | None] = {}
-        for key, value in plugin.ctx.secrets.items():
+        for key, value in integration.ctx.secrets.items():
             original_env[key] = os.environ.get(key)
             os.environ[key] = value
         try:
@@ -410,7 +410,7 @@ class PluginManager:
             if app is None:
                 return json.dumps(
                     {
-                        "error": f"CLI app not found for plugin '{plugin.name}'",
+                        "error": f"CLI app not found for tool '{integration.name}'",
                         "expected_object": "app",
                     }
                 )
@@ -419,11 +419,11 @@ class PluginManager:
                 app = get_command(app)
 
             runner = CliRunner()
-            result = runner.invoke(app, args, prog_name=plugin.name)
+            result = runner.invoke(app, args, prog_name=integration.name)
             output = (result.output or "").strip()
             if result.exit_code != 0:
                 details: dict[str, Any] = {
-                    "error": f"CLI failed for plugin '{plugin.name}'",
+                    "error": f"CLI failed for tool '{integration.name}'",
                     "exit_code": result.exit_code,
                     "output": output,
                 }
@@ -434,7 +434,7 @@ class PluginManager:
         except Exception as exc:
             return json.dumps(
                 {
-                    "error": f"CLI raised for plugin '{plugin.name}'",
+                    "error": f"CLI raised for tool '{integration.name}'",
                     "detail": str(exc),
                 }
             )
@@ -445,40 +445,40 @@ class PluginManager:
                 else:
                     os.environ[key] = previous
 
-    def plugin_test_matrix(self) -> list[dict[str, Any]]:
-        """Summarize import/discovery/CLI readiness for loaded plugins."""
+    def integration_test_matrix(self) -> list[dict[str, Any]]:
+        """Summarize import/discovery/CLI readiness for loaded tools."""
         matrix: list[dict[str, Any]] = []
-        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
             matrix.append(
                 {
-                    "plugin": plugin.name,
+                    "tool": integration.name,
                     "library_import": True,
-                    "discovered_tools": [tool.tool_name for tool in plugin.tools],
-                    "cli_available": plugin.cli_path.exists(),
-                    "cli_path": str(plugin.cli_path),
-                    "aliases": sorted(plugin.scripts.keys()),
+                    "discovered_tools": [tool.tool_name for tool in integration.tools],
+                    "cli_available": integration.cli_path.exists(),
+                    "cli_path": str(integration.cli_path),
+                    "aliases": sorted(integration.scripts.keys()),
                 }
             )
         return matrix
 
     def smoke_test_registry(self) -> list[dict[str, Any]]:
-        """Verify registry integrity for plugins, tools, and CLI aliases."""
+        """Verify registry integrity for tools, tools, and CLI aliases."""
         entries = self.list_cli_tools()
         results: list[dict[str, Any]] = []
 
-        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
             problems: list[str] = []
-            if not plugin.tools:
+            if not integration.tools:
                 problems.append("no_discovered_tools")
-            if plugin.cli_path.exists() and plugin.name not in entries:
-                problems.append("plugin_missing_from_cli_registry")
-            for alias in plugin.scripts:
+            if integration.cli_path.exists() and integration.name not in entries:
+                problems.append("tool_missing_from_cli_registry")
+            for alias in integration.scripts:
                 if alias not in entries:
                     problems.append(f"missing_alias:{alias}")
 
             results.append(
                 {
-                    "plugin": plugin.name,
+                    "tool": integration.name,
                     "status": "ok" if not problems else "failed",
                     "problems": problems,
                 }
@@ -497,26 +497,26 @@ class PluginManager:
         return None
 
     def smoke_test_clis(self, cli_args: list[str] | None = None) -> list[dict[str, Any]]:
-        """Run a CLI smoke test for each loaded plugin that has a cli.py."""
+        """Run a CLI smoke test for each loaded tool that has a cli.py."""
         args = cli_args or ["--help"]
         results: list[dict[str, Any]] = []
-        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
-            if not plugin.cli_path.exists():
+        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
+            if not integration.cli_path.exists():
                 results.append(
                     {
-                        "plugin": plugin.name,
+                        "tool": integration.name,
                         "status": "missing_cli",
-                        "cli_path": str(plugin.cli_path),
+                        "cli_path": str(integration.cli_path),
                     }
                 )
                 continue
 
-            output = self.run_cli(plugin.name, args)
+            output = self.run_cli(integration.name, args)
             parsed = self._parse_cli_output(output)
             if parsed is not None:
                 results.append(
                     {
-                        "plugin": plugin.name,
+                        "tool": integration.name,
                         "status": "failed",
                         "details": parsed,
                     }
@@ -525,22 +525,22 @@ class PluginManager:
 
             results.append(
                 {
-                    "plugin": plugin.name,
+                    "tool": integration.name,
                     "status": "ok",
-                    "cli_path": str(plugin.cli_path),
+                    "cli_path": str(integration.cli_path),
                 }
             )
         return results
 
     def smoke_test_aliases(self, cli_args: list[str] | None = None) -> list[dict[str, Any]]:
-        """Run CLI smoke tests via script aliases from plugin manifests."""
+        """Run CLI smoke tests via script aliases from tool manifests."""
         args = cli_args or ["--help"]
         results: list[dict[str, Any]] = []
 
-        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
-            aliases = sorted(plugin.scripts)
+        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
+            aliases = sorted(integration.scripts)
             if not aliases:
-                results.append({"plugin": plugin.name, "status": "missing_aliases"})
+                results.append({"tool": integration.name, "status": "missing_aliases"})
                 continue
 
             for alias in aliases:
@@ -549,7 +549,7 @@ class PluginManager:
                 if parsed is not None:
                     results.append(
                         {
-                            "plugin": plugin.name,
+                            "tool": integration.name,
                             "alias": alias,
                             "status": "failed",
                             "details": parsed,
@@ -559,7 +559,7 @@ class PluginManager:
 
                 results.append(
                     {
-                        "plugin": plugin.name,
+                        "tool": integration.name,
                         "alias": alias,
                         "status": "ok",
                     }
@@ -568,25 +568,25 @@ class PluginManager:
         return results
 
     def smoke_test_rest_routes(self) -> list[dict[str, Any]]:
-        """Verify that every plugin tool is callable via the dispatcher."""
+        """Verify that every tool function is callable via the dispatcher."""
         results: list[dict[str, Any]] = []
-        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
             results.append(
                 {
-                    "plugin": plugin.name,
+                    "tool": integration.name,
                     "status": "ok",
-                    "registered_tools": len(plugin.tools),
-                    "total_tools": len(plugin.tools),
+                    "registered_tools": len(integration.tools),
+                    "total_tools": len(integration.tools),
                 }
             )
         return results
 
     def smoke_test_schemas(self) -> list[dict[str, Any]]:
-        """Validate describe_plugin output for every loaded plugin."""
+        """Validate describe_tool output for every loaded tool."""
         bad_pattern = re.compile(r"<class '")
         results: list[dict[str, Any]] = []
-        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
-            schema = self.describe_plugin(plugin.name)
+        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
+            schema = self.describe_tool(integration.name)
             problems: list[str] = []
             if "error" in schema:
                 problems.append(f"describe_error: {schema['error']}")
@@ -600,7 +600,7 @@ class PluginManager:
                             )
             results.append(
                 {
-                    "plugin": plugin.name,
+                    "tool": integration.name,
                     "status": "ok" if not problems else "failed",
                     "problems": problems,
                 }
@@ -608,8 +608,8 @@ class PluginManager:
         return results
 
     @staticmethod
-    def _collect_tools(plugin_name: str, module: Any, ctx: PluginContext) -> list[LoadedTool]:
-        """Collect tools from a plugin module.
+    def _collect_tools(integration_name: str, module: Any, ctx: ToolContext) -> list[LoadedTool]:
+        """Collect tools from a tool module.
 
         The module must have a _client() factory. Call it once to get a cached
         instance and expose every public method as a tool.
@@ -633,31 +633,31 @@ class PluginManager:
                 method = getattr(instance, method_name, None)
                 if not inspect.ismethod(method):
                     continue
-                tools.append(LoadedTool(plugin_name, method_name, method, ctx))
+                tools.append(LoadedTool(integration_name, method_name, method, ctx))
                 seen.add(method_name)
 
         return tools
 
-    def list_plugins(self) -> list[dict[str, Any]]:
-        """List all loaded plugins with their tool names (no schemas)."""
+    def list_tools(self) -> list[dict[str, Any]]:
+        """List all loaded tools with their tool names (no schemas)."""
         items: list[dict[str, Any]] = []
-        for plugin in sorted(self.plugins.values(), key=lambda p: p.name):
+        for integration in sorted(self.integrations.values(), key=lambda p: p.name):
             items.append(
                 {
-                    "plugin": plugin.name,
-                    "description": plugin.description,
-                    "tools": [t.tool_name for t in sorted(plugin.tools, key=lambda t: t.tool_name)],
+                    "tool": integration.name,
+                    "description": integration.description,
+                    "tools": [t.tool_name for t in sorted(integration.tools, key=lambda t: t.tool_name)],
                 }
             )
         return items
 
-    def describe_plugin(self, plugin_name: str) -> dict[str, Any]:
-        """Return full method schemas for a plugin's tools."""
-        plugin = self.plugins.get(plugin_name)
-        if not plugin:
-            return {"error": f"Plugin '{plugin_name}' not found"}
+    def describe_tool(self, integration_name: str) -> dict[str, Any]:
+        """Return full method schemas for a tool's tools."""
+        integration = self.integrations.get(integration_name)
+        if not integration:
+            return {"error": f"Tool '{integration_name}' not found"}
         tools: list[dict[str, Any]] = []
-        for tool in sorted(plugin.tools, key=lambda t: t.tool_name):
+        for tool in sorted(integration.tools, key=lambda t: t.tool_name):
             try:
                 sig = inspect.signature(tool.fn)
             except (TypeError, ValueError) as exc:
@@ -691,24 +691,24 @@ class PluginManager:
                 }
             )
         return {
-            "plugin": plugin.name,
-            "description": plugin.description,
+            "tool": integration.name,
+            "description": integration.description,
             "tools": tools,
         }
 
-    async def call_tool(self, plugin_name: str, tool_name: str, args: dict[str, Any]) -> str:
-        """Call a plugin tool by name and return the result as a TOON string."""
-        plugin = self.plugins.get(plugin_name)
-        if not plugin:
-            return json.dumps({"error": f"Plugin '{plugin_name}' not found"})
+    async def call_tool(self, integration_name: str, tool_name: str, args: dict[str, Any]) -> str:
+        """Call a tool function by name and return the result as a TOON string."""
+        integration = self.integrations.get(integration_name)
+        if not integration:
+            return json.dumps({"error": f"Tool '{integration_name}' not found"})
 
-        tool = next((t for t in plugin.tools if t.tool_name == tool_name), None)
+        tool = next((t for t in integration.tools if t.tool_name == tool_name), None)
         if not tool:
             return json.dumps(
-                {"error": f"Tool '{tool_name}' not found in plugin '{plugin_name}'"}
+                {"error": f"Tool '{tool_name}' not found in tool '{integration_name}'"}
             )
 
-        token = set_plugin_context(tool.ctx)
+        token = set_tool_context(tool.ctx)
         try:
             if inspect.iscoroutinefunction(tool.fn):
                 result = await tool.fn(**args)
@@ -720,20 +720,20 @@ class PluginManager:
             return _to_toon(result)
         except SystemExit as e:
             return json.dumps(
-                {"error": f"Plugin called sys.exit({e.code})", "plugin": plugin_name, "tool": tool_name}
+                {"error": f"Tool called sys.exit({e.code})", "tool": integration_name, "tool": tool_name}
             )
         except Exception as e:
             return json.dumps(
-                {"error": str(e), "plugin": plugin_name, "tool": tool_name}
+                {"error": str(e), "tool": integration_name, "tool": tool_name}
             )
         finally:
-            reset_plugin_context(token)
+            reset_tool_context(token)
 
     def create_rest_router(self) -> APIRouter:
-        """Create a stable FastAPI router that dispatches to plugins via live lookup.
+        """Create a stable FastAPI router that dispatches to tools via live lookup.
 
         Routes are fixed at registration time — tool calls resolve through
-        ``self.plugins`` at request time so hot-reloads take effect without
+        ``self.integrations`` at request time so hot-reloads take effect without
         swapping routes.
         """
         pm = self
@@ -743,33 +743,33 @@ class PluginManager:
         )
 
         @router.get("")
-        async def list_plugins() -> dict:
+        async def list_tools() -> dict:
             return {
                 name: {
                     "description": p.description,
                     "tools": [t.tool_name for t in p.tools],
                 }
-                for name, p in pm.plugins.items()
+                for name, p in pm.integrations.items()
             }
 
-        @router.get("/{plugin_name}")
-        async def describe_plugin(plugin_name: str) -> dict:
-            return pm.describe_plugin(plugin_name)
+        @router.get("/{integration_name}")
+        async def describe_tool(integration_name: str) -> dict:
+            return pm.describe_tool(integration_name)
 
-        @router.post("/{plugin_name}/{tool_name}")
-        async def call_tool(plugin_name: str, tool_name: str, request: Request) -> dict:
+        @router.post("/{integration_name}/{tool_name}")
+        async def call_tool(integration_name: str, tool_name: str, request: Request) -> dict:
             body = await request.json() if await request.body() else {}
-            result = await pm.call_tool(plugin_name, tool_name, body)
-            return {"plugin": plugin_name, "tool": tool_name, "result": result}
+            result = await pm.call_tool(integration_name, tool_name, body)
+            return {"tool": integration_name, "tool": tool_name, "result": result}
 
         return router
 
 
 def _make_wrapper(tool: LoadedTool) -> Callable:
-    """Wrap a plugin tool function to inject context and handle errors."""
+    """Wrap a tool function function to inject context and handle errors."""
 
     async def wrapper(**kwargs: Any) -> str:
-        token = set_plugin_context(tool.ctx)
+        token = set_tool_context(tool.ctx)
         try:
             if inspect.iscoroutinefunction(tool.fn):
                 result = await tool.fn(**kwargs)
@@ -782,8 +782,8 @@ def _make_wrapper(tool: LoadedTool) -> Callable:
         except SystemExit as e:
             return json.dumps(
                 {
-                    "error": f"Plugin called sys.exit({e.code})",
-                    "plugin": tool.plugin_name,
+                    "error": f"Tool called sys.exit({e.code})",
+                    "tool": tool.integration_name,
                     "tool": tool.tool_name,
                 }
             )
@@ -791,16 +791,16 @@ def _make_wrapper(tool: LoadedTool) -> Callable:
             return json.dumps(
                 {
                     "error": str(e),
-                    "plugin": tool.plugin_name,
+                    "tool": tool.integration_name,
                     "tool": tool.tool_name,
                 }
             )
         finally:
-            reset_plugin_context(token)
+            reset_tool_context(token)
 
     # Preserve original signature for schema generation
     wrapper.__name__ = tool.qualified_name.replace(".", "_")
-    wrapper.__doc__ = tool.fn.__doc__ or f"{tool.plugin_name} — {tool.tool_name}"
+    wrapper.__doc__ = tool.fn.__doc__ or f"{tool.integration_name} — {tool.tool_name}"
     wrapper.__signature__ = inspect.signature(tool.fn)  # type: ignore[attr-defined]
     try:
         wrapper.__annotations__ = get_type_hints(tool.fn)
@@ -810,7 +810,7 @@ def _make_wrapper(tool: LoadedTool) -> Callable:
 
 
 def _register_mcp_tool(mcp: Any, tool: LoadedTool) -> None:
-    """Register a single plugin tool as an MCP tool."""
+    """Register a single tool function as an MCP tool."""
     wrapper = _make_wrapper(tool)
     # FastMCP uses the function name as the tool name
     wrapper.__name__ = tool.qualified_name.replace(".", "_")

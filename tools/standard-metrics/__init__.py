@@ -1,1 +1,1 @@
-"""Standard Metrics portfolio analytics plugin."""
+"""Standard Metrics portfolio analytics."""

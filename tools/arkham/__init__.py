@@ -1,1 +1,1 @@
-"""Arkham Intelligence plugin."""
+"""Arkham Intelligence."""

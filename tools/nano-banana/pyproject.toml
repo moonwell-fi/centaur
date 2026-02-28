@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-nano-banana"
+name = "nano-banana"
 description = "Nano Banana CLI for Google Gemini image generation"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -17,5 +17,5 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

@@ -1,4 +1,4 @@
-"""Typer CLI for the document archiver plugin."""
+"""Typer CLI for the document archiver tool."""
 
 from __future__ import annotations
 

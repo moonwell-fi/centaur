@@ -1,1 +1,1 @@
-"""Google AI image generation (Nano Banana) plugin."""
+"""Google AI image generation (Nano Banana)."""

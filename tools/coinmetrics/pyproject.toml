@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-coinmetrics"
+name = "coinmetrics"
 description = "Coin Metrics API — asset metrics, market data, timeseries, exchanges"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -11,12 +11,12 @@ dependencies = [
 ]
 
 [project.scripts]
-coinmetrics-plugin = "coinmetrics_plugin.cli:app"
+coinmetrics = "coinmetrics.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

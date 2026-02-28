@@ -1,1 +1,1 @@
-"""Granola meeting notes plugin."""
+"""Granola meeting notes."""

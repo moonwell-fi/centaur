@@ -1,1 +1,1 @@
-"""The Block crypto news plugin."""
+"""The Block crypto news."""

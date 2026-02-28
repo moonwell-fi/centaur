@@ -1,10 +1,10 @@
 # Websearch Plugin
 
-Web search and deep research plugin backed by Exa (retrieval) and Claude (analysis/synthesis).
+Web search and deep research tool backed by Exa (retrieval) and Claude (analysis/synthesis).
 
 ## Secrets
 
-Set these in root `.env` (preferred) or `plugins/websearch/.env`:
+Set these in root `.env` (preferred) or `tools/websearch/.env`:
 
 - `EXA_API_KEY`
 - `ANTHROPIC_API_KEY`
@@ -42,9 +42,9 @@ Key defaults:
 ## CLI
 
 ```bash
-ai-v2 plugins run websearch search "latest OpenAI and Anthropic model updates"
-ai-v2 plugins run websearch search "latest OpenAI and Anthropic model updates" --no-synthesize
-ai-v2 plugins run websearch deep-research "How should a fintech startup evaluate MPC vs HSM key management in 2026?"
+ai-v2 tools run websearch search "latest OpenAI and Anthropic model updates"
+ai-v2 tools run websearch search "latest OpenAI and Anthropic model updates" --no-synthesize
+ai-v2 tools run websearch deep-research "How should a fintech startup evaluate MPC vs HSM key management in 2026?"
 ```
 
 Use `--pretty` for human-readable output in both commands.

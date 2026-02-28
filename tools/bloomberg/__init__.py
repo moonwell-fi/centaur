@@ -1,1 +1,1 @@
-"""Bloomberg API plugin."""
+"""Bloomberg API."""

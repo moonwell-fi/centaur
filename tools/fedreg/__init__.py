@@ -1,1 +1,1 @@
-"""Federal Register API plugin."""
+"""Federal Register API."""

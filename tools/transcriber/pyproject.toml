@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-transcriber"
+name = "transcriber"
 description = "Local-first voice transcription CLI using Whisper"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -12,5 +12,5 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

@@ -1,1 +1,1 @@
-"""Reth execution timings and performance metrics plugin."""
+"""Reth execution timings and performance metrics."""

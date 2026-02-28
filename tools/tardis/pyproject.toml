@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-tardis"
+name = "tardis"
 description = "Tardis CLI for CEX market data replay and analytics"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -16,5 +16,5 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

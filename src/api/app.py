@@ -19,12 +19,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 
-from api.mcp_server import mcp, set_plugin_manager, set_pool
+from api.mcp_server import mcp, set_tool_manager, set_pool
 from api.routers import admin, agent as agent_router_mod
 from api.routers import health, query, search, secrets, slack_events, threads, ui
 from shared.config import settings
 from shared.db import close_pool, create_pool
-from shared.plugin_manager import PluginManager
+from shared.tool_manager import ToolManager
 
 # ---------------------------------------------------------------------------
 # Structlog configuration — JSON in prod (non-tty), console in dev
@@ -47,17 +47,17 @@ structlog.configure(
 log = structlog.get_logger()
 
 
-def _warm_plugin_caches() -> None:
-    """Pre-warm slow plugin caches in background thread."""
+def _warm_tool_caches() -> None:
+    """Pre-warm slow tool caches in background thread."""
     import threading
 
     def _warm() -> None:
         try:
-            slack_plugin = plugin_manager.plugins.get("slack")
-            if not slack_plugin or not slack_plugin.tools:
+            slack_tool = tool_manager.integrations.get("slack")
+            if not slack_tool or not slack_tool.tools:
                 return
             # Get the client instance from any bound tool method
-            client = slack_plugin.tools[0].fn.__self__
+            client = slack_tool.tools[0].fn.__self__
             client._get_user_cache()
             client.list_bot_channels()
             log.info("slack_cache_warmed")
@@ -84,20 +84,20 @@ def _recover_agent_sessions() -> None:
     threading.Thread(target=_recover, daemon=True).start()
 
 
-async def _watch_plugins(pm: PluginManager) -> None:
-    """Watch the plugins directory and auto-reload when files change."""
+async def _watch_tools(pm: ToolManager) -> None:
+    """Watch the tools directory and auto-reload when files change."""
     from starlette.concurrency import run_in_threadpool
     from watchfiles import awatch
 
-    log.info("plugin_watcher_started", path=str(pm.plugins_dir))
-    async for changes in awatch(pm.plugins_dir):
+    log.info("tool_watcher_started", path=str(pm.tools_dir))
+    async for changes in awatch(pm.tools_dir):
         changed_files = [str(p) for _, p in changes]
-        log.info("plugin_files_changed", files=changed_files)
+        log.info("tool_files_changed", files=changed_files)
         try:
             result = await run_in_threadpool(pm.reload)
-            log.info("plugins_auto_reloaded", **result)
+            log.info("tools_auto_reloaded", **result)
         except Exception as e:
-            log.error("plugin_auto_reload_failed", error=str(e))
+            log.error("tool_auto_reload_failed", error=str(e))
 
 
 @asynccontextmanager
@@ -109,9 +109,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("database pool created")
     async with mcp.session_manager.run():
         log.info("mcp session manager started")
-        _warm_plugin_caches()
+        _warm_tool_caches()
         _recover_agent_sessions()
-        watcher_task = asyncio.create_task(_watch_plugins(plugin_manager))
+        watcher_task = asyncio.create_task(_watch_tools(tool_manager))
         try:
             yield
         finally:
@@ -144,15 +144,15 @@ app.include_router(admin.router)
 app.include_router(slack_events.router)
 app.include_router(ui.router)
 
-# Load plugins before creating MCP starlette app
+# Load tools before creating MCP starlette app
 _app_root = Path(__file__).resolve().parent.parent.parent
-_plugins_dir = Path(os.environ.get("PLUGINS_DIR", _app_root / "tools"))
+_tools_dir = Path(os.environ.get("PLUGINS_DIR", _app_root / "tools"))
 
-plugin_manager = PluginManager(_plugins_dir)
-plugin_manager.discover()
-set_plugin_manager(plugin_manager)
-app.state.plugin_manager = plugin_manager
-app.include_router(plugin_manager.create_rest_router())
+tool_manager = ToolManager(_tools_dir)
+tool_manager.discover()
+set_tool_manager(tool_manager)
+app.state.tool_manager = tool_manager
+app.include_router(tool_manager.create_rest_router())
 
 _mcp_starlette = mcp.streamable_http_app()
 

@@ -1,1 +1,1 @@
-"""Affinity CRM plugin."""
+"""Affinity CRM."""

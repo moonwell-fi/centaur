@@ -11,10 +11,10 @@ log = structlog.get_logger()
 router = APIRouter(prefix="/admin", dependencies=[Depends(verify_api_key)])
 
 
-@router.post("/reload-plugins")
-async def reload_plugins(request: Request) -> dict:
-    """Hot-reload all plugins without restarting the API server."""
-    plugin_manager = request.app.state.plugin_manager
-    result = await run_in_threadpool(plugin_manager.reload)
-    log.info("plugins_reloaded", **result)
+@router.post("/reload-tools")
+async def reload_tools(request: Request) -> dict:
+    """Hot-reload all tools without restarting the API server."""
+    tool_manager = request.app.state.tool_manager
+    result = await run_in_threadpool(tool_manager.reload)
+    log.info("tools_reloaded", **result)
     return result

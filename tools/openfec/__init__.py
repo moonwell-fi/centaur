@@ -1,1 +1,1 @@
-"""OpenFEC election data plugin."""
+"""OpenFEC election data."""

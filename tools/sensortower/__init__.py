@@ -1,1 +1,1 @@
-"""SensorTower app intelligence plugin."""
+"""SensorTower app intelligence."""

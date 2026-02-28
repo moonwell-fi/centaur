@@ -1,1 +1,1 @@
-"""Unit 410 validator data plugin."""
+"""Unit 410 validator data."""

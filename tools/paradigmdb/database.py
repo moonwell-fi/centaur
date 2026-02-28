@@ -22,7 +22,7 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
-from shared.plugin_sdk import secret
+from shared.tool_sdk import secret
 
 # PID file for persistent tunnel
 TUNNEL_PID_FILE = Path.home() / ".reshift-tunnel.pid"

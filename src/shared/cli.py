@@ -29,7 +29,7 @@ from shared.engineer.orchestrator import EngineerOrchestrator
 from shared.engineer.session import EngineerSession
 from shared.engineer.settings import engineer_settings
 from shared.models import EmbeddingRecord
-from shared.plugin_manager import PluginManager
+from shared.tool_manager import ToolManager
 
 
 _LOG_LEVELS = {
@@ -478,59 +478,59 @@ def _start_stdin_reader(session: EngineerSession) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Plugin commands
+# Tool commands
 # ---------------------------------------------------------------------------
 
 
-@cli.group("plugins")
-def plugins_group() -> None:
-    """Discover and test plugin imports, tools, and CLIs."""
+@cli.group("tools")
+def tools_group() -> None:
+    """Discover and test tool imports, tools, and CLIs."""
 
 
-@plugins_group.command("list")
-def plugins_list() -> None:
-    """List discovered plugins and tools from the plugin manager."""
+@tools_group.command("list")
+def tools_list() -> None:
+    """List discovered tools and tools from the tool manager."""
     app_root = Path(__file__).resolve().parent.parent.parent
-    plugins_dir = Path(app_root / "tools")
+    tools_dir = Path(app_root / "tools")
 
-    manager = PluginManager(plugins_dir)
+    manager = ToolManager(tools_dir)
     manager.discover()
 
     rows = []
-    for plugin in manager.plugin_test_matrix():
+    for tool in manager.integration_test_matrix():
         rows.append(
             {
-                "plugin": plugin["plugin"],
-                "tools": str(len(plugin["discovered_tools"])),
-                "aliases": ", ".join(plugin["aliases"]) or "-",
-                "cli": "yes" if plugin["cli_available"] else "no",
-                "cli_path": plugin["cli_path"],
+                "tool": entry["tool"],
+                "tools": str(len(entry["discovered_tools"])),
+                "aliases": ", ".join(entry["aliases"]) or "-",
+                "cli": "yes" if entry["cli_available"] else "no",
+                "cli_path": entry["cli_path"],
             }
         )
 
     if not rows:
-        click.echo("No plugins loaded.")
+        click.echo("No tools loaded.")
         return
 
-    headers = ["Plugin", "Tools", "Aliases", "CLI", "CLI Path"]
+    headers = ["Tool", "Tools", "Aliases", "CLI", "CLI Path"]
     table_rows = [
-        [row["plugin"], row["tools"], row["aliases"], row["cli"], row["cli_path"]]
-        for row in sorted(rows, key=lambda r: r["plugin"])
+        [row["tool"], row["tools"], row["aliases"], row["cli"], row["cli_path"]]
+        for row in sorted(rows, key=lambda r: r["tool"])
     ]
     click.echo(render_text_table(headers, table_rows))
 
 
-@plugins_group.command("run")
+@tools_group.command("run")
 @click.argument("tool")
 @click.argument("args", nargs=-1, type=click.UNPROCESSED)
-def plugins_run(tool: str, args: tuple[str, ...]) -> None:
-    """Run a plugin CLI by plugin name or script alias."""
+def tools_run(tool: str, args: tuple[str, ...]) -> None:
+    """Run a tool CLI by tool name or script alias."""
     app_root = Path(__file__).resolve().parent.parent.parent
-    plugins_dir = Path(app_root / "tools")
+    tools_dir = Path(app_root / "tools")
 
-    manager = PluginManager(plugins_dir)
-    if (plugins_dir / tool).is_dir():
-        manager.discover(only_plugins={tool})
+    manager = ToolManager(tools_dir)
+    if (tools_dir / tool).is_dir():
+        manager.discover(only_names={tool})
     else:
         manager.discover()
 
@@ -548,23 +548,23 @@ def plugins_run(tool: str, args: tuple[str, ...]) -> None:
     click.echo(output)
 
 
-@plugins_group.command("test")
+@tools_group.command("test")
 @click.option(
     "--cli-args",
     default="--help",
     show_default=True,
-    help="Arguments passed to each plugin CLI for smoke testing.",
+    help="Arguments passed to each tool CLI for smoke testing.",
 )
-def plugins_test(cli_args: str) -> None:
-    """Run plugin smoke tests across imports, registry, CLIs, REST routes, and schemas."""
+def tools_test(cli_args: str) -> None:
+    """Run tool smoke tests across imports, registry, CLIs, REST routes, and schemas."""
     app_root = Path(__file__).resolve().parent.parent.parent
-    plugins_dir = Path(app_root / "tools")
+    tools_dir = Path(app_root / "tools")
 
-    manager = PluginManager(plugins_dir)
+    manager = ToolManager(tools_dir)
     manager.discover()
 
     registry_results = manager.smoke_test_registry()
-    import_and_discovery = manager.plugin_test_matrix()
+    import_and_discovery = manager.integration_test_matrix()
     cli_results = manager.smoke_test_clis(shlex.split(cli_args))
     alias_results = manager.smoke_test_aliases(shlex.split(cli_args))
     rest_results = manager.smoke_test_rest_routes()
@@ -591,7 +591,7 @@ def plugins_test(cli_args: str) -> None:
                 "rest_routes": rest_results,
                 "schema_validation": schema_results,
                 "summary": {
-                    "plugins_loaded": len(import_and_discovery),
+                    "tools_loaded": len(import_and_discovery),
                     "registry_failures": len(
                         [result for result in registry_results if result.get("status") != "ok"]
                     ),

@@ -1,4 +1,4 @@
-"""ArchiverClient — plugin-pattern wrapper around archiver modules."""
+"""ArchiverClient — pattern wrapper around archiver modules."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from .utils import dump_json
 
 
 class ArchiverClient:
-    """Unified client for the document archiver plugin."""
+    """Unified client for the document archiver tool."""
 
     def init_db(self) -> None:
         init_db()

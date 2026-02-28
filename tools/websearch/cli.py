@@ -1,4 +1,4 @@
-"""CLI for websearch plugin."""
+"""CLI for websearch tool."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Pydantic models for websearch plugin contracts."""
+"""Pydantic models for websearch tool contracts."""
 
 from __future__ import annotations
 

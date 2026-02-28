@@ -1,1 +1,1 @@
-"""Ashby ATS plugin."""
+"""Ashby ATS."""

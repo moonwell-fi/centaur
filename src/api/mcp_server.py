@@ -10,7 +10,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from toon_format import encode as toon_encode
 
 from api.deps import EmbeddingService
-from shared.plugin_manager import PluginManager
+from shared.tool_manager import ToolManager
 
 mcp = FastMCP(
     "Tempo AI v2",
@@ -19,7 +19,7 @@ mcp = FastMCP(
 )  # mounted at /mcp in app.py
 
 _pool: asyncpg.Pool | None = None
-_plugin_manager: PluginManager | None = None
+_tool_manager: ToolManager | None = None
 
 DISALLOWED_SQL = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE)\b",
@@ -32,15 +32,15 @@ def set_pool(pool: asyncpg.Pool) -> None:
     _pool = pool
 
 
-def set_plugin_manager(plugin_manager: PluginManager) -> None:
-    global _plugin_manager
-    _plugin_manager = plugin_manager
+def set_tool_manager(tool_manager: ToolManager) -> None:
+    global _tool_manager
+    _tool_manager = tool_manager
 
 
-def _get_plugin_manager() -> PluginManager:
-    if _plugin_manager is None:
+def _get_tool_manager() -> ToolManager:
+    if _tool_manager is None:
         raise RuntimeError("Plugin manager not initialized")
-    return _plugin_manager
+    return _tool_manager
 
 
 def _get_pool() -> asyncpg.Pool:
@@ -136,26 +136,26 @@ async def sql_query(query: str) -> str:
 
 
 @mcp.tool()
-async def list_plugins() -> str:
-    """List all available plugins and their tool names. Call this first to discover
-    what plugins and tools are available, then use describe_plugin to get full
-    method schemas before calling call_plugin."""
-    manager = _get_plugin_manager()
-    return _to_toon(manager.list_plugins())
+async def list_tools() -> str:
+    """List all available tools and their tool names. Call this first to discover
+    what tools and tools are available, then use describe_tool to get full
+    method schemas before calling call_tool."""
+    manager = _get_tool_manager()
+    return _to_toon(manager.list_tools())
 
 
 @mcp.tool()
-async def describe_plugin(plugin: str) -> str:
-    """Get full method schemas (parameters, types, defaults) for a plugin's tools.
-    Call this before call_plugin to know the exact arguments a tool expects."""
-    manager = _get_plugin_manager()
-    return _to_toon(manager.describe_plugin(plugin))
+async def describe_tool(tool: str) -> str:
+    """Get full method schemas (parameters, types, defaults) for a tool integration's methods.
+    Call this before call_tool to know the exact arguments a tool expects."""
+    manager = _get_tool_manager()
+    return _to_toon(manager.describe_tool(tool))
 
 
 @mcp.tool()
-async def call_plugin(plugin: str, tool: str, args: dict | None = None) -> str:
-    """Call a plugin tool. Use list_plugins to discover plugins, describe_plugin
-    to get method schemas, then call this with the plugin name, tool name, and
+async def call_tool(tool: str, tool: str, args: dict | None = None) -> str:
+    """Call a tool function. Use list_tools to discover tools, describe_tool
+    to get method schemas, then call this with the tool name, tool name, and
     a dict of arguments."""
-    manager = _get_plugin_manager()
-    return await manager.call_tool(plugin, tool, args or {})
+    manager = _get_tool_manager()
+    return await manager.call_tool(tool, tool, args or {})

@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-notion"
+name = "notion"
 description = "Notion pages, databases, blocks, comments"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -11,12 +11,12 @@ dependencies = [
 ]
 
 [project.scripts]
-notion-plugin = "notion_plugin.cli:app"
+notion = "notion.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

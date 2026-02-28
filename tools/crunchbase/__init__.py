@@ -1,1 +1,1 @@
-"""Crunchbase Enterprise API plugin."""
+"""Crunchbase Enterprise API."""

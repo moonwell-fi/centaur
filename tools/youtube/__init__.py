@@ -1,1 +1,1 @@
-"""YouTube Data API plugin."""
+"""YouTube Data API."""

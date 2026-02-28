@@ -16,7 +16,7 @@ Rebuild of the Tempo AI system: **Postgres+pgvector** for data + search, **FastA
                     │  /api/query   (JSONB queries) │
                     │  /api/search/sql (raw SQL)    │
                     │  /mcp         (core + dynamic │
-                    │                plugin tools)  │
+                    │                tool tools)  │
                     └──────────────┬───────────────┘
                                    │
                     ┌──────────────▼───────────────┐
@@ -48,7 +48,7 @@ External tools (allium, defillama, etc.) are called on-demand — not ingested.
 - **`POST /api/search`** — Hybrid vector + FTS search with RRF ranking
 - **`POST /api/search/sql`** — Run read-only SQL directly against `raw_records` JSONB
 - **`GET /api/query/*`** — Structured endpoints (slack/messages, linear/issues, github/prs, timeline, people)
-- **`/mcp`** — core MCP tools plus dynamically discovered in-process plugin tools from `plugins/`
+- **`/mcp`** — core MCP tools plus dynamically discovered in-process tool tools from `tools/`
 
 ### Sandbox
 
@@ -77,9 +77,9 @@ ai-v2 status                   # Show sync status
 ai-v2 search "query"           # Test hybrid search
 ai-v2 continuous               # Run continuous sync loop
 ai-v2 migrate-from-sqlite PATH # Import from metronome SQLite
-ai-v2 plugins list             # Show loaded plugins + discovered tools
-ai-v2 plugins run TOOL [ARGS]  # Run a plugin CLI by plugin name/alias
-ai-v2 plugins test             # Smoke-test plugin imports, discovery, and CLI wiring
+ai-v2 tools list             # Show loaded tools + discovered tools
+ai-v2 tools run TOOL [ARGS]  # Run a tool CLI by tool name/alias
+ai-v2 tools test             # Smoke-test tool imports, discovery, and CLI wiring
 ai-v2 sandbox sync-repos       # Clone/update repos
 ai-v2 sandbox build            # Build sandbox Docker image
 ai-v2 sandbox update           # Sync + rebuild image

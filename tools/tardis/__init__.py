@@ -1,1 +1,1 @@
-"""Tardis.dev market data plugin."""
+"""Tardis.dev market data."""

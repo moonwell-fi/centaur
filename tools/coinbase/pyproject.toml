@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-coinbase"
+name = "coinbase"
 description = "Coinbase Prime API — custody, portfolios, staking, balances"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -11,12 +11,12 @@ dependencies = [
 ]
 
 [project.scripts]
-coinbase-plugin = "coinbase_plugin.cli:app"
+coinbase = "coinbase.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

@@ -30,21 +30,21 @@ COPY src/ src/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
-# 3. Install plugin dependencies via bind mount (doesn't create a layer from plugins/)
+# 3. Install tool dependencies via bind mount (doesn't create a layer from tools/)
 #    The uv cache mount means even on rebuild this is fast.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=plugins,target=/tmp/plugins \
+    --mount=type=bind,source=tools,target=/tmp/tools \
     python -c "\
 import tomllib, pathlib; \
 deps = set(); \
 [deps.update(tomllib.load(open(p,'rb')).get('project',{}).get('dependencies',[])) \
- for p in pathlib.Path('/tmp/plugins').glob('*/pyproject.toml')]; \
+ for p in pathlib.Path('/tmp/tools').glob('*/pyproject.toml')]; \
 open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" \
     && uv pip install -r /tmp/pd.txt --quiet \
     && rm /tmp/pd.txt
 
-# 4. Copy plugin source
-COPY plugins/ plugins/
+# 4. Copy tool source
+COPY tools/ tools/
 
 # Copy migrations
 COPY migrations/ migrations/

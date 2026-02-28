@@ -1,4 +1,4 @@
-"""ParadigmDB plugin — Paradigm internal database, Shift notes, and BigQuery."""
+"""ParadigmDB tool — Paradigm internal database, Shift notes, and BigQuery."""
 
 
 class ParadigmDBClient:

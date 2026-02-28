@@ -1,4 +1,4 @@
-"""Demo plugin for testing CD hot-reload."""
+"""Demo tool for testing CD hot-reload."""
 
 from datetime import datetime, timezone
 

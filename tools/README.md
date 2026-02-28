@@ -1,22 +1,22 @@
-# Plugins
+# Tools
 
-Drop plugin directories here. Each plugin needs:
+Drop tool directories here. Each tool needs:
 
 ```
-plugins/
-  my-plugin/
-    pyproject.toml   # [tool.ai-v2-plugin] section with module path
+tools/
+  my-tool/
+    pyproject.toml   # [tool.ai-v2] section with module path
     .env.example     # Document required secrets
     __init__.py
     client.py        # API client class + _client() factory
     cli.py           # typer CLI for standalone use
 ```
 
-## Writing a plugin
+## Writing a tool
 
 ```python
 # client.py
-from ai_v2.plugin_sdk import secret
+from ai_v2.tool_sdk import secret
 
 
 class MyClient:
@@ -34,11 +34,11 @@ def _client() -> MyClient:
 ## Secrets
 
 Secrets are resolved in this order:
-1. **Plugin `.env`** — per-plugin overrides in `plugins/<name>/.env`
+1. **Tool `.env`** — per-tool overrides in `tools/<name>/.env`
 2. **Root `.env`** — central file at repo root (define all secrets here)
 3. **Environment variables** — for Docker, k8s, sops, 1Password, etc.
 
-Use `secret("KEY")` to access. Never use `os.environ` — plugin secrets are scoped.
+Use `secret("KEY")` to access. Never use `os.environ` — tool secrets are scoped.
 
 ## Available Plugins
 

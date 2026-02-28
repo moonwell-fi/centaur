@@ -14,10 +14,10 @@ import httpx
 
 try:
     from anthropic import AsyncAnthropic
-except ImportError:  # pragma: no cover - optional until plugin deps are installed
+except ImportError:  # pragma: no cover - optional until tool deps are installed
     AsyncAnthropic = None  # type: ignore[assignment]
 
-from shared.plugin_sdk import secret
+from shared.tool_sdk import secret
 
 from .models import (
     DeepResearchIteration,
@@ -1050,5 +1050,5 @@ class WebSearchClient:
 
 
 def _client() -> WebSearchClient:
-    """Factory for plugin loader."""
+    """Factory for tool loader."""
     return WebSearchClient()

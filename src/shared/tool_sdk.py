@@ -1,4 +1,4 @@
-"""Plugin SDK — what plugin authors import."""
+"""Tool SDK — what tool authors import."""
 
 from __future__ import annotations
 
@@ -18,24 +18,24 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
-class PluginContext:
+class ToolContext:
     name: str
     secrets: dict[str, str] = field(default_factory=dict)
 
 
-_plugin_ctx: ContextVar[PluginContext] = ContextVar("_plugin_ctx")
+_tool_ctx: ContextVar[ToolContext] = ContextVar("_tool_ctx")
 
 
-def set_plugin_context(ctx: PluginContext) -> Any:
-    return _plugin_ctx.set(ctx)
+def set_tool_context(ctx: ToolContext) -> Any:
+    return _tool_ctx.set(ctx)
 
 
-def reset_plugin_context(token: Any) -> None:
-    _plugin_ctx.reset(token)
+def reset_tool_context(token: Any) -> None:
+    _tool_ctx.reset(token)
 
 
-def get_plugin_context() -> PluginContext:
-    return _plugin_ctx.get()
+def get_tool_context() -> ToolContext:
+    return _tool_ctx.get()
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +55,7 @@ _op_available: bool | None = None
 
 # Whether 1Password lookups are enabled. Must be explicitly enabled via
 # ``enable_op_backend(True)`` — disabled by default to avoid interactive
-# prompts during plugin discovery or automated workflows.
+# prompts during tool discovery or automated workflows.
 _op_enabled: bool = False
 
 
@@ -133,17 +133,17 @@ def _op_read(key: str) -> str | None:
 
 
 def secret(key: str, default: str | None = None) -> str:
-    """Get a secret. Resolution order: plugin context → 1Password → os.environ.
+    """Get a secret. Resolution order: tool context → 1Password → os.environ.
 
-    - **PluginContext**: Set by PluginManager, populated from .env files (if any).
+    - **ToolContext**: Set by ToolManager, populated from .env files (if any).
     - **1Password**: On-demand via ``op read``, cached in-memory with 5min TTL.
       Requires ``op`` CLI — locally via interactive session, in containers
       via entrypoint.sh (signs in, loads secrets as env vars, signs out).
     - **os.environ**: Final fallback for standalone CLI, Docker env, k8s, etc.
     """
-    # 1. Check plugin context if available (server mode)
+    # 1. Check tool context if available (server mode)
     try:
-        ctx = _plugin_ctx.get()
+        ctx = _tool_ctx.get()
         val = ctx.secrets.get(key)
         if val is not None:
             return val
@@ -165,5 +165,5 @@ def secret(key: str, default: str | None = None) -> str:
 
     ctx_name = ""
     with contextlib.suppress(LookupError):
-        ctx_name = f" for plugin '{_plugin_ctx.get().name}'"
+        ctx_name = f" for tool '{_tool_ctx.get().name}'"
     raise KeyError(f"Missing secret '{key}'{ctx_name}")

@@ -19,14 +19,14 @@ make test             # pytest
 uv run mypy src/api src/etl src/shared
 ```
 
-## Plugin Conventions
+## Tool Conventions
 
-Every plugin: `tools/<name>/` with `client.py` (class + `_client()` factory), `pyproject.toml` (`[tool.ai-v2-plugin] module = "client.py"`), optional `cli.py`.
+Every tool: `tools/<name>/` with `client.py` (class + `_client()` factory), `pyproject.toml` (`[tool.ai-v2] module = "client.py"`), optional `cli.py`.
 
 - `client.py`: NO `load_dotenv()`. Secrets via `os.getenv()` or `secret()`.
 - `cli.py`: YES `load_dotenv()` at top. Thin typer wrapper.
 - Methods starting with `_` or lifecycle methods are excluded from registration.
-- Secrets resolution: plugin `.env` → root `.env` → environment variables.
+- Secrets resolution: tool `.env` → root `.env` → environment variables.
 
 ## Agent Sandbox Architecture
 
@@ -45,7 +45,7 @@ sandbox/
 Container → API connectivity:
 - Container joins `ai_v2_default` Docker network → API reachable at `http://api:8000`
 - Entrypoint injects `AI_V2_API_URL` and `AI_V2_API_KEY` env vars
-- SYSTEM_PROMPT instructs the harness: `curl -H "Authorization: Bearer $AI_V2_API_KEY" $AI_V2_API_URL/tools/{plugin}/{tool}`
+- SYSTEM_PROMPT instructs the harness: `curl -H "Authorization: Bearer $AI_V2_API_KEY" $AI_V2_API_URL/tools/{name}/{tool}`
 - Agent image MUST be tagged `agent2:latest` (not `agent:latest`)
 
 ## E2E Testing (without Slack)
@@ -131,9 +131,9 @@ All deploys happen automatically via GitHub Actions on merge to `main`. **Never 
 | `sandbox/**` | `docker build -t agent2:latest sandbox/` |
 | `Dockerfile`, `pyproject.toml`, `uv.lock`, `docker-compose.yml`, `migrations/` | Rebuild API + ETL |
 
-**Plugin hot-reload:** The API watches the bind-mounted `tools/` directory via `watchfiles`. When `git pull` updates plugin files, the API auto-reloads within seconds — no container restart, no curl, no manual step.
+**Tool hot-reload:** The API watches the bind-mounted `tools/` directory via `watchfiles`. When `git pull` updates tool files, the API auto-reloads within seconds — no container restart, no curl, no manual step.
 
-**Admin endpoint:** `POST /admin/reload-plugins` is available as a manual fallback if the file watcher misses something.
+**Admin endpoint:** `POST /admin/reload-tools` is available as a manual fallback if the file watcher misses something.
 
 ## Debugging (SSH only for logs)
 

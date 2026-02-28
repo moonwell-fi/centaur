@@ -1,1 +1,1 @@
-"""DeBank DeFi portfolio plugin."""
+"""DeBank DeFi portfolio."""

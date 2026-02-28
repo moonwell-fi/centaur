@@ -1,5 +1,5 @@
 [project]
-name = "ai-v2-plugin-ashby"
+name = "ashby"
 description = "Ashby ATS CLI for AI agents — query candidates, jobs, applications, interviews"
 version = "0.1.0"
 requires-python = ">=3.11"
@@ -15,5 +15,5 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 
-[tool.ai-v2-plugin]
+[tool.ai-v2]
 module = "client.py"

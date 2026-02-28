@@ -1,4 +1,4 @@
-"""Termsheet plugin client — wraps deal CRUD, generation, and document output."""
+"""Termsheet tool client — wraps deal CRUD, generation, and document output."""
 
 from typing import Optional
 

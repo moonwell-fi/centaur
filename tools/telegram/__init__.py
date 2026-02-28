@@ -1,1 +1,1 @@
-"""Telegram messaging plugin."""
+"""Telegram messaging."""

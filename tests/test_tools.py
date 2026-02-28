@@ -1,10 +1,10 @@
-"""Comprehensive plugin test harness.
+"""Comprehensive tool test harness.
 
-Validates every loaded plugin across 4 layers:
+Validates every loaded tool across 4 layers:
   1. Library import & discovery — _client() factory works, tools are found
   2. Registry & CLI smoke — CLI --help succeeds, aliases resolve
   3. REST route registration — every tool has a POST endpoint
-  4. Schema validation — describe_plugin returns clean types (no <class '…'>)
+  4. Schema validation — describe_tool returns clean types (no <class '…'>)
 """
 
 from __future__ import annotations
@@ -14,10 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from shared.plugin_manager import PluginManager
+from shared.tool_manager import ToolManager
 
 # ---------------------------------------------------------------------------
-# Shared fixture: discover all plugins once per test session
+# Shared fixture: discover all tools once per test session
 # ---------------------------------------------------------------------------
 
 _APP_ROOT = Path(__file__).resolve().parent.parent
@@ -25,8 +25,8 @@ _PLUGINS_DIR = _APP_ROOT / "tools"
 
 
 @pytest.fixture(scope="session")
-def manager() -> PluginManager:
-    mgr = PluginManager(_PLUGINS_DIR)
+def manager() -> ToolManager:
+    mgr = ToolManager(_PLUGINS_DIR)
     mgr.discover()
     return mgr
 
@@ -37,19 +37,19 @@ def manager() -> PluginManager:
 
 
 class TestImportAndDiscovery:
-    def test_plugins_loaded(self, manager: PluginManager) -> None:
-        """At least some plugins should load successfully."""
-        assert len(manager.plugins) > 0, "No plugins were loaded"
+    def tests_loaded(self, manager: ToolManager) -> None:
+        """At least some tools should load successfully."""
+        assert len(manager.integrations) > 0, "No tools were loaded"
 
-    def test_every_plugin_has_tools(self, manager: PluginManager) -> None:
-        """Every loaded plugin should have at least one discovered tool."""
-        matrix = manager.plugin_test_matrix()
+    def test_every_has_tools(self, manager: ToolManager) -> None:
+        """Every loaded tool should have at least one discovered tool."""
+        matrix = manager.integration_test_matrix()
         for entry in matrix:
             assert entry["library_import"] is True, (
-                f"Plugin {entry['plugin']} failed library import"
+                f"Tool {entry['tool']} failed library import"
             )
             assert len(entry["discovered_tools"]) > 0, (
-                f"Plugin {entry['plugin']} has no discovered tools"
+                f"Tool {entry['tool']} has no discovered tools"
             )
 
 
@@ -59,24 +59,24 @@ class TestImportAndDiscovery:
 
 
 class TestRegistryAndCLI:
-    def test_registry_integrity(self, manager: PluginManager) -> None:
-        """Verify registry integrity for all plugins."""
+    def test_registry_integrity(self, manager: ToolManager) -> None:
+        """Verify registry integrity for all tools."""
         results = manager.smoke_test_registry()
         failures = [r for r in results if r["status"] != "ok"]
         if failures:
             details = json.dumps(failures, indent=2)
             pytest.fail(f"Registry failures:\n{details}")
 
-    def test_cli_smoke(self, manager: PluginManager) -> None:
-        """CLI --help should succeed for every plugin that has a cli.py."""
+    def test_cli_smoke(self, manager: ToolManager) -> None:
+        """CLI --help should succeed for every tool that has a cli.py."""
         results = manager.smoke_test_clis(["--help"])
         failures = [r for r in results if r["status"] not in {"ok", "missing_cli"}]
         if failures:
             details = json.dumps(failures, indent=2)
             pytest.fail(f"CLI smoke failures:\n{details}")
 
-    def test_alias_smoke(self, manager: PluginManager) -> None:
-        """Script alias --help should succeed for every plugin with aliases."""
+    def test_alias_smoke(self, manager: ToolManager) -> None:
+        """Script alias --help should succeed for every tool with aliases."""
         results = manager.smoke_test_aliases(["--help"])
         failures = [r for r in results if r["status"] not in {"ok", "missing_aliases"}]
         if failures:
@@ -90,51 +90,51 @@ class TestRegistryAndCLI:
 
 
 class TestRESTRoutes:
-    def test_all_tools_have_routes(self, manager: PluginManager) -> None:
-        """Every plugin tool should have a POST /plugins/<plugin>/<tool> route."""
+    def test_all_tools_have_routes(self, manager: ToolManager) -> None:
+        """Every tool function should have a POST /tools/<tool>/<tool> route."""
         results = manager.smoke_test_rest_routes()
         failures = [r for r in results if r["status"] != "ok"]
         if failures:
             details = json.dumps(failures, indent=2)
             pytest.fail(f"REST route registration failures:\n{details}")
 
-    def test_route_count_matches_tools(self, manager: PluginManager) -> None:
+    def test_route_count_matches_tools(self, manager: ToolManager) -> None:
         """Total registered routes should match total tool count."""
         results = manager.smoke_test_rest_routes()
         for r in results:
             assert r["registered_tools"] == r["total_tools"], (
-                f"Plugin {r['plugin']}: {r['registered_tools']}/{r['total_tools']} "
+                f"Tool {r['tool']}: {r['registered_tools']}/{r['total_tools']} "
                 f"tools registered, missing: {r['missing_routes']}"
             )
 
 
 # ---------------------------------------------------------------------------
-# Layer 4 — Schema validation (MCP describe_plugin quality)
+# Layer 4 — Schema validation (MCP describe_tool quality)
 # ---------------------------------------------------------------------------
 
 
 class TestSchemaValidation:
-    def test_no_raw_class_types(self, manager: PluginManager) -> None:
-        """describe_plugin should not contain <class '...'> type strings."""
+    def test_no_raw_class_types(self, manager: ToolManager) -> None:
+        """describe_tool should not contain <class '...'> type strings."""
         results = manager.smoke_test_schemas()
         failures = [r for r in results if r["status"] != "ok"]
         if failures:
             details = json.dumps(failures, indent=2)
             pytest.fail(f"Schema validation failures:\n{details}")
 
-    def test_describe_plugin_returns_tools(self, manager: PluginManager) -> None:
-        """describe_plugin should return a non-empty tools list for each plugin."""
-        for name in manager.plugins:
-            schema = manager.describe_plugin(name)
-            assert "error" not in schema, f"describe_plugin({name}) returned error: {schema}"
+    def test_describe_tool_returns_tools(self, manager: ToolManager) -> None:
+        """describe_tool should return a non-empty tools list for each tool."""
+        for name in manager.integrations:
+            schema = manager.describe_tool(name)
+            assert "error" not in schema, f"describe_tool({name}) returned error: {schema}"
             assert len(schema.get("tools", [])) > 0, (
-                f"describe_plugin({name}) returned no tools"
+                f"describe_tool({name}) returned no tools"
             )
 
-    def test_all_tool_params_have_type(self, manager: PluginManager) -> None:
+    def test_all_tool_params_have_type(self, manager: ToolManager) -> None:
         """Every parameter should have a type field that is a non-empty string."""
-        for name in manager.plugins:
-            schema = manager.describe_plugin(name)
+        for name in manager.integrations:
+            schema = manager.describe_tool(name)
             for tool_schema in schema.get("tools", []):
                 for pname, pinfo in tool_schema.get("parameters", {}).items():
                     ptype = pinfo.get("type", "")

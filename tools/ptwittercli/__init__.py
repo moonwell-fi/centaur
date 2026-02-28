@@ -1,1 +1,1 @@
-"""Paradigm Twitter CLI plugin."""
+"""Paradigm Twitter CLI."""

@@ -8,7 +8,7 @@ import typer
 from rich.console import Console
 
 from shared.cli_tables import Table
-from plugins.confmonitor.client import ConfMonitorClient
+from tools.confmonitor.client import ConfMonitorClient
 
 app = typer.Typer(
     name="confmonitor",

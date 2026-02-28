@@ -1,1 +1,1 @@
-"""Pylon support API plugin."""
+"""Pylon support API."""
