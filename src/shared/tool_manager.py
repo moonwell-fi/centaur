@@ -46,10 +46,41 @@ class ToolMethod:
 _LIFECYCLE_METHODS = frozenset({"close", "connect", "disconnect", "shutdown"})
 
 
+def _flatten_for_tabular(data: Any) -> Any:
+    """Flatten nested dicts in arrays so TOON can use tabular encoding.
+
+    If every element is a dict with the same keys but some values are nested,
+    stringify those nested values (via JSON) so the array qualifies for the
+    compact ``[N]{fields}:`` tabular form.
+    """
+    if not isinstance(data, list) or not data:
+        return data
+    if not all(isinstance(item, dict) for item in data):
+        return data
+    keys = set(data[0].keys())
+    if not all(set(d.keys()) == keys for d in data):
+        return data
+    has_nested = any(
+        isinstance(v, (dict, list)) for item in data for v in item.values()
+    )
+    if not has_nested:
+        return data
+    flat = []
+    for item in data:
+        row = {}
+        for k, v in item.items():
+            if isinstance(v, (dict, list)):
+                row[k] = json.dumps(v, separators=(",", ":"), default=str)
+            else:
+                row[k] = v
+        flat.append(row)
+    return flat
+
+
 def _to_toon(data: Any) -> str:
     """Encode data as TOON for token-efficient LLM responses, falling back to JSON."""
     try:
-        return toon_encode(data)
+        return toon_encode(_flatten_for_tabular(data))
     except Exception:
         return json.dumps(data, default=str)
 

@@ -10,7 +10,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from toon_format import encode as toon_encode
 
 from api.deps import EmbeddingService
-from shared.tool_manager import ToolManager
+from shared.tool_manager import ToolManager, _flatten_for_tabular
 
 mcp = FastMCP(
     "Tempo AI v2",
@@ -52,7 +52,7 @@ def _get_pool() -> asyncpg.Pool:
 def _to_toon(data: Any) -> str:
     """Encode data as TOON for token-efficient LLM responses."""
     try:
-        return toon_encode(data)
+        return toon_encode(_flatten_for_tabular(data))
     except Exception:
         return json.dumps(data, default=str)
 

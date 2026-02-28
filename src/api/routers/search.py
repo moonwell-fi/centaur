@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from toon_format import encode as toon_encode
 
 from api.deps import EmbeddingService, get_embedding_service, get_pool, verify_api_key
+from shared.tool_manager import _flatten_for_tabular
 
 router = APIRouter(prefix="/api/search", dependencies=[Depends(verify_api_key)])
 
@@ -111,7 +112,9 @@ async def search(
         for r in rows
     ]
     if "text/plain" in request.headers.get("accept", ""):
-        return PlainTextResponse(toon_encode([r.model_dump() for r in results]))
+        return PlainTextResponse(
+            toon_encode(_flatten_for_tabular([r.model_dump() for r in results]))
+        )
     return results
 
 
@@ -133,7 +136,7 @@ async def sql_query(
 
     results = [dict(r) for r in rows]
     if "text/plain" in request.headers.get("accept", ""):
-        return PlainTextResponse(toon_encode(results))
+        return PlainTextResponse(toon_encode(_flatten_for_tabular(results)))
     return results
 
 
