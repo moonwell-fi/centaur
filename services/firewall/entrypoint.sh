@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── MITM Proxy Entrypoint ─────────────────────────────────────────────────
+# ── Firewall Entrypoint ───────────────────────────────────────────────────
 # 1. Fetch CA cert+key from secrets service (for stateless scaling)
 # 2. Share public CA cert via Docker volume (for sandbox trust)
 # 3. Start mitmdump with the credential-injection addon
@@ -13,8 +13,8 @@ SECRET_MANAGER_URL="${SECRET_MANAGER_URL:-http://secrets:8100}"
 mkdir -p "$CONFDIR" "$CERT_SHARE"
 
 # ── Load CA from secrets service ──────────────────────────────────────────
-# Stored as two separate 1PW items: MITM_CA_CERT and MITM_CA_KEY
-echo "[mitm] fetching CA from secrets service..."
+# Stored as two separate 1PW items: FIREWALL_CA_CERT and FIREWALL_CA_KEY
+echo "[firewall] fetching CA from secrets service..."
 
 CA_CERT=""
 CA_KEY=""
@@ -22,21 +22,21 @@ CA_KEY=""
 # Wait for secrets service (with retry)
 for i in $(seq 1 30); do
     if curl -sf "${SECRET_MANAGER_URL}/health" > /dev/null 2>&1; then
-        CA_CERT=$(curl -sf "${SECRET_MANAGER_URL}/secrets/MITM_CA_CERT" | jq -r '.value // empty' 2>/dev/null || true)
-        CA_KEY=$(curl -sf "${SECRET_MANAGER_URL}/secrets/MITM_CA_KEY" | jq -r '.value // empty' 2>/dev/null || true)
+        CA_CERT=$(curl -sf "${SECRET_MANAGER_URL}/secrets/FIREWALL_CA_CERT" | jq -r '.value // empty' 2>/dev/null || true)
+        CA_KEY=$(curl -sf "${SECRET_MANAGER_URL}/secrets/FIREWALL_CA_KEY" | jq -r '.value // empty' 2>/dev/null || true)
         break
     fi
-    echo "[mitm] waiting for secrets service... ($i/30)"
+    echo "[firewall] waiting for secrets service... ($i/30)"
     sleep 2
 done
 
 if [ -n "$CA_CERT" ] && [ -n "$CA_KEY" ]; then
     # mitmproxy expects key + cert combined in mitmproxy-ca.pem
     printf '%s\n%s\n' "$CA_KEY" "$CA_CERT" > "$CONFDIR/mitmproxy-ca.pem"
-    echo "[mitm] loaded CA from secrets service"
+    echo "[firewall] loaded CA from secrets service"
 else
-    echo "[mitm] no CA in secrets service — mitmproxy will auto-generate"
-    echo "[mitm] run: scripts/generate-mitm-ca.sh to create a persistent CA"
+    echo "[firewall] no CA in secrets service — mitmproxy will auto-generate"
+    echo "[firewall] run: scripts/generate-mitm-ca.sh to create a persistent CA"
 fi
 
 # ── Share public cert with sandboxes (via Docker volume) ──────────────────
@@ -49,9 +49,9 @@ fi
     done
     if [ -f "$CONFDIR/mitmproxy-ca-cert.pem" ]; then
         cp "$CONFDIR/mitmproxy-ca-cert.pem" "$CERT_SHARE/ca-cert.pem"
-        echo "[mitm] CA cert shared at /certs/ca-cert.pem"
+        echo "[firewall] CA cert shared at /certs/ca-cert.pem"
     else
-        echo "[mitm] WARNING: CA cert not found after timeout"
+        echo "[firewall] WARNING: CA cert not found after timeout"
     fi
 ) &
 

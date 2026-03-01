@@ -1,7 +1,8 @@
 FROM mitmproxy/mitmproxy:11
 
 USER root
-RUN apk add --no-cache curl jq bash
+RUN apt-get update && apt-get install -y --no-install-recommends curl jq && rm -rf /var/lib/apt/lists/*
+RUN mkdir -p /certs && chown mitmproxy:mitmproxy /certs
 USER mitmproxy
 
 COPY addon.py /app/addon.py

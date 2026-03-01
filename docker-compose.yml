@@ -39,8 +39,8 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  secrets-proxy:
-    build: services/mitm
+  firewall:
+    build: services/firewall
     environment:
       SECRET_MANAGER_URL: http://secrets:8100
     networks:
@@ -48,7 +48,7 @@ services:
       - secrets_net
       - agent_net
     volumes:
-      - mitm-certs:/certs
+      - firewall-certs:/certs
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8081/health"]
       interval: 5s
@@ -70,9 +70,9 @@ services:
       SLACKBOT_URL: http://slackbot:3001
       AI_V2_LOG_LEVEL: info
       SECRET_MANAGER_URL: http://secrets:8100
-      MITM_HOST: secrets-proxy
+      FIREWALL_HOST: firewall
       AGENT_NETWORK: ai_v2_agent_net
-      MITM_CERTS_VOLUME: mitm-certs
+      FIREWALL_CERTS_VOLUME: firewall-certs
     networks:
       - default
       - secrets_net
@@ -80,7 +80,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./tools:/app/tools
-      - mitm-certs:/mitm-certs:ro
+      - firewall-certs:/firewall-certs:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 10s
@@ -92,7 +92,7 @@ services:
         condition: service_healthy
       secrets:
         condition: service_started
-      secrets-proxy:
+      firewall:
         condition: service_healthy
     restart: unless-stopped
 
@@ -200,8 +200,8 @@ volumes:
   grafanadata:
   prometheusdata:
   lokidata:
-  mitm-certs:
-    name: mitm-certs
+  firewall-certs:
+    name: firewall-certs
 
 networks:
   secrets_net:

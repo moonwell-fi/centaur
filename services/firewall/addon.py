@@ -1,4 +1,4 @@
-"""mitmproxy addon — stateless credential injection via secrets service.
+"""Firewall addon — stateless credential injection via secrets service.
 
 Intercepts outgoing HTTP/HTTPS requests from sandbox containers and injects
 real API credentials.  The proxy itself holds NO persistent state — credentials
@@ -7,7 +7,7 @@ memory with a short TTL.
 
 Architecture::
 
-    Sandbox Container ──► MITM Proxy ──► Upstream API
+    Sandbox Container ──► Firewall ──► Upstream API
     (placeholder keys)    (injects real   (sees real
                            credentials)    credentials)
 
@@ -15,7 +15,7 @@ Security properties:
     • Sandboxes never see real API keys (only placeholders)
     • Credentials exist only in-memory in this process
     • Secrets service is the single source of truth (1Password-backed)
-    • MITM proxy is stateless — horizontally scalable
+    • Firewall is stateless — horizontally scalable
     • Requests to the secrets service are blocked (no exfiltration)
 """
 
@@ -35,12 +35,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from mitmproxy import http
 
-log = logging.getLogger("mitm.secrets")
+log = logging.getLogger("firewall.secrets")
 
 # ── Configuration ──────────────────────────────────────────────────────────
 
 SECRET_MANAGER_URL = os.environ.get("SECRET_MANAGER_URL", "http://secrets:8100")
-CACHE_TTL = int(os.environ.get("MITM_CACHE_TTL", "30"))  # seconds
+CACHE_TTL = int(os.environ.get("FIREWALL_CACHE_TTL", os.environ.get("MITM_CACHE_TTL", "30")))  # seconds
 HEALTH_PORT = int(os.environ.get("HEALTH_PORT", "8081"))
 
 # Hosts that sandboxes must NEVER reach through the proxy.
@@ -78,9 +78,9 @@ _SECRET_RE = re.compile(r"\{(\w+)\}")
 
 
 def _load_rules() -> dict[str, list[tuple[str, str]]]:
-    """Load injection rules, merging defaults with any MITM_EXTRA_RULES."""
+    """Load injection rules, merging defaults with any FIREWALL_EXTRA_RULES."""
     rules = dict(_DEFAULT_RULES)
-    extra = os.environ.get("MITM_EXTRA_RULES")
+    extra = os.environ.get("FIREWALL_EXTRA_RULES", os.environ.get("MITM_EXTRA_RULES"))
     if extra:
         for host, entries in json.loads(extra).items():
             rules[host] = [(h, v) for h, v in entries]
@@ -91,7 +91,7 @@ def _load_rules() -> dict[str, list[tuple[str, str]]]:
 
 
 class CredentialInjector:
-    """mitmproxy addon that injects credentials from the secrets service."""
+    """Firewall addon that injects credentials from the secrets service."""
 
     def __init__(self) -> None:
         self._secrets: dict[str, str] = {}
@@ -199,7 +199,7 @@ class CredentialInjector:
 
         return _SECRET_RE.sub(_repl, template)
 
-    # ── mitmproxy hooks ──────────────────────────────────────────────
+    # ── mitmproxy hooks (firewall) ──────────────────────────────────
 
     def request(self, flow: http.HTTPFlow) -> None:
         host = flow.request.pretty_host.lower()

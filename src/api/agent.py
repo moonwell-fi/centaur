@@ -820,9 +820,9 @@ def _create_container(
         _repos_host_dir(): {"bind": "/home/agent/github", "mode": "rw"},
         "/var/run/docker.sock": {"bind": "/var/run/docker.sock", "mode": "rw"},
     }
-    if os.getenv("MITM_HOST"):
-        vol = os.getenv("MITM_CERTS_VOLUME", "mitm-certs")
-        volumes[vol] = {"bind": "/mitm-certs", "mode": "ro"}
+    if os.getenv("FIREWALL_HOST", os.getenv("MITM_HOST")):
+        vol = os.getenv("FIREWALL_CERTS_VOLUME", os.getenv("MITM_CERTS_VOLUME", "firewall-certs"))
+        volumes[vol] = {"bind": "/firewall-certs", "mode": "ro"}
     container = client.containers.run(
         _image(),
         detach=True,
@@ -884,9 +884,9 @@ def _refill_pool() -> None:
 def _container_env() -> list[str]:
     """Build env vars to forward into the container.
 
-    When MITM_HOST is set, secrets are NOT passed to sandboxes.  Instead,
+    When FIREWALL_HOST is set, secrets are NOT passed to sandboxes.  Instead,
     dummy values are injected so harness CLIs initialise normally, and the
-    MITM proxy overwrites HTTP headers with real credentials in-flight.
+    firewall proxy overwrites HTTP headers with real credentials in-flight.
     Secrets never exist inside sandbox containers.
     """
     env = [
@@ -894,25 +894,25 @@ def _container_env() -> list[str]:
         f"AI_V2_API_KEY={os.getenv('API_SECRET_KEY', '')}",
     ]
 
-    mitm_host = os.getenv("MITM_HOST", "")
-    if mitm_host:
-        # Dummy values — the MITM proxy injects real credentials at the HTTP layer.
+    firewall_host = os.getenv("FIREWALL_HOST", os.getenv("MITM_HOST", ""))
+    if firewall_host:
+        # Dummy values — the firewall proxy injects real credentials at the HTTP layer.
         _ph = "PROXY_MANAGED"
         for _k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "CODEX_API_KEY",
                     "AMP_API_KEY", "GITHUB_TOKEN"):
             env.append(f"{_k}={_ph}")
 
         env.extend([
-            f"HTTPS_PROXY=http://{mitm_host}:8080",
-            f"HTTP_PROXY=http://{mitm_host}:8080",
-            f"https_proxy=http://{mitm_host}:8080",
-            f"http_proxy=http://{mitm_host}:8080",
+            f"HTTPS_PROXY=http://{firewall_host}:8080",
+            f"HTTP_PROXY=http://{firewall_host}:8080",
+            f"https_proxy=http://{firewall_host}:8080",
+            f"http_proxy=http://{firewall_host}:8080",
             "NO_PROXY=api,localhost,127.0.0.1",
             "no_proxy=api,localhost,127.0.0.1",
-            "NODE_EXTRA_CA_CERTS=/mitm-certs/ca-cert.pem",
-            "REQUESTS_CA_BUNDLE=/mitm-certs/ca-cert.pem",
-            "SSL_CERT_FILE=/mitm-certs/ca-cert.pem",
-            "GIT_SSL_CAINFO=/mitm-certs/ca-cert.pem",
+            "NODE_EXTRA_CA_CERTS=/firewall-certs/ca-cert.pem",
+            "REQUESTS_CA_BUNDLE=/firewall-certs/ca-cert.pem",
+            "SSL_CERT_FILE=/firewall-certs/ca-cert.pem",
+            "GIT_SSL_CAINFO=/firewall-certs/ca-cert.pem",
         ])
     else:
         # Legacy mode: pass secrets directly as env vars.

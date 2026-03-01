@@ -5,9 +5,9 @@ HOME_DIR="$(eval echo ~)"
 MCP_URL="${AI_V2_API_URL:-http://localhost:8000}/mcp/"
 MCP_KEY="${AI_V2_API_KEY:-}"
 
-# ── Trust MITM proxy CA (if proxy mode is active) ────────────────────────
-if [ -f /mitm-certs/ca-cert.pem ]; then
-    sudo cp /mitm-certs/ca-cert.pem /usr/local/share/ca-certificates/mitm-ca.crt
+# ── Trust firewall proxy CA (if proxy mode is active) ────────────────────────
+if [ -f /firewall-certs/ca-cert.pem ]; then
+    sudo cp /firewall-certs/ca-cert.pem /usr/local/share/ca-certificates/firewall-ca.crt
     sudo update-ca-certificates --fresh > /dev/null 2>&1
 fi
 
