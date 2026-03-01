@@ -136,7 +136,7 @@ async def _load_all() -> int:
         if not item_id:
             continue
 
-        _FIELDS = ("password", "credential", "api_key", "key", "token", "secret", "value")
+        _FIELDS = ("password", "credential", "api_key", "key", "token", "secret", "value", "notesPlain")
         value = None
         for field in _FIELDS:
             try:
