@@ -68,8 +68,8 @@ _DEFAULT_RULES: dict[str, list[tuple[str, str]]] = {
     "github.com": [
         ("authorization", "Basic {_GITHUB_BASIC}"),
     ],
-    # Amp CLI
-    "api.ampcode.com": [
+    # Amp CLI (uses ampcode.com, not api.ampcode.com)
+    "ampcode.com": [
         ("authorization", "Bearer {AMP_API_KEY}"),
     ],
 }

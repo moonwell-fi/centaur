@@ -827,9 +827,8 @@ def _create_container(
         repo_host_path = os.path.join(_repos_host_dir(), repo)
         if os.path.isdir(repo_host_path):
             volumes[repo_host_path] = {"bind": f"/home/agent/github/{repo}", "mode": "rw"}
-    if os.getenv("FIREWALL_HOST", os.getenv("MITM_HOST")):
-        vol = os.getenv("FIREWALL_CERTS_VOLUME", os.getenv("MITM_CERTS_VOLUME", "firewall-certs"))
-        volumes[vol] = {"bind": "/firewall-certs", "mode": "ro"}
+    vol = os.getenv("FIREWALL_CERTS_VOLUME", "firewall-certs")
+    volumes[vol] = {"bind": "/firewall-certs", "mode": "ro"}
     container = client.containers.run(
         _image(),
         detach=True,
@@ -889,63 +888,34 @@ def _refill_pool() -> None:
 
 
 def _container_env() -> list[str]:
-    """Build env vars to forward into the container.
+    """Build env vars for sandbox containers.
 
-    When FIREWALL_HOST is set, secrets are NOT passed to sandboxes.  Instead,
-    dummy values are injected so harness CLIs initialise normally, and the
-    firewall proxy overwrites HTTP headers with real credentials in-flight.
-    Secrets never exist inside sandbox containers.
+    Containers never receive real API keys.  Stub values are injected so
+    harness CLIs initialise normally, and the firewall proxy overwrites
+    HTTP headers with real credentials in-flight.
     """
-    env = [
+    firewall_host = os.getenv("FIREWALL_HOST", "firewall")
+    _stub = "PROXY_MANAGED_PLACEHOLDER_KEY"
+
+    return [
         f"AI_V2_API_URL={os.getenv('AGENT_API_URL', 'http://api:8000')}",
         f"AI_V2_API_KEY={os.getenv('API_SECRET_KEY', '')}",
+        f"ANTHROPIC_API_KEY={_stub}",
+        f"OPENAI_API_KEY={_stub}",
+        f"CODEX_API_KEY={_stub}",
+        f"AMP_API_KEY={_stub}",
+        f"GITHUB_TOKEN={_stub}",
+        f"HTTPS_PROXY=http://{firewall_host}:8080",
+        f"HTTP_PROXY=http://{firewall_host}:8080",
+        f"https_proxy=http://{firewall_host}:8080",
+        f"http_proxy=http://{firewall_host}:8080",
+        "NO_PROXY=api,localhost,127.0.0.1",
+        "no_proxy=api,localhost,127.0.0.1",
+        "NODE_EXTRA_CA_CERTS=/firewall-certs/ca-cert.pem",
+        "REQUESTS_CA_BUNDLE=/firewall-certs/ca-cert.pem",
+        "SSL_CERT_FILE=/firewall-certs/ca-cert.pem",
+        "GIT_SSL_CAINFO=/firewall-certs/ca-cert.pem",
     ]
-
-    firewall_host = os.getenv("FIREWALL_HOST", os.getenv("MITM_HOST", ""))
-    if firewall_host:
-        # Auto-stub every secret-like env var so harness CLIs initialise
-        # without complaining.  The firewall proxy injects real credentials
-        # at the HTTP layer — these stubs never reach upstream APIs.
-        # Stubs match the original value length (min 50) so basic CLI
-        # length/format checks pass.
-        _skip = {"API_SECRET_KEY"}  # internal, already forwarded above
-        for _k, _v in os.environ.items():
-            if not _v or _k in _skip:
-                continue
-            if _k.endswith(("_API_KEY", "_TOKEN", "_SECRET_KEY", "_SECRET")):
-                env.append(f"{_k}={'0' * max(len(_v), 50)}")
-
-        env.extend([
-            f"HTTPS_PROXY=http://{firewall_host}:8080",
-            f"HTTP_PROXY=http://{firewall_host}:8080",
-            f"https_proxy=http://{firewall_host}:8080",
-            f"http_proxy=http://{firewall_host}:8080",
-            "NO_PROXY=api,localhost,127.0.0.1",
-            "no_proxy=api,localhost,127.0.0.1",
-            "NODE_EXTRA_CA_CERTS=/firewall-certs/ca-cert.pem",
-            "REQUESTS_CA_BUNDLE=/firewall-certs/ca-cert.pem",
-            "SSL_CERT_FILE=/firewall-certs/ca-cert.pem",
-            "GIT_SSL_CAINFO=/firewall-certs/ca-cert.pem",
-        ])
-    else:
-        # Legacy mode: pass secrets directly as env vars.
-        for k in ("AMP_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GITHUB_TOKEN"):
-            v = os.getenv(k, "")
-            if v:
-                env.append(f"{k}={v}")
-        openai_key = os.getenv("OPENAI_API_KEY", "")
-        if openai_key and not os.getenv("CODEX_API_KEY"):
-            env.append(f"CODEX_API_KEY={openai_key}")
-
-    # Codex falls back to OPENAI_API_KEY internally but setting explicitly
-    # avoids issues with some versions.
-    openai_val = next(
-        (e.split("=", 1)[1] for e in env if e.startswith("OPENAI_API_KEY=")), ""
-    )
-    if openai_val and not any(e.startswith("CODEX_API_KEY=") for e in env):
-        env.append(f"CODEX_API_KEY={openai_val}")
-
-    return env
 
 def _build_command(harness: str, message: str, thread_id: str | None) -> list[str]:
     if harness == "claude-code":
