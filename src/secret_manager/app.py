@@ -35,7 +35,7 @@ log = logging.getLogger("secret_manager")
 # Configuration
 # ---------------------------------------------------------------------------
 
-_VAULT_NAME = os.environ.get("OP_VAULT", "ai-agents")
+_VAULT_NAME = os.environ.get("OP_VAULT") or "ai-agents"
 _REFRESH_INTERVAL = int(os.environ.get("SECRET_REFRESH_SECONDS", "300"))  # 5 min
 _REFRESH_RETRY_INTERVAL = int(os.environ.get("SECRET_REFRESH_RETRY_SECONDS", "15"))
 
@@ -74,9 +74,23 @@ async def _find_vault_id(client: Client, name: str) -> str:
     # onepassword-sdk versions expose either list() or list_all().
     vaults = await _list_vaults(client)
     for v in vaults:
-        if v.title == name:
+        title = getattr(v, "title", "")
+        vid = getattr(v, "id", "")
+        if title == name or vid == name:
             return v.id
-    raise RuntimeError(f"Vault '{name}' not found")
+
+    # If the service account only has access to one vault, prefer it.
+    if len(vaults) == 1:
+        only = vaults[0]
+        log.warning(
+            "vault '%s' not found; using only accessible vault '%s'",
+            name,
+            getattr(only, "title", getattr(only, "id", "<unknown>")),
+        )
+        return getattr(only, "id")
+
+    available = ", ".join(str(getattr(v, "title", getattr(v, "id", "<unknown>"))) for v in vaults)
+    raise RuntimeError(f"Vault '{name}' not found (available: {available})")
 
 
 async def _list_vaults(client: Client) -> list[Any]:
@@ -114,13 +128,13 @@ async def _load_all() -> int:
         if not item_id:
             continue
 
-        ref = f"op://{_VAULT_NAME}/{item_id}/password"
+        ref = f"op://{vault_id}/{item_id}/password"
         try:
             value = await _client.secrets.resolve(ref)
         except Exception:
             # Try 'credential' field for API_CREDENTIAL items
             try:
-                ref_alt = f"op://{_VAULT_NAME}/{item_id}/credential"
+                ref_alt = f"op://{vault_id}/{item_id}/credential"
                 value = await _client.secrets.resolve(ref_alt)
             except Exception:
                 log.debug("skipping item %s — no password/credential field", item_title)
