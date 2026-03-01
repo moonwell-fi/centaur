@@ -34,7 +34,9 @@ _CONTEXT_HEADER = (
 
 def _raw_item_call_digest(item: dict[str, Any]) -> str:
     """Build a stable digest for tool-call identity fallback."""
-    name = str(item.get("tool") or item.get("name") or item.get("tool_name") or item.get("type") or "tool")
+    name = str(
+        item.get("tool") or item.get("name") or item.get("tool_name") or item.get("type") or "tool"
+    )
     payload = item.get("arguments") or item.get("input") or item.get("args")
     stable_input: dict[str, Any] = {}
     if isinstance(payload, dict):
@@ -48,7 +50,9 @@ def _raw_item_call_digest(item: dict[str, Any]) -> str:
             stable_input = {}
 
     if stable_input:
-        fingerprint_source = json.dumps({"name": name, "input": stable_input}, sort_keys=True, default=str)
+        fingerprint_source = json.dumps(
+            {"name": name, "input": stable_input}, sort_keys=True, default=str
+        )
     else:
         command = str(item.get("command") or "")
         fingerprint_source = f"{name}:{command}"
@@ -242,6 +246,18 @@ def _display_user_message(text: str) -> str:
     return cleaned
 
 
+def _user_message_preview(text: str, *, max_chars: int = 200) -> str:
+    cleaned = _display_user_message(text)
+    if not cleaned:
+        cleaned = text.strip()
+    compact = " ".join(cleaned.split())
+    return compact[:max_chars]
+
+
+def _turn_user_message_key(turn_id: int) -> str:
+    return f"{turn_id}:user-message"
+
+
 @router.get("")
 async def list_threads(
     pool: Annotated[asyncpg.Pool, Depends(get_pool)],
@@ -300,9 +316,11 @@ async def list_threads(
         live_last_result = ""
         live_last_user_message = ""
         if live_turns:
-            live_first_message = str(live_turns[0].get("user_message") or "")
+            live_first_message = _user_message_preview(str(live_turns[0].get("user_message") or ""))
             live_last_result = str(live_turns[-1].get("result") or "")
-            live_last_user_message = str(live_turns[-1].get("user_message") or "")
+            live_last_user_message = _user_message_preview(
+                str(live_turns[-1].get("user_message") or "")
+            )
         if key not in participants_cache:
             if live:
                 participants_cache[key] = live.get(
@@ -325,13 +343,15 @@ async def list_threads(
                     :200
                 ],
                 "first_message": (
-                    live_first_message if live_first_message else (r["first_message"] or "")
-                )[:200],
+                    live_first_message
+                    if live_first_message
+                    else _user_message_preview(str(r["first_message"] or ""))
+                ),
                 "last_user_message": (
                     live_last_user_message
                     if live_last_user_message
-                    else (r["last_user_message"] or "")
-                )[:200],
+                    else _user_message_preview(str(r["last_user_message"] or ""))
+                ),
                 "thread_name": live.get("thread_name") if live else r.get("thread_name"),
                 "participants": participants_cache[key],
             }
@@ -342,9 +362,11 @@ async def list_threads(
             last_result = ""
             last_user_message = ""
             if live.get("turns"):
-                first_msg = live["turns"][0].get("user_message", "")
+                first_msg = _user_message_preview(str(live["turns"][0].get("user_message") or ""))
                 last_result = live["turns"][-1].get("result", "")
-                last_user_message = live["turns"][-1].get("user_message", "")
+                last_user_message = _user_message_preview(
+                    str(live["turns"][-1].get("user_message") or "")
+                )
             threads.append(
                 {
                     "slack_thread_key": key,
@@ -356,8 +378,8 @@ async def list_threads(
                     "last_activity": live["last_activity"],
                     "turn_count": len(live.get("turns", [])),
                     "last_result": last_result[:200],
-                    "first_message": first_msg[:200],
-                    "last_user_message": last_user_message[:200],
+                    "first_message": first_msg,
+                    "last_user_message": last_user_message,
                     "thread_name": live.get("thread_name"),
                     "participants": await _enrich_participants(
                         pool,
@@ -890,12 +912,8 @@ async def stream_thread_ui(
                     if turn.get("result"):
                         last_event_indices[-turn_id] = 1
                     command_event = _latest_command_message_event(events)
-                    if command_event:
-                        message_id = str(command_event.get("message_id") or "").strip()
-                        dedupe_key = f"{turn_id}:{message_id}" if message_id else f"{turn_id}:command"
-                        emitted_turn_user_messages.add(dedupe_key)
-                    elif _display_user_message(str(turn.get("user_message") or "")):
-                        emitted_turn_user_messages.add(f"{turn_id}:fallback")
+                    if command_event or _display_user_message(str(turn.get("user_message") or "")):
+                        emitted_turn_user_messages.add(_turn_user_message_key(turn_id))
                     phase = _parse_phase_label(str(turn.get("user_message") or ""))
                     if phase:
                         last_phase_by_turn[turn_id] = phase
@@ -917,12 +935,13 @@ async def stream_thread_ui(
                 command_event = _latest_command_message_event(events)
                 if not command_event:
                     fallback_text = _display_user_message(str(turn.get("user_message") or ""))
-                    fallback_key = f"{turn_id}:fallback"
+                    fallback_key = _turn_user_message_key(turn_id)
                     if fallback_text and fallback_key not in emitted_turn_user_messages:
                         emitted_turn_user_messages.add(fallback_key)
+                        fallback_id = f"turn-{turn_id}-user-message"
                         any_new_data = True
                         yield f"data: {json.dumps({'type': 'start-step'})}\n\n"
-                        yield f"data: {json.dumps({'type': 'data-user-message', 'id': f'turn-{turn_id}-user-fallback', 'data': {'id': f'turn-{turn_id}-user-fallback', 'turn_id': turn_id, 'text': fallback_text, 'source': 'unknown', 'user_id': str(turn.get('user_id') or '').strip() or None, 'created_at': ''}})}\n\n"
+                        yield f"data: {json.dumps({'type': 'data-user-message', 'id': fallback_id, 'data': {'id': fallback_id, 'turn_id': turn_id, 'text': fallback_text, 'source': 'unknown', 'user_id': str(turn.get('user_id') or '').strip() or None, 'created_at': ''}})}\n\n"
                         yield f"data: {json.dumps({'type': 'finish-step'})}\n\n"
                 start_index = last_event_indices.get(turn_id, 0)
                 turn_had_chunks = False
@@ -960,21 +979,32 @@ async def stream_thread_ui(
                         )
                         if not chunks:
                             continue
+                        filtered_chunks: list[dict[str, Any]] = []
+                        for chunk in chunks:
+                            chunk_type = str(chunk.get("type") or "")
+                            if chunk_type != "data-user-message":
+                                filtered_chunks.append(chunk)
+                                continue
+                            dedupe_key = _turn_user_message_key(turn_id)
+                            if dedupe_key in emitted_turn_user_messages:
+                                continue
+                            stable_id = f"turn-{turn_id}-user-message"
+                            chunk_data = chunk.get("data")
+                            if isinstance(chunk_data, dict):
+                                chunk["data"] = {**chunk_data, "id": stable_id}
+                            chunk["id"] = stable_id
+                            emitted_turn_user_messages.add(dedupe_key)
+                            filtered_chunks.append(chunk)
+                        if not filtered_chunks:
+                            continue
                         turn_had_chunks = True
                         turns_with_stream_chunks.add(turn_id)
                         any_new_data = True
                         yield f"data: {json.dumps({'type': 'start-step'})}\n\n"
-                        for chunk in chunks:
+                        for chunk in filtered_chunks:
+                            chunk_type = str(chunk.get("type") or "")
                             any_new_data = True
                             yield f"data: {json.dumps(chunk, default=str)}\n\n"
-                            if str(chunk.get("type") or "") == "data-user-message":
-                                chunk_data = chunk.get("data") if isinstance(chunk.get("data"), dict) else {}
-                                message_id = str((chunk_data or {}).get("id") or "").strip()
-                                dedupe_key = (
-                                    f"{turn_id}:{message_id}" if message_id else f"{turn_id}:command"
-                                )
-                                emitted_turn_user_messages.add(dedupe_key)
-                            chunk_type = str(chunk.get("type") or "")
                             if chunk_type in {"reasoning-start", "reasoning-delta"}:
                                 yield f"data: {json.dumps({'type': 'data-agent-status', 'data': {'text': 'Thinking...'}, 'transient': True})}\n\n"
                             elif chunk_type == "tool-input-available":

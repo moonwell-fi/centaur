@@ -413,8 +413,9 @@ export const ThreadSidebar = forwardRef<ThreadSidebarHandle, ThreadSidebarProps>
             {sortedThreads.map((thread) => {
               const name = thread.thread_name || threadName(thread.slack_thread_key);
               const href = `/threads/${encodeURIComponent(thread.slack_thread_key)}`;
-              const rawTask = thread.first_message || thread.last_result || "";
-              const taskPreview = rawTask.replace(/^\[[\w]+\]\s*/, "").slice(0, 120);
+              const rawTask =
+                thread.last_user_message || thread.first_message || thread.last_result || "";
+              const taskPreview = rawTask.replace(/^\[[\w]+\]\s*/, "").replace(/\s+/g, " ").slice(0, 120);
               const activeState = isRunningState(thread.state);
               const statusSubtitle = liveStatusByThread[thread.slack_thread_key] ?? runningSubtitle(thread);
               const activePhase = parseActivePhase(thread);
