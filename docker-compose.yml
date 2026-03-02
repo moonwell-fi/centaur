@@ -30,6 +30,7 @@ services:
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
       OP_VAULT: Paradigm AI Secrets & API Keys
     networks:
+      - default
       - secrets_net
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8100/health"]
