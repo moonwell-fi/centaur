@@ -330,16 +330,14 @@ export function stepsFromUiMessages(messages: UIMessage[]): Step[] {
   }
 
   const deduped: Step[] = [];
+  const seenResultTexts = new Set<string>();
   for (const step of stable) {
-    if (step.type === "result" && deduped.length > 0) {
-      const previous = deduped[deduped.length - 1];
-      if (previous.type === "result" && previous.text === step.text) {
-        // Preserve completion if a replayed duplicate carries non-streaming state.
-        if (previous.streaming && !step.streaming) {
-          previous.streaming = false;
-        }
+    if (step.type === "result") {
+      const trimmed = step.text.trim();
+      if (seenResultTexts.has(trimmed)) {
         continue;
       }
+      seenResultTexts.add(trimmed);
     }
     deduped.push(step);
   }
