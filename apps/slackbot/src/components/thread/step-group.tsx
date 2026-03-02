@@ -8,9 +8,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { useIsMobile } from "@/hooks/use-media-query";
 import { cn } from "@/lib/utils";
 
-function ToolStateIcon({ state }: { state?: ToolCall["state"] }) {
+function ToolStateIcon({ state, hasOutput }: { state?: ToolCall["state"]; hasOutput?: boolean }) {
   if (state === "done") return <CircleCheck className="size-3.5 text-primary" />;
   if (state === "error") return <CircleX className="size-3.5 text-destructive" />;
+  if (hasOutput) return <CircleCheck className="size-3.5 text-primary" />;
   return <LoaderCircle className="size-3.5 text-muted-foreground animate-spin" />;
 }
 
@@ -31,7 +32,7 @@ function ToolCallItem({ call, isMobile }: { call: ToolCall; isMobile: boolean })
     <Collapsible className="group/call">
       <CollapsibleTrigger className="w-full flex items-center gap-2 py-1 text-xs text-muted-foreground hover:text-foreground cursor-pointer">
         <ChevronRight className="size-3 transition-transform group-data-[state=open]/call:rotate-90" />
-        <ToolStateIcon state={call.state} />
+        <ToolStateIcon state={call.state} hasOutput={!!call.output} />
         <span className="truncate">{describeToolCall(call.name, call.input)}</span>
         {call.output && (
           <Tooltip>
@@ -91,9 +92,9 @@ export function StepGroup({
   calls: ToolCall[];
 }) {
   const isMobile = useIsMobile();
-  const loadingCount = calls.filter((call) => call.state === "loading" || !call.state).length;
+  const loadingCount = calls.filter((call) => (call.state === "loading" || !call.state) && !call.output).length;
   const errorCount = calls.filter((call) => call.state === "error").length;
-  const doneCount = calls.filter((call) => call.state === "done").length;
+  const doneCount = calls.filter((call) => call.state === "done" || (call.output && call.state !== "error")).length;
   const manuallyToggled = useRef(false);
   const previousLoadingCount = useRef(loadingCount);
   const hasBeenActive = useRef(false);
