@@ -7,6 +7,21 @@ import httpx
 from shared.tool_sdk import secret
 
 
+def _clean_secret(value: str | None) -> str | None:
+    """Clean a secret value that may be a multi-line 1Password blob."""
+    if not value:
+        return value
+    value = value.strip()
+    if "\n" not in value:
+        return value or None
+    for line in value.splitlines():
+        line = line.strip()
+        if not line or line.startswith("===") or line.startswith("#"):
+            continue
+        return line
+    return None
+
+
 class SimilarWebClient:
 
     """Client for SimilarWeb API.
@@ -17,7 +32,7 @@ class SimilarWebClient:
     """
 
     def __init__(self, api_key: str | None = None, timeout: float = 30.0):
-        self._api_key = api_key
+        self._api_key = _clean_secret(api_key)
         self.base_url = "https://api.similarweb.com"
         self.timeout = timeout
         self._client: httpx.Client | None = None
@@ -32,7 +47,7 @@ class SimilarWebClient:
         """Get API key from instance or env var."""
         if self._api_key:
             return self._api_key
-        key = secret("SIMILARWEB_API_KEY", "")
+        key = _clean_secret(secret("SIMILARWEB_API_KEY", ""))
         if not key:
             raise RuntimeError(
                 "SIMILARWEB_API_KEY not set. Get your API key from SimilarWeb account settings."

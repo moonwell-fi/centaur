@@ -20,7 +20,7 @@ class LokiClient:
 
     @property
     def base_url(self) -> str:
-        return (self._url or secret("LOKI_URL", "URL")).rstrip("/")
+        return (self._url or secret("LOKI_URL", "http://loki:3100")).rstrip("/")
 
     @property
     def client(self) -> httpx.Client:

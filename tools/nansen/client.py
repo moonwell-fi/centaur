@@ -202,13 +202,12 @@ class NansenClient:
     ) -> dict:
         """Get Smart Money token holdings."""
         data: dict = {
+            "chains": chains or ["ethereum"],
             "pagination": {
                 "page": page,
                 "recordsPerPage": per_page,
             },
         }
-        if chains:
-            data["chains"] = chains
         if labels:
             data["labels"] = labels
 
@@ -223,13 +222,12 @@ class NansenClient:
     ) -> dict:
         """Get Smart Money net flows."""
         data: dict = {
+            "chains": chains or ["ethereum"],
             "pagination": {
                 "page": page,
                 "recordsPerPage": per_page,
             },
         }
-        if chains:
-            data["chains"] = chains
         if labels:
             data["labels"] = labels
 
@@ -244,13 +242,12 @@ class NansenClient:
     ) -> dict:
         """Get Smart Money DEX trades in last 24h."""
         data: dict = {
+            "chains": chains or ["ethereum"],
             "pagination": {
                 "page": page,
                 "recordsPerPage": per_page,
             },
         }
-        if chains:
-            data["chains"] = chains
         if labels:
             data["labels"] = labels
 
@@ -364,7 +361,7 @@ class NansenClient:
                 "recordsPerPage": per_page,
             },
         }
-        return self._request("/api/v1/profiler/entity/search", data=data)
+        return self._request("/api/beta/profiler/entity/search", data=data)
 
     def close(self):
         """Close the HTTP client."""

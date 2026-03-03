@@ -71,12 +71,30 @@ class BloombergClient:
         return self._http_client
 
     def _get_credentials(self) -> tuple[str, str]:
-        """Get credentials from instance or environment variables."""
+        """Get credentials from instance or environment variables.
+
+        Handles multiple storage formats in 1Password:
+        - Separate BLOOMBERG_CLIENT_ID + BLOOMBERG_CLIENT_SECRET items
+        - BLOOMBERG_CLIENT_SECRET stored as a JSON blob
+          (e.g. ``{"client_id":"...","client_secret":"..."}``)
+        - BLOOMBERG_API_KEY with "client_id:client_secret" format
+        """
         if self._client_id and self._client_secret:
             return self._client_id, self._client_secret
 
         client_id = secret("BLOOMBERG_CLIENT_ID", "")
         client_secret = secret("BLOOMBERG_CLIENT_SECRET", "")
+
+        if client_secret and client_secret.strip().startswith("{"):
+            try:
+                import json as _json
+
+                blob = _json.loads(client_secret)
+                client_id = client_id or blob.get("client_id", "")
+                client_secret = blob.get("client_secret", "")
+            except (ValueError, TypeError):
+                pass
+
         if client_id and client_secret:
             return client_id, client_secret
 

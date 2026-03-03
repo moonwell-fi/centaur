@@ -109,17 +109,10 @@ class PolymarketClient:
             token_ids: List of CLOB token IDs
             side: Order side ("buy" or "sell")
         """
-        params = [("token_ids", tid) for tid in token_ids]
-        params.append(("side", side))
-        url = f"{self.clob_url}/prices"
-        try:
-            response = self.client.get(url, params=params)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            raise RuntimeError(f"API error: {e.response.status_code} - {e.response.text}")
-        except httpx.RequestError as e:
-            raise RuntimeError(f"Request failed: {e}")
+        return self._request(
+            f"{self.clob_url}/prices",
+            {"token_ids": ",".join(token_ids), "side": side},
+        )
 
     def get_book(self, token_id: str) -> dict:
         """Get orderbook for a token."""

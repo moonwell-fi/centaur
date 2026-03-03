@@ -1,6 +1,5 @@
 """AlphaSense Enterprise API client."""
 
-import os
 from datetime import datetime
 
 import httpx
@@ -42,7 +41,7 @@ class AlphaSenseClient:
         api_key = self._api_key or secret("ALPHASENSE_API_KEY", "")
         client_id = self._client_id or secret("ALPHASENSE_CLIENT_ID", "")
         client_secret = self._client_secret or secret("ALPHASENSE_CLIENT_SECRET", "")
-        username = self._username or os.getenv("ALPHASENSE_USERNAME")
+        username = self._username or secret("ALPHASENSE_USERNAME", "")
         password = self._password or secret("ALPHASENSE_PASSWORD", "")
 
         if not api_key:

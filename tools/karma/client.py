@@ -47,7 +47,7 @@ class KarmaClient:
         dao_name: str,
         limit: int = 20,
         offset: int = 0,
-        order_by: str = "score",
+        order_by: str = "karmaScore",
     ) -> list[dict]:
         """Get delegates for a DAO.
 
@@ -55,7 +55,7 @@ class KarmaClient:
             dao_name: DAO name (e.g., "ens", "uniswap", "optimism")
             limit: Maximum number of delegates to return
             offset: Offset for pagination
-            order_by: Sort field (e.g., "score", "delegatedVotes")
+            order_by: Sort field (e.g., "karmaScore", "delegatedVotes")
 
         Returns:
             List of delegate dicts

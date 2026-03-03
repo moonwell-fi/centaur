@@ -63,7 +63,13 @@ class DefiLlamaClient:
             api_key = self._get_api_key()
             if not api_key:
                 raise RuntimeError("DEFILLAMA_API_KEY not set (required for pro endpoints).")
-            url = f"{self.pro_url}/{api_key}{endpoint}"
+            if base:
+                url = f"{base}{endpoint}"
+                if params is None:
+                    params = {}
+                params["apikey"] = api_key
+            else:
+                url = f"{self.pro_url}/{api_key}{endpoint}"
         elif base:
             url = f"{base}{endpoint}"
         else:

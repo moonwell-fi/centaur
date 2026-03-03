@@ -105,13 +105,15 @@ class DuneClient:
 
         Args:
             method: HTTP method
-            endpoint: API endpoint path
+            endpoint: API endpoint path (relative to /api/v1, e.g. "/query/123")
             json: Optional JSON body
             params: Optional query parameters
 
         Returns:
             JSON response
         """
+        if endpoint.startswith("/api/v1"):
+            endpoint = endpoint[len("/api/v1"):]
         kwargs: dict = {}
         if json is not None:
             kwargs["json"] = json

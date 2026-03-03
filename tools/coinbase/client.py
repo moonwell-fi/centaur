@@ -12,16 +12,29 @@ BASE_URL = "https://api.prime.coinbase.com/v1"
 
 
 def _clean_secret(value: str | None) -> str | None:
-    """Clean a secret value, stripping whitespace and taking only the first line.
+    """Clean a secret value that may be a multi-line 1Password blob.
 
     The 1Password secret manager may return multi-line blobs when credentials
-    are stored as notes or multi-section items. This ensures we only use the
-    first non-empty line and never leak additional credential data in headers.
+    are stored as notes or multi-section items (e.g. a 143-line dump starting
+    with ``=== cb_custody_key ===``).  This skips header lines, empty lines,
+    and label-like lines, returning the first line that looks like a raw
+    credential value.
     """
     if not value:
         return value
-    first_line = value.strip().split("\n")[0].strip()
-    return first_line if first_line else None
+    value = value.strip()
+    if "\n" not in value:
+        return value or None
+    for line in value.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("===") or line.startswith("#") or line.startswith("Section:"):
+            continue
+        if ": " in line:
+            continue
+        return line
+    return None
 
 
 class CoinbasePrimeClient:
