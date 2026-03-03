@@ -117,6 +117,18 @@ export function stepsFromTurns(turns: Turn[]): Step[] {
         });
       }
     }
+    // Pre-scan: check if this turn has assistant text so we can skip
+    // duplicate result events (the harness emits both).
+    const turnHasAssistantText = events.some((raw) => {
+      const e = asRecord(raw);
+      if (asString(e.type) !== "assistant") return false;
+      const content = (asRecord(e.message).content as unknown[]) || [];
+      return content.some((b) => {
+        const block = asRecord(b);
+        return asString(block.type) === "text" && asString(block.text).trim();
+      });
+    });
+
     for (let ei = 0; ei < events.length; ei++) {
       const event = asRecord(events[ei]);
       const eventType = asString(event.type);
@@ -306,6 +318,8 @@ export function stepsFromTurns(turns: Turn[]): Step[] {
           message: asString(event.error || event.message),
         });
       } else if (eventType === "result") {
+        // Skip result events when assistant text blocks already cover the same content.
+        if (turnHasAssistantText) continue;
         const text = asString(event.result);
         if (text) {
           flushGroup();
