@@ -19,6 +19,7 @@ import {
 } from "./harness";
 import { ApiError } from "./api-client";
 import { truncateSlackText } from "./slack-text";
+import { renderDashboardsForSlack } from "./dashboard-slack";
 
 function formatErrorForSlack(error: unknown, context: string): string {
   if (error instanceof ApiError) {
@@ -243,7 +244,7 @@ function renderSlackMessage(markdown: string) {
 }
 
 function toSlackMessage(markdown: string) {
-  return renderSlackMessage(truncateSlackText(markdown));
+  return renderSlackMessage(truncateSlackText(renderDashboardsForSlack(markdown)));
 }
 
 function createBot() {
