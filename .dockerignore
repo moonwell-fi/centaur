@@ -29,7 +29,6 @@ logs/
 Dockerfile
 
 # Docs / non-runtime
-docs/
 skills/
 *.md
 !README.md

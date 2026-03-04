@@ -75,6 +75,7 @@ services:
       SLACKBOT_URL: http://slackbot:3001
       AI_V2_LOG_LEVEL: info
       SECRET_MANAGER_URL: http://secrets:8100
+      REPOS_HOST_DIR: ${HOME}/github
       FIREWALL_HOST: firewall
       AGENT_NETWORK: ai_v2_agent_net
       FIREWALL_CERTS_VOLUME: firewall-certs

@@ -1713,6 +1713,19 @@ class AgentClient:
                 }
             except NotFound:
                 pop_session_state(slack_thread_key)
+                _delete_session(slack_thread_key)
+                existing = None
+            except Exception as exc:
+                log.warning(
+                    "spawn_existing_container_unusable",
+                    request_id=rid,
+                    thread=slack_thread_key,
+                    container_id=str(existing.get("container_id", "")),
+                    error=str(exc),
+                )
+                pop_session_state(slack_thread_key)
+                _delete_session(slack_thread_key)
+                existing = None
 
         # Try to claim a pre-warmed container from the pool (skip if repo needed)
         container = None
@@ -1727,21 +1740,49 @@ class AgentClient:
         if not container:
             log.info("spawn_creating_container", request_id=rid, thread=slack_thread_key)
             client = _docker_client()
-            container, create_timings = _create_container(
-                client,
-                name=f"agent2-{slack_thread_key.replace(':', '-').replace('.', '-')[:40]}",
-                repo=effective_repo,
-                extra_labels={
-                    "ai2.thread": slack_thread_key,
-                    "ai2.harness": requested_harness,
-                    "ai2.engine": effective_engine,
-                    "ai2.mode": _session_mode_for(requested_harness),
-                    **({"ai2.persona": persona} if persona else {}),
-                    **({"ai2.repo": effective_repo} if effective_repo else {}),
-                },
-                slack_thread_key=slack_thread_key,
-                persona=persona,
-            )
+            container_name = f"agent2-{slack_thread_key.replace(':', '-').replace('.', '-')[:40]}"
+            with contextlib.suppress(Exception):
+                stale_container = client.containers.get(container_name)
+                stale_container.remove(force=True)
+                log.info(
+                    "spawn_removed_stale_named_container",
+                    request_id=rid,
+                    thread=slack_thread_key,
+                    container_name=container_name,
+                )
+            try:
+                container, create_timings = _create_container(
+                    client,
+                    name=container_name,
+                    repo=effective_repo,
+                    extra_labels={
+                        "ai2.thread": slack_thread_key,
+                        "ai2.harness": requested_harness,
+                        "ai2.engine": effective_engine,
+                        "ai2.mode": _session_mode_for(requested_harness),
+                        **({"ai2.persona": persona} if persona else {}),
+                        **({"ai2.repo": effective_repo} if effective_repo else {}),
+                    },
+                    slack_thread_key=slack_thread_key,
+                    persona=persona,
+                )
+            except Exception as exc:
+                log.warning(
+                    "spawn_container_create_failed",
+                    request_id=rid,
+                    thread=slack_thread_key,
+                    harness=requested_harness,
+                    engine=effective_engine,
+                    repo=effective_repo,
+                    error=str(exc),
+                )
+                return {
+                    "error": (
+                        "Failed to start sandbox container. "
+                        "Check REPOS_HOST_DIR mount and Docker host path sharing. "
+                        f"Details: {exc}"
+                    )
+                }
             log.info(
                 "spawn_container_created", request_id=rid, thread=slack_thread_key, **create_timings
             )
@@ -1907,13 +1948,16 @@ class AgentClient:
             if not session:
                 log.info("exec_auto_spawn", request_id=rid, thread=slack_thread_key)
                 _emit({"type": "status", "stage": "container.creating"})
-                self.spawn(
+                spawn_result = self.spawn(
                     slack_thread_key,
                     requested_harness,
                     repo,
                     request_id,
                     engine=engine,
                 )
+                spawn_error = str((spawn_result or {}).get("error") or "").strip()
+                if spawn_error:
+                    return {"error": spawn_error}
                 _emit({"type": "status", "stage": "container.ready"})
                 session = get_session_state(slack_thread_key)
                 if session is None:

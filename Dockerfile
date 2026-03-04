@@ -40,6 +40,9 @@ open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" \
 # 4. Copy tool source
 COPY tools/ tools/
 
+# 5. Copy legal policy/docs used by tools
+COPY docs/ docs/
+
 # Copy migrations
 COPY migrations/ migrations/
 
