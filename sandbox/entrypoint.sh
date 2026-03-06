@@ -41,6 +41,14 @@ else
     mkdir -p "$WORKSPACE_DIR"
 fi
 
+# ── Copy project skills into workspace (so `skill` tool discovers them) ──────
+AI_V2_SKILLS="$HOME_DIR/github/paradigmxyz/ai_v2/.agents/skills"
+WS_SKILLS="$WORKSPACE_DIR/.agents/skills"
+if [ -d "$AI_V2_SKILLS" ] && [ ! -d "$WS_SKILLS" ]; then
+    mkdir -p "$WS_SKILLS"
+    cp -r "$AI_V2_SKILLS"/. "$WS_SKILLS"/
+fi
+
 # ── Select system prompt based on persona ────────────────────────────────────
 # All harnesses read AGENTS.md from the workspace root (amp, codex). Claude-code
 # also receives the persona prompt via --system-prompt flag from the API.
