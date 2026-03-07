@@ -120,7 +120,7 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
     >
       <form
         onSubmit={(e) => { e.preventDefault(); void handleSend(); }}
-        className="thread-surface mx-auto flex max-w-[960px] items-end gap-1 rounded-lg p-1 md:gap-1.5 md:p-1.5"
+        className="thread-surface mx-auto flex max-w-[960px] items-end gap-1.5 rounded-xl px-3 py-1.5 md:gap-2 md:px-3.5 md:py-2"
         aria-label="Message composer"
       >
         <label htmlFor="chat-input" className="sr-only">Message</label>
@@ -139,12 +139,11 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
           autoComplete="off"
           aria-describedby="chat-input-hint"
           className={cn(
-            "flex-1 min-w-0 min-h-[44px] resize-none",
+            "flex-1 min-w-0 min-h-[36px] resize-none",
             "text-[16px] md:text-sm leading-[22px]",
-            "rounded-lg border border-input/80 bg-background/85 px-3 py-2",
-            "shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] focus:border-ring focus:ring-1 focus:ring-ring",
-            "placeholder:text-muted-foreground text-foreground",
-            "outline-none transition-colors",
+            "border-none bg-transparent py-1.5",
+            "placeholder:text-muted-foreground/60 text-foreground",
+            "outline-none",
             submitting && "opacity-50",
           )}
           style={{ maxHeight: MAX_HEIGHT, fieldSizing: "content" } as React.CSSProperties}
@@ -158,9 +157,9 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
             type="button"
             disabled
             aria-label="Sending message"
-            className="flex size-[44px] flex-shrink-0 items-center justify-center rounded-lg bg-primary/60 text-primary-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.2)]"
+            className="flex size-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary/60 text-primary-foreground"
           >
-            <Loader2 aria-hidden="true" className="size-5 animate-spin" />
+            <Loader2 aria-hidden="true" className="size-4 animate-spin" />
           </button>
         ) : (
           <>
@@ -168,24 +167,24 @@ export function MessageInput({ mode, onSend, onStop, className }: MessageInputPr
               <button
                 type="button"
                 onClick={() => void handleStop()}
-                className="flex size-[44px] flex-shrink-0 items-center justify-center rounded-lg bg-destructive/80 text-destructive-foreground shadow-[0_0_0_1px_rgba(0,0,0,0.2)] transition-[background-color,color,transform,opacity] duration-[var(--dur-base)] ease-[var(--ease-standard)]"
+                className="flex size-8 flex-shrink-0 items-center justify-center rounded-lg bg-destructive/80 text-destructive-foreground transition-colors duration-[var(--dur-base)] ease-[var(--ease-standard)] hover:bg-destructive"
                 aria-label="Stop agent"
               >
-                <Square aria-hidden="true" className="size-4" />
+                <Square aria-hidden="true" className="size-3.5" />
               </button>
             ) : null}
             <button
               type="submit"
               disabled={!hasText}
               className={cn(
-                "flex size-[44px] flex-shrink-0 items-center justify-center rounded-lg shadow-[0_0_0_1px_rgba(0,0,0,0.2)] transition-[background-color,color,transform,opacity] duration-[var(--dur-base)] ease-[var(--ease-standard)]",
+                "flex size-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors duration-[var(--dur-base)] ease-[var(--ease-standard)]",
                 hasText
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-primary/40 text-primary-foreground/40 pointer-events-none",
+                  ? "bg-foreground text-background hover:bg-foreground/90"
+                  : "bg-muted-foreground/20 text-muted-foreground/30 pointer-events-none",
               )}
               aria-label="Send message"
             >
-              <ArrowUp aria-hidden="true" className="size-5" />
+              <ArrowUp aria-hidden="true" className="size-4" />
             </button>
           </>
         )}

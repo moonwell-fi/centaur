@@ -61,6 +61,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               >
                 Threads
               </Link>
+              <Link
+                href="/portfolio"
+                className="rounded-md px-1.5 py-1 text-[13px] font-medium text-muted-foreground no-underline transition-colors duration-[var(--dur-fast)] hover:bg-accent/55 hover:text-foreground"
+              >
+                Portfolio
+              </Link>
             </nav>
             <main id="main-content" className="h-full overflow-hidden md:h-[calc(100%-44px)]">
               {children}
