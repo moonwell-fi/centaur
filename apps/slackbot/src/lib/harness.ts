@@ -199,39 +199,40 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
   };
 }
 
-export async function* executeStreaming(
-  threadKey: string,
-  message: string,
-  harness?: Harness | null,
-): AsyncGenerator<CanonicalEvent, string, undefined> {
-  const normalizedKey = normalizeThreadKey(threadKey);
-  const harnessName = harness || "amp";
-  const res = await resilientFetch(`${API_URL}/agent/execute`, {
-    method: "POST",
-    body: JSON.stringify({
-      thread_key: normalizedKey,
-      message,
-      harness: harnessName,
-    }),
-    timeoutMs: 10 * 60_000,
-    maxAttempts: 1,
-    stream: true,
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new ApiError(
-      `/pipe/execute failed (${res.status}): ${text.slice(0, 300)}`,
-      res.status,
-      res.status >= 500,
-    );
-  }
-  if (!res.body) return "";
+const RECONNECT_MAX_ATTEMPTS = 6;
+const RECONNECT_BASE_MS = 2_000;
+const RECONNECT_MAX_MS = 15_000;
+
+function isStreamNetworkError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toLowerCase();
+  return (
+    msg.includes("fetch failed") ||
+    msg.includes("econnrefused") ||
+    msg.includes("econnreset") ||
+    msg.includes("epipe") ||
+    msg.includes("socket hang up") ||
+    msg.includes("network") ||
+    msg.includes("etimedout")
+  );
+}
+
+async function* readSSEStream(
+  res: Response,
+  harnessName: string,
+): AsyncGenerator<
+  CanonicalEvent,
+  { lastAssistantText: string; resultText: string; sawDone: boolean },
+  undefined
+> {
+  if (!res.body) return { lastAssistantText: "", resultText: "", sawDone: true };
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
   let lastAssistantText = "";
   let resultText = "";
+  let sawDone = false;
 
   while (true) {
     const { done, value } = await reader.read();
@@ -249,7 +250,10 @@ export async function* executeStreaming(
         .map((l) => l.slice(5).trim());
       if (dataLines.length === 0) continue;
       const payload = dataLines.join("\n");
-      if (payload === "[DONE]") break;
+      if (payload === "[DONE]") {
+        sawDone = true;
+        break;
+      }
 
       try {
         const evt = JSON.parse(payload);
@@ -269,6 +273,139 @@ export async function* executeStreaming(
       } catch {
         if (payload.trim()) lastAssistantText = payload.trim();
       }
+    }
+    if (sawDone) break;
+  }
+
+  return { lastAssistantText, resultText, sawDone };
+}
+
+export async function* executeStreaming(
+  threadKey: string,
+  message: string,
+  harness?: Harness | null,
+): AsyncGenerator<CanonicalEvent, string, undefined> {
+  const normalizedKey = normalizeThreadKey(threadKey);
+  const harnessName = harness || "amp";
+
+  // Initial execute request
+  const res = await resilientFetch(`${API_URL}/agent/execute`, {
+    method: "POST",
+    body: JSON.stringify({
+      thread_key: normalizedKey,
+      message,
+      harness: harnessName,
+    }),
+    timeoutMs: 10 * 60_000,
+    maxAttempts: 1,
+    stream: true,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new ApiError(
+      `/pipe/execute failed (${res.status}): ${text.slice(0, 300)}`,
+      res.status,
+      res.status >= 500,
+    );
+  }
+
+  let lastAssistantText = "";
+  let resultText = "";
+  // Track events already yielded so reconnect (which replays full history
+  // via logs=True) can skip them and only surface new output.
+  let yieldedCount = 0;
+
+  try {
+    const inner = readSSEStream(res, harnessName);
+    while (true) {
+      const { done, value } = await inner.next();
+      if (done) {
+        const ret = value as { lastAssistantText: string; resultText: string; sawDone: boolean };
+        lastAssistantText = ret.lastAssistantText || lastAssistantText;
+        resultText = ret.resultText || resultText;
+        if (ret.sawDone) {
+          return resultText || lastAssistantText;
+        }
+        break; // EOF without [DONE] — stream dropped cleanly
+      }
+      if (value.type === "result" && "text" in value) resultText = value.text;
+      yieldedCount++;
+      yield value;
+    }
+  } catch (err) {
+    if (!isStreamNetworkError(err)) throw err;
+    // Mid-stream network error — fall through to reconnect
+    console.log(JSON.stringify({
+      event: "stream_disconnect",
+      thread: normalizedKey,
+      reason: err instanceof Error ? err.message : String(err),
+    }));
+  }
+
+  // Reconnect loop: the container is still running, just re-attach to stdout.
+  // The API replays full stdout history (logs=True) so we skip events we
+  // already yielded and only forward new ones (produced during the gap).
+  for (let attempt = 0; attempt < RECONNECT_MAX_ATTEMPTS; attempt++) {
+    const delay = Math.min(
+      RECONNECT_BASE_MS * Math.pow(2, attempt),
+      RECONNECT_MAX_MS,
+    );
+    console.log(JSON.stringify({
+      event: "stream_reconnect",
+      thread: normalizedKey,
+      attempt: attempt + 1,
+      delay_ms: delay,
+      skipping: yieldedCount,
+    }));
+    await new Promise((r) => setTimeout(r, delay));
+
+    let reconnRes: Response;
+    try {
+      reconnRes = await resilientFetch(`${API_URL}/agent/reconnect`, {
+        method: "POST",
+        body: JSON.stringify({
+          thread_key: normalizedKey,
+          harness: harnessName,
+        }),
+        timeoutMs: 10 * 60_000,
+        maxAttempts: 1,
+        stream: true,
+      });
+    } catch (err) {
+      if (attempt + 1 < RECONNECT_MAX_ATTEMPTS && isStreamNetworkError(err)) continue;
+      throw err;
+    }
+
+    if (!reconnRes.ok) {
+      const text = await reconnRes.text().catch(() => "");
+      if (reconnRes.status >= 500 && attempt + 1 < RECONNECT_MAX_ATTEMPTS) continue;
+      throw new ApiError(
+        `/agent/reconnect failed (${reconnRes.status}): ${text.slice(0, 300)}`,
+        reconnRes.status,
+        reconnRes.status >= 500,
+      );
+    }
+
+    try {
+      const inner = readSSEStream(reconnRes, harnessName);
+      let replayCount = 0;
+      while (true) {
+        const { done, value } = await inner.next();
+        if (done) {
+          const ret = value as { lastAssistantText: string; resultText: string; sawDone: boolean };
+          lastAssistantText = ret.lastAssistantText || lastAssistantText;
+          resultText = ret.resultText || resultText;
+          return resultText || lastAssistantText;
+        }
+        replayCount++;
+        if (replayCount <= yieldedCount) continue; // skip already-yielded events
+        if (value.type === "result" && "text" in value) resultText = value.text;
+        yieldedCount++;
+        yield value;
+      }
+    } catch (err) {
+      if (attempt + 1 < RECONNECT_MAX_ATTEMPTS && isStreamNetworkError(err)) continue;
+      throw err;
     }
   }
 

@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from api.deps import verify_api_key
-from api.pipe_agent import get_or_spawn, get_status, stop_session, stream_exec
+from api.pipe_agent import get_or_spawn, get_status, stop_session, stream_exec, stream_reconnect
 from api.warm_pool import pool_status
 from api.warm_pool import replenish as replenish_pool
 
@@ -33,6 +33,28 @@ async def execute(req: ExecuteRequest):
 
     async def event_stream():
         async for line in stream_exec(session, req.message):
+            yield f"data: {line}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+class ReconnectRequest(BaseModel):
+    thread_key: str
+    harness: str = "amp"
+
+
+@router.post("/reconnect")
+async def reconnect(req: ReconnectRequest):
+    """Re-attach to a running container's stdout without sending a new turn.
+
+    Used by the slackbot to recover an in-progress stream after an API restart.
+    Returns 404 if no running session exists for this thread.
+    """
+    session = await get_or_spawn(req.thread_key, req.harness)
+
+    async def event_stream():
+        async for line in stream_reconnect(session):
             yield f"data: {line}\n\n"
         yield "data: [DONE]\n\n"
 

@@ -430,6 +430,87 @@ async def get_or_spawn(thread_key: str, harness: str = "amp") -> PipeSession:
     return await asyncio.to_thread(_spawn_sync, thread_key, harness)
 
 
+def _reconnect_and_stream(session: PipeSession):
+    """Re-attach to a running container's stdout and stream lines.
+
+    Unlike _send_turn_and_stream, this does NOT send a turn.start — the agent
+    is assumed to be mid-turn already.  We just hook up a fresh stdout socket
+    and relay whatever it produces until turn.done or EOF.
+    """
+    # Force fresh sockets — attach with logs=True so the client gets all
+    # output produced while it was disconnected (it will deduplicate).
+    session._stdin_sock = None
+    session._stdout_sock = None
+
+    client = _docker_client()
+    api = client.api
+
+    stdin_attach = api.attach_socket(
+        session.container_id, params={"stdin": True, "stream": True}
+    )
+    session._stdin_sock = stdin_attach._sock
+
+    container = client.containers.get(session.container_id)
+    session._stdout_sock = container.attach(
+        stdout=True, stderr=False, stream=True, logs=True
+    )
+
+    turn_queue: queue.SimpleQueue[str | None] = queue.SimpleQueue()
+    with session._turn_lock:
+        old_queue = session._active_queue
+        session._active_queue = turn_queue
+
+    if old_queue is not None:
+        old_queue.put(None)
+
+    _ensure_reader(session)
+
+    while True:
+        line = turn_queue.get()
+        if line is None:
+            return
+        yield line
+        try:
+            evt = json.loads(line)
+            if evt.get("type") == "turn.done":
+                return
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+
+async def stream_reconnect(session: PipeSession) -> AsyncIterator[str]:
+    """Async wrapper for reconnecting to a running container's stdout."""
+    loop = asyncio.get_event_loop()
+    q: asyncio.Queue[str | None] = asyncio.Queue()
+
+    def _run() -> None:
+        try:
+            for line in _reconnect_and_stream(session):
+                loop.call_soon_threadsafe(q.put_nowait, line)
+        except Exception as exc:
+            loop.call_soon_threadsafe(
+                q.put_nowait,
+                json.dumps({"type": "error", "message": str(exc)}),
+            )
+        finally:
+            loop.call_soon_threadsafe(q.put_nowait, None)
+
+    thread = asyncio.to_thread(_run)
+    task = asyncio.ensure_future(thread)
+
+    try:
+        while True:
+            item = await q.get()
+            if item is None:
+                break
+            yield item
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
 async def stream_exec(session: PipeSession, message: str) -> AsyncIterator[str]:
     """Run a command in the container and yield raw stdout lines."""
     loop = asyncio.get_event_loop()
