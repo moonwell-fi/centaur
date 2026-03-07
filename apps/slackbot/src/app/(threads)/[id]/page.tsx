@@ -64,19 +64,6 @@ export default function ThreadDetailPage() {
     }
   }, [rawThreadKey]);
 
-  const [initialMessages, setInitialMessages] = useState<UIMessage[] | undefined>(undefined);
-  const initialMessagesFetchedRef = useRef(false);
-  useEffect(() => {
-    if (!threadKey || initialMessagesFetchedRef.current) return;
-    initialMessagesFetchedRef.current = true;
-    void fetch(`${BASE}/api/messages?key=${encodeURIComponent(threadKey)}`)
-      .then((res) => (res.ok ? res.json() : []))
-      .then((msgs: UIMessage[]) => {
-        if (msgs.length > 0) setInitialMessages(msgs);
-      })
-      .catch(() => {});
-  }, [threadKey]);
-
   const {
     thread,
     error,
@@ -88,8 +75,57 @@ export default function ThreadDetailPage() {
     chatStatus,
     sendThreadMessage,
     chatMessages,
+    setMessages,
     handoffTarget,
-  } = useThreadStream(threadKey, undefined, initialMessages);
+  } = useThreadStream(threadKey);
+
+  // Tail-first loading: fetch the newest messages immediately, render the
+  // bottom of the conversation, then lazy-load older messages on scroll-up.
+  const TAIL_SIZE = 40;
+  const [hasOlderMessages, setHasOlderMessages] = useState(false);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+
+  useEffect(() => {
+    if (!threadKey) return;
+    let cancelled = false;
+    setHasOlderMessages(false);
+    void fetch(`${BASE}/api/messages?key=${encodeURIComponent(threadKey)}&limit=${TAIL_SIZE}`)
+      .then((res) => (res.ok ? res.json() : { messages: [], has_more: false }))
+      .then((data: { messages: UIMessage[]; has_more: boolean }) => {
+        if (cancelled) return;
+        if (data.messages.length > 0) {
+          setMessages(data.messages);
+        }
+        setHasOlderMessages(data.has_more);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [threadKey, setMessages]);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (isLoadingOlder || !hasOlderMessages || chatMessages.length === 0) return;
+    const oldestId = chatMessages[0].id;
+    setIsLoadingOlder(true);
+    try {
+      const res = await fetch(
+        `${BASE}/api/messages?key=${encodeURIComponent(threadKey)}&limit=${TAIL_SIZE}&before=${encodeURIComponent(oldestId)}`,
+      );
+      if (!res.ok) return;
+      const data: { messages: UIMessage[]; has_more: boolean } = await res.json();
+      if (data.messages.length > 0) {
+        setMessages((prev) => {
+          const existingIds = new Set(prev.map((m) => m.id));
+          const newMsgs = data.messages.filter((m) => !existingIds.has(m.id));
+          return [...newMsgs, ...prev];
+        });
+      }
+      setHasOlderMessages(data.has_more);
+    } catch {
+      // Silently fail — user can scroll up again
+    } finally {
+      setIsLoadingOlder(false);
+    }
+  }, [isLoadingOlder, hasOlderMessages, chatMessages, threadKey, setMessages]);
 
   // Auto-send initial message from new session page
   const initialMessageSent = useRef(false);
@@ -312,6 +348,9 @@ export default function ThreadDetailPage() {
           compactMode={compactMode}
           onSelectSubagent={handleSelectSubagent}
           selectedSubagentKey={selectedSubagentKey}
+          hasOlderMessages={hasOlderMessages}
+          isLoadingOlder={isLoadingOlder}
+          onLoadMore={loadOlderMessages}
         />
       </div>
 

@@ -11,8 +11,8 @@
  * This component can be used alongside the existing ActivityFeed during migration.
  */
 
-import { LoaderCircle, MessagesSquare } from "lucide-react";
-import { useMemo } from "react";
+import { ChevronUp, LoaderCircle, MessagesSquare } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { UIMessage } from "ai";
 
 import {
@@ -38,6 +38,9 @@ export function ActivityFeedV2({
   compactMode = false,
   onSelectSubagent,
   selectedSubagentKey,
+  hasOlderMessages = false,
+  isLoadingOlder = false,
+  onLoadMore,
 }: {
   messages: UIMessage[];
   state?: string;
@@ -46,6 +49,9 @@ export function ActivityFeedV2({
   compactMode?: boolean;
   onSelectSubagent?: (step: SubagentStep) => void;
   selectedSubagentKey?: string | null;
+  hasOlderMessages?: boolean;
+  isLoadingOlder?: boolean;
+  onLoadMore?: () => void;
 }) {
   const participantsById = useMemo(
     () => new Map((participants || []).map((p) => [p.id, p])),
@@ -54,6 +60,26 @@ export function ActivityFeedV2({
   const reduceMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const isEmpty = messages.length === 0;
   const isIdle = state === "idle" || state === "stopped";
+
+  // Intersection observer: auto-load older messages when scrolled to top
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const onLoadMoreRef = useRef(onLoadMore);
+  onLoadMoreRef.current = onLoadMore;
+
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el || !hasOlderMessages || isLoadingOlder) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          onLoadMoreRef.current?.();
+        }
+      },
+      { threshold: 0 },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasOlderMessages, isLoadingOlder]);
 
   // Filter to only assistant messages that have parts (skip empty)
   const assistantMessages = useMemo(
@@ -82,6 +108,24 @@ export function ActivityFeedV2({
             : "gap-1.5 px-2 py-2 md:gap-2.5 md:px-3 md:py-3"
         }
       >
+        {/* Sentinel for loading older messages on scroll-up */}
+        {hasOlderMessages && !isEmpty && (
+          <div ref={sentinelRef} className="flex items-center justify-center py-2">
+            {isLoadingOlder ? (
+              <LoaderCircle className="size-4 animate-spin text-muted-foreground/60" />
+            ) : (
+              <button
+                type="button"
+                onClick={onLoadMore}
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+              >
+                <ChevronUp className="size-3" />
+                Load earlier messages
+              </button>
+            )}
+          </div>
+        )}
+
         {isEmpty ? (
           <ConversationEmptyState
             icon={

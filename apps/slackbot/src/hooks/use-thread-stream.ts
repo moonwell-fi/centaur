@@ -377,6 +377,7 @@ export function useThreadStream(
     chatStatus: chat.status,
     sendThreadMessage,
     chatMessages: chat.messages,
+    setMessages: chat.setMessages,
     handoffTarget,
   };
 }
