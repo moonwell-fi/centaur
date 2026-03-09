@@ -21,10 +21,6 @@ import os
 import secrets
 import sys
 from datetime import datetime, timezone
-from urllib.parse import quote
-from urllib.request import Request as URLRequest
-from urllib.request import urlopen
-
 
 class _JsonFormatter(logging.Formatter):
     def format(self, record):
@@ -57,25 +53,8 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
 from starlette.routing import Route
 
-_SECRET_MANAGER_URL = os.environ.get("SECRET_MANAGER_URL", "http://secrets:8100")
-
-
-def _fetch_secret(key: str) -> str:
-    """Fetch a secret from the secret manager. Returns empty string on failure."""
-    if not _SECRET_MANAGER_URL:
-        return ""
-    try:
-        req = URLRequest(f"{_SECRET_MANAGER_URL}/secrets/{quote(key, safe='')}")
-        with urlopen(req, timeout=5) as resp:
-            if resp.status == 200:
-                return _json.loads(resp.read()).get("value", "")
-    except Exception:
-        pass
-    return ""
-
-
-_PASSWORD = _fetch_secret("UI_PASSWORD")
-_SECRET_KEY = _fetch_secret("API_SECRET_KEY")
+_PASSWORD = os.environ.get("UI_PASSWORD", "")
+_SECRET_KEY = os.environ.get("API_SECRET_KEY", "")
 _COOKIE_NAME = "paradigm_ui_session"
 _COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
 _COOKIE_SECURE = os.environ.get("AUTH_COOKIE_INSECURE", "") != "1"
