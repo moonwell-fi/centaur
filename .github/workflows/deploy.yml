@@ -58,7 +58,25 @@ jobs:
         run: docker build -t agent2:latest sandbox/
 
       - name: Deploy all services
-        run: docker compose up -d --build --remove-orphans
+        run: |
+          # Build all images first
+          docker compose build
+
+          # Bring up everything except secrets (secrets container should only be
+          # recreated when strictly necessary — it requires OP_SERVICE_ACCOUNT_TOKEN
+          # which is ephemeral to CI runs)
+          docker compose up -d --no-build --remove-orphans \
+            postgres redis docker-socket-proxy firewall pgbouncer api slackbot web auth nginx \
+            grafana prometheus victorialogs promtail
+
+          # Only recreate secrets if it's not already running healthy
+          SECRETS_HEALTH=$(docker inspect --format='{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' ai_v2-secrets-1 2>/dev/null || echo "missing")
+          if [ "$SECRETS_HEALTH" != "healthy" ]; then
+            echo "Secrets container not healthy ($SECRETS_HEALTH), recreating..."
+            docker compose up -d --no-build secrets
+          else
+            echo "Secrets container already healthy, skipping recreate"
+          fi
 
       - name: Restart nginx
         run: docker compose restart nginx
