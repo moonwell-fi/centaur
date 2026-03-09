@@ -304,7 +304,7 @@ export async function* executeStreaming(
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new ApiError(
-      `/pipe/execute failed (${res.status}): ${text.slice(0, 300)}`,
+      `/agent/execute failed (${res.status}): ${text.slice(0, 300)}`,
       res.status,
       res.status >= 500,
     );

@@ -1,7 +1,4 @@
-"""Thin pipe agent router — execute/stop/status only.
-
-Stateless dumb pipe: spawn containers, stream raw stdout, no Postgres.
-"""
+"""Agent router — execute/stop/status/reconnect."""
 
 from __future__ import annotations
 
@@ -9,8 +6,8 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from api.agent import get_or_spawn, get_status, stop_session, stream_exec, stream_reconnect
 from api.deps import verify_api_key
-from api.pipe_agent import get_or_spawn, get_status, stop_session, stream_exec, stream_reconnect
 from api.warm_pool import pool_status
 from api.warm_pool import replenish as replenish_pool
 

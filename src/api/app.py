@@ -19,10 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from api.agent import recover_sessions
 from api.api_keys import ensure_service_keys
-from api.pipe_agent import recover_sessions
 from api.routers import admin, health, internal
-from api.routers import pipe_agent as pipe_router_mod
+from api.routers import agent as agent_router_mod
 from api.warm_pool import start_replenish_loop, stop_replenish_loop
 from shared.config import settings
 from shared.db import close_pool, create_pool
@@ -145,7 +145,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
-app.include_router(pipe_router_mod.router)
+app.include_router(agent_router_mod.router)
 app.include_router(admin.router)
 app.include_router(internal.router)
 

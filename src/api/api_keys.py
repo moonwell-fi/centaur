@@ -246,7 +246,7 @@ def check_scope(key_info: APIKeyInfo, required: str, resource: str = "") -> bool
       - "tools:*"        → all tools
       - "tools:slack"    → only the slack tool
       - "tools:slack,twitter" → slack and twitter
-      - "agent"          → sandbox/pipe/agent routes
+      - "agent"          → sandbox/agent routes
       - "threads"        → thread viewer routes
 
     Arguments:
