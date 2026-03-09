@@ -413,8 +413,16 @@ class CredentialInjector:
         if self._block_private_ip(flow, host):
             return
 
-        # 4. HTTP method filtering: restrict non-LLM hosts to safe methods
-        if host not in SECRET_INJECTION_HOSTS and host not in UNRESTRICTED_METHOD_HOSTS:
+        # 4. Check for amp provider proxy rewrite (before method filtering
+        #    so ampcode.com POSTs can be rewritten to LLM API hosts)
+        rewritten = self._try_provider_rewrite(flow, host)
+
+        # Re-read host after potential provider rewrite
+        host = flow.request.pretty_host.lower().rstrip(".")
+
+        # 5. HTTP method filtering: restrict non-LLM hosts to safe methods
+        #    Skip if we just rewrote the request (it's now targeting an LLM host)
+        if not rewritten and host not in SECRET_INJECTION_HOSTS and host not in UNRESTRICTED_METHOD_HOSTS:
             method = flow.request.method.upper()
             if method not in SAFE_METHODS:
                 flow.response = http.Response.make(
@@ -424,12 +432,6 @@ class CredentialInjector:
                 )
                 log.warning("method_blocked: %s not allowed for %s", method, host)
                 return
-
-        # 5. Check for amp provider proxy rewrite
-        self._try_provider_rewrite(flow, host)
-
-        # Re-read host after potential provider rewrite
-        host = flow.request.pretty_host.lower().rstrip(".")
 
         # 6. Secret injection: only inject for allowlisted hosts
         if host in SECRET_INJECTION_HOSTS:
