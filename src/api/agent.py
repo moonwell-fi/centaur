@@ -26,27 +26,36 @@ log = structlog.get_logger()
 _sessions: dict[str, SandboxSession] = {}
 
 
-def _ensure_reader(session: SandboxSession) -> None:
+def _ensure_reader(session: SandboxSession, *, force: bool = False) -> None:
     """Start a single background reader thread that dispatches stdout lines to the
-    active turn's queue. Only one reader ever exists per session."""
+    active turn's queue. Only one reader ever exists per session.
+
+    Pass force=True after a stream reconnect to start a new reader even if the
+    old one is still alive (it will be invalidated via the generation counter).
+    """
     reader = session.metadata.get("_reader_thread")
-    if reader and reader.is_alive():
+    if not force and reader and reader.is_alive():
         return
 
     backend = get_backend()
+    gen = session.metadata.get("_reader_gen", 0) + 1
+    session.metadata["_reader_gen"] = gen
 
-    def _read_loop() -> None:
+    def _read_loop(my_gen: int = gen) -> None:
         try:
             for line in backend.stream_stdout(session):
+                if session.metadata.get("_reader_gen") != my_gen:
+                    return
                 q = session.metadata.get("_active_queue")
                 if q is not None:
                     q.put(line)
         except Exception:
             pass
-        # EOF — signal the active queue
-        q = session.metadata.get("_active_queue")
-        if q is not None:
-            q.put(None)
+        # EOF — signal the active queue only if this reader is still current
+        if session.metadata.get("_reader_gen") == my_gen:
+            q = session.metadata.get("_active_queue")
+            if q is not None:
+                q.put(None)
 
     t = threading.Thread(target=_read_loop, daemon=True)
     t.start()
@@ -97,7 +106,25 @@ def _send_turn_and_stream(session: SandboxSession, message: str):
         old_queue.put(None)
 
     _ensure_reader(session)
-    backend.write_stdin(session, {"type": "turn.start", "turn_id": turn_id, "text": message})
+
+    try:
+        backend.write_stdin(session, {"type": "turn.start", "turn_id": turn_id, "text": message})
+    except (BrokenPipeError, OSError) as exc:
+        log.warning("stdin_broken_pipe", sandbox=session.sandbox_id[:12], error=str(exc))
+        # Verify the container is still alive — no point retrying a dead sandbox.
+        st = backend.status(session)
+        if st != "running":
+            raise RuntimeError(f"sandbox exited (status={st})") from exc
+        # Stale sockets — close, re-attach, restart reader, and retry.
+        # Swap in a fresh queue so the stale reader (invalidated via generation
+        # counter) cannot enqueue a spurious None sentinel.
+        backend.close_streams(session)
+        backend.attach(session)
+        turn_queue = queue.SimpleQueue()
+        with turn_lock:
+            session.metadata["_active_queue"] = turn_queue
+        _ensure_reader(session, force=True)
+        backend.write_stdin(session, {"type": "turn.start", "turn_id": turn_id, "text": message})
 
     while True:
         line = turn_queue.get()

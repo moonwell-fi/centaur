@@ -314,7 +314,10 @@ class DockerSandboxBackend(SandboxBackend):
         if sock is not None:
             with contextlib.suppress(Exception):
                 sock.close()
-        session.metadata.pop("_stdout_sock", None)
+        stdout = session.metadata.pop("_stdout_sock", None)
+        if stdout is not None and hasattr(stdout, "close"):
+            with contextlib.suppress(Exception):
+                stdout.close()
 
     def recent_logs(self, session: SandboxSession, tail: int = 40) -> str:
         client = _docker_client()
