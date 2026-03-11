@@ -10,7 +10,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
-      - data_net
+      - backend_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tempo -d ai_v2"]
       interval: 5s
@@ -19,19 +19,6 @@ services:
       start_period: 10s
       start_interval: 1s
 
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redisdata:/data
-    networks:
-      - data_net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-      start_period: 10s
-      start_interval: 1s
 
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy
@@ -119,7 +106,7 @@ services:
       DEFAULT_POOL_SIZE: 25
     networks:
       - control_net
-      - data_net
+      - backend_net
     depends_on:
       postgres:
         condition: service_healthy
@@ -154,14 +141,13 @@ services:
       HTTP_PROXY: http://firewall:8080
       REQUESTS_CA_BUNDLE: /firewall-certs/ca-cert.pem
       SSL_CERT_FILE: /firewall-certs/ca-cert.pem
-      NO_PROXY: localhost,127.0.0.1,postgres,pgbouncer,redis,slackbot,api,auth,nginx,docker-socket-proxy,secrets,firewall,grafana,prometheus,victorialogs,promtail
+      NO_PROXY: localhost,127.0.0.1,postgres,pgbouncer,slackbot,api,auth,nginx,docker-socket-proxy,secrets,firewall,grafana,prometheus,victorialogs,promtail
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - default
       - agent_net
-      - app_net
-      - data_net
+      - backend_net
       - control_net
     volumes:
       - ./tools:/app/tools
@@ -189,23 +175,19 @@ services:
       context: .
       dockerfile: apps/slackbot/Dockerfile
     environment:
-      REDIS_URL: redis://redis:6379
       AI_V2_API_URL: http://api:8000
       SECRET_MANAGER_URL: http://firewall:8081
       HTTPS_PROXY: http://firewall:8080
       NODE_EXTRA_CA_CERTS: /firewall-certs/ca-cert.pem
-      NO_PROXY: localhost,127.0.0.1,postgres,pgbouncer,redis,api,auth,nginx,firewall
+      NO_PROXY: localhost,127.0.0.1,postgres,pgbouncer,api,auth,nginx,firewall
     volumes:
       - firewall-certs:/firewall-certs:ro
     networks:
       - default
-      - app_net
-      - data_net
+      - backend_net
       - agent_net
     depends_on:
       api:
-        condition: service_healthy
-      redis:
         condition: service_healthy
       firewall:
         condition: service_healthy
@@ -222,8 +204,7 @@ services:
       - "127.0.0.1:3001:3001"
     networks:
       - default
-      - app_net
-      - data_net
+      - backend_net
     depends_on:
       api:
         condition: service_healthy
@@ -339,7 +320,6 @@ volumes:
   pgdata:
     external: true
     name: ai_v2_pgdata
-  redisdata:
   grafanadata:
     external: true
     name: ai_v2_grafanadata
@@ -361,12 +341,7 @@ networks:
     # for 1Password SDK calls. Only the secrets container uses this.
   agent_net:
     internal: true
-  app_net:
-    internal: true
-    ipam:
-      config:
-        - subnet: 10.10.20.0/24
-  data_net:
+  backend_net:
     internal: true
   obs_net:
     internal: true

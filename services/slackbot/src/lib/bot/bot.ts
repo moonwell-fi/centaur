@@ -2,8 +2,7 @@ import * as crypto from "node:crypto";
 import { Chat, parseMarkdown, type Root } from "chat";
 import { generateId } from "ai";
 import { createSlackAdapter } from "@chat-adapter/slack";
-import { createRedisState } from "@chat-adapter/state-redis";
-import { createMemoryState } from "@chat-adapter/state-memory";
+import { createPostgresState } from "@chat-adapter/state-pg";
 import {
   extractArchiverSlackFiles,
   extractArchiverSource,
@@ -528,7 +527,7 @@ function createBot() {
   const bot = new Chat({
     userName: SLACK_BOT_USERNAME,
     adapters: hasSlackCreds ? { slack: createSlackAdapter() } : {},
-    state: process.env.REDIS_URL ? createRedisState() : createMemoryState(),
+    state: createPostgresState({ client: getPool() }),
     onLockConflict: "force",
   } as unknown as ConstructorParameters<typeof Chat>[0]);
   const recentMentionDeliveries = new Map<string, number>();

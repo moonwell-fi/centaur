@@ -1,5 +1,5 @@
 {
-  "name": "paradigm-slackbot",
+  "name": "centaur-slackbot",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.28.1",
@@ -10,29 +10,20 @@
     "lint": "eslint src/"
   },
   "dependencies": {
-    "@chat-adapter/slack": "4.18.0",
-    "@chat-adapter/state-memory": "4.18.0",
-    "@chat-adapter/state-redis": "4.18.0",
+    "@chat-adapter/slack": "4.19.0",
+    "@chat-adapter/state-pg": "4.20.0",
     "@toon-format/toon": "^2.1.0",
     "ai": "^6.0.105",
-    "chat": "4.18.0",
+    "chat": "4.19.0",
     "next": "15.5.12",
     "pg": "^8.20.0",
     "react": "19.2.4",
-    "react-dom": "19.2.4",
-    "redis": "4.7.0"
+    "react-dom": "19.2.4"
   },
   "devDependencies": {
     "@types/node": "22.19.13",
     "@types/pg": "^8.18.0",
     "@types/react": "19.2.14",
     "typescript": "5.9.3"
-  },
-  "pnpm": {
-    "patchedDependencies": {
-      "chat@4.18.0": "patches/chat@4.18.0.patch",
-      "@chat-adapter/state-redis@4.18.0": "patches/@chat-adapter__state-redis@4.18.0.patch",
-      "@chat-adapter/state-memory@4.18.0": "patches/@chat-adapter__state-memory@4.18.0.patch"
-    }
   }
 }
