@@ -42,6 +42,10 @@ export async function POST(request: Request) {
     typeof body.harness === "string" && body.harness.trim().length > 0
       ? body.harness.trim()
       : "amp";
+  const engine =
+    typeof body.engine === "string" && body.engine.trim().length > 0
+      ? body.engine.trim()
+      : "";
   const originalMessages: UIMessage[] = Array.isArray(body.messages) ? body.messages : [];
 
   if (!slackThreadKey || !message) {
@@ -59,6 +63,7 @@ export async function POST(request: Request) {
         thread_key: slackThreadKey,
         message,
         harness,
+        ...(engine ? { engine } : {}),
       }),
       stream: true,
     });
@@ -143,6 +148,7 @@ export async function POST(request: Request) {
               const ts = new Date(baseTs + i).toISOString();
               const metadata = {
                 harness,
+                ...(engine ? { engine } : {}),
                 ...(msg.metadata || {}),
               };
               await client.query(

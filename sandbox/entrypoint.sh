@@ -59,7 +59,7 @@ PERSONA_PROMPT="$HOME_DIR/AGENTS_${PERSONA_UPPER}.md"
 TARGET_PROMPT="$HOME_DIR/workspace/AGENTS.md"
 if [ -d "$HOME_DIR/workspace" ] && [ -f "$BASE_PROMPT" ]; then
     if [ -n "$PERSONA_UPPER" ] && [ -f "$PERSONA_PROMPT" ]; then
-        cp "$PERSONA_PROMPT" "$TARGET_PROMPT" 2>/dev/null || true
+        { cat "$BASE_PROMPT"; printf '\n\n---\n\n'; cat "$PERSONA_PROMPT"; } > "$TARGET_PROMPT" 2>/dev/null || true
     else
         cp "$BASE_PROMPT" "$TARGET_PROMPT" 2>/dev/null || true
     fi

@@ -71,7 +71,8 @@ def _spawn_warm_container() -> WarmContainer | None:
     if not backend.supports_warm_pool:
         return None
 
-    engine = POOL_HARNESS if POOL_HARNESS in {"amp", "claude-code", "codex"} else "amp"
+    engines = {"amp": "amp", "claude-code": "claude-code", "codex": "codex", "pi-mono": "pi-mono"}
+    engine = engines.get(POOL_HARNESS, "amp")
 
     placeholder_key = f"warm-{int(time.time() * 1000)}-{id(threading.current_thread())}"
     try:

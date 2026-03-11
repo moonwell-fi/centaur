@@ -1,4 +1,4 @@
-export type Harness = "amp" | "claude-code" | "codex" | "pi-mono" | "eng" | "engineer" | "legal";
+export type Harness = "amp" | "claude-code" | "codex" | "pi-mono" | "eng" | "engineer" | "legal" | "invest";
 export type ThreadState = "running" | "idle" | "stopped" | "stopping" | "working" | "error";
 
 export type ThreadTokenUsage = {
@@ -21,6 +21,7 @@ export type Participant = {
 export type ThreadDetail = {
   slack_thread_key: string;
   harness: Harness;
+  engine?: string | null;
   state: ThreadState;
   created_at: number;
   last_activity: number;
@@ -34,6 +35,7 @@ export type ThreadDetail = {
 export type ThreadSummary = {
   slack_thread_key: string;
   harness: Harness;
+  engine?: string | null;
   state: ThreadState;
   created_at: number;
   last_activity: number;

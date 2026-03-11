@@ -41,6 +41,14 @@ export type ContextMessageItem = {
   source?: string;
   userId?: string;
   createdAt?: string;
+  attachments?: Array<{ name: string; url: string }>;
+};
+
+export type ArtifactItem = {
+  filename: string;
+  permalink?: string;
+  comment?: string;
+  type?: string;
 };
 
 export type SubagentActivity = {
@@ -120,6 +128,7 @@ export type Step =
       sources?: Array<{ url: string; title: string; snippet?: string }>;
     })
   | (StepBase & { type: "system"; title: string; text: string; tone?: "info" | "warn" })
+  | (StepBase & { type: "artifacts"; title: string; items: ArtifactItem[] })
   | (StepBase & {
       type: "file-changes";
       changes: Array<{ path: string; kind: "add" | "delete" | "update" }>;

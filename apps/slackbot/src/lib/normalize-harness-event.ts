@@ -49,6 +49,8 @@ export type CanonicalEvent =
       name?: string;
       summary?: string;
       error?: string;
+      activity?: string;
+      tool_name?: string;
     }
   | { type: "result"; text: string }
   | { type: "error"; error: string }
@@ -172,6 +174,8 @@ function subagentEvent(opts: {
   name?: string;
   summary?: string;
   error?: string;
+  activity?: string;
+  tool_name?: string;
 }): CanonicalEvent {
   const payload: CanonicalEvent & { type: "subagent" } = {
     type: "subagent",
@@ -181,6 +185,8 @@ function subagentEvent(opts: {
   if (opts.name) payload.name = opts.name;
   if (opts.summary) payload.summary = opts.summary;
   if (opts.error) payload.error = opts.error;
+  if (opts.activity) payload.activity = opts.activity;
+  if (opts.tool_name) payload.tool_name = opts.tool_name;
   return payload;
 }
 
@@ -273,6 +279,46 @@ function normalizeAmpLikeEvent(event: Record<string, unknown>): CanonicalEvent[]
     eventType === "subagent"
   ) {
     return [event as unknown as CanonicalEvent];
+  }
+
+  if (eventType === "system") {
+    const subtype = asString(event.subtype).trim().toLowerCase();
+    const subagentId =
+      asString(event.task_id) ||
+      asString(event.subagent_id) ||
+      asString(event.tool_use_id) ||
+      asString(event.parent_tool_use_id);
+    if (subagentId) {
+      const description = asString(event.description) || asString(event.message);
+      const summary = asString(event.summary) || asString(event.result) || description;
+      const name = asString(event.name) || asString(event.task_name) || description;
+      const toolName = asString(event.tool_name) || asString(event.last_tool_name);
+      if (subtype === "task_started") {
+        return [subagentEvent({ status: "started", subagent_id: subagentId, name: name || "Delegated task", activity: description, tool_name: toolName })];
+      }
+      if (subtype === "task_progress") {
+        return [subagentEvent({ status: "working", subagent_id: subagentId, name, activity: description, tool_name: toolName })];
+      }
+      if (subtype === "task_notification" || subtype === "task_completed") {
+        const taskError = asString(event.error);
+        return [subagentEvent({
+          status: taskError ? "failed" : "completed",
+          subagent_id: subagentId,
+          name,
+          summary: summary || description,
+          error: taskError,
+        })];
+      }
+      if (subtype === "task_failed") {
+        return [subagentEvent({
+          status: "failed",
+          subagent_id: subagentId,
+          name,
+          error: asString(event.error) || summary || "Task failed",
+        })];
+      }
+    }
+    return [];
   }
 
   if (eventType === "result") {

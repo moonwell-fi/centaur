@@ -367,11 +367,12 @@ export function useThreadStream(
           body: {
             route,
             ...(thread?.harness ? { harness: thread.harness } : {}),
+            ...(thread?.engine ? { engine: thread.engine } : {}),
           },
         },
       );
     },
-    [chat, thread?.harness],
+    [chat, thread?.engine, thread?.harness],
   );
 
   return {

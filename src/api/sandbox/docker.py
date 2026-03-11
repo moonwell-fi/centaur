@@ -49,7 +49,6 @@ def _get_injection_key_names() -> list[str]:
 def _container_env(
     thread_key: str,
     container_name: str,
-    harness: str,
     engine: str,
 ) -> list[str]:
     """Build env vars for sandbox containers."""
@@ -68,10 +67,6 @@ def _container_env(
         f"AI_V2_API_KEY={api_key}",
         f"AGENT_ENGINE={engine}",
     ]
-    if harness in ("eng", "engineer"):
-        env.append("AGENT_PERSONA=engineer")
-    elif harness == "legal":
-        env.append("AGENT_PERSONA=legal")
 
     if local_dev:
         # In local dev mode, real secrets come from environment
@@ -170,13 +165,19 @@ class DockerSandboxBackend(SandboxBackend):
         harness: str,
         engine: str,
         *,
+        persona: str | None = None,
+        repo: str | None = None,
         warm: bool = False,
     ) -> SandboxSession:
         client = self._get_client()
         repos_dir = os.path.abspath(_repos_host_dir())
 
         container_name = f"pipe-{thread_key.replace(':', '-').replace('.', '-')[:40]}"
-        env = _container_env(thread_key, container_name, harness, engine)
+        env = _container_env(thread_key, container_name, engine)
+        if persona:
+            env.append(f"AGENT_PERSONA={persona}")
+        if repo:
+            env.append(f"AGENT_REPO={repo}")
 
         # Remove stale container with same name
         with contextlib.suppress(Exception):
@@ -190,6 +191,10 @@ class DockerSandboxBackend(SandboxBackend):
             "ai2.harness": harness,
             "ai2.engine": engine,
         }
+        if persona:
+            labels["ai2.persona"] = persona
+        if repo:
+            labels["ai2.repo"] = repo
         if warm:
             labels["ai2.warm"] = "true"
 

@@ -29,6 +29,7 @@ from ..utils import (
 MANUAL_DOWNLOAD_SUGGESTION = (
     "If this source keeps failing, please download the file or ZIP manually and share it with us."
 )
+DEFAULT_GOOGLE_ACCOUNT = (os.getenv("GOOGLE_ACCOUNT") or "svc_ai@paradigm.xyz").strip()
 
 
 def _with_manual_download_suggestion(error: str | None) -> str | None:
@@ -307,7 +308,8 @@ def download_source(
         }
 
     if "google.com" in canonical_url:
-        if not account:
+        resolved_account = (account or "").strip() or DEFAULT_GOOGLE_ACCOUNT or None
+        if not resolved_account:
             return {
                 "status": "error",
                 "error": "Google download requires --account",
@@ -316,7 +318,7 @@ def download_source(
                 "source_type": "google_drive",
                 "files": [],
             }
-        payload = download_google(source_url, output_dir, account, max_depth)
+        payload = download_google(source_url, output_dir, resolved_account, max_depth)
         return {
             "status": payload["status"],
             "error": (

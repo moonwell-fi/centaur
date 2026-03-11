@@ -1,9 +1,8 @@
 /**
  * Convert canonical harness events into UI Message Stream protocol chunks.
  *
- * Replaces `_ui_stream_chunks_for_event()` from the Python backend
- * (`src/api/routers/threads.py`), enabling the Next.js webapp to process
- * raw harness events directly.
+ * Converts raw harness events into UI Message Stream protocol chunks,
+ * enabling the Next.js webapp to render agent output directly.
  */
 
 import { asList, asString, asRecord } from "@/lib/parse-utils";

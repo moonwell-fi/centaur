@@ -7,6 +7,7 @@ const SUPPORTED_HARNESSES = new Set<Harness>([
   "pi-mono",
   "eng",
   "engineer",
+  "invest",
   "legal",
 ]);
 

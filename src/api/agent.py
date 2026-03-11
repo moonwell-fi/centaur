@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import queue
 import threading
 from collections.abc import AsyncIterator, Callable
@@ -20,6 +21,29 @@ from api.sandbox.base import SandboxBackend, SandboxSession
 from api.sandbox.registry import get_backend
 
 log = structlog.get_logger()
+
+_ENGINE_HARNESSES = {"amp", "claude-code", "codex", "pi-mono"}
+_PERSONA_PROFILES: dict[str, dict[str, str]] = {
+    "eng": {
+        "engine": "amp",
+        "persona": "eng",
+        "repo": os.getenv("ENGINEER_DEFAULT_REPO", "paradigmxyz/ai_v2"),
+    },
+    "engineer": {
+        "engine": "amp",
+        "persona": "eng",
+        "repo": os.getenv("ENGINEER_DEFAULT_REPO", "paradigmxyz/ai_v2"),
+    },
+    "legal": {
+        "engine": "amp",
+        "persona": "legal",
+    },
+    "invest": {
+        "engine": "amp",
+        "persona": "invest",
+        "repo": os.getenv("INVEST_DEFAULT_REPO", "paradigmxyz/ai_v2"),
+    },
+}
 
 
 # In-memory sessions — reconstructable from backend on restart
@@ -51,6 +75,22 @@ def _backend_for(session: SandboxSession) -> SandboxBackend:
     if session.backend_name and session.backend_name != default.name:
         return _get_override_backend(session.backend_name)
     return default
+
+
+def _resolve_harness_profile(
+    harness: str,
+    engine_override: str | None = None,
+) -> tuple[str, str | None, str | None]:
+    normalized = (harness or "").strip() or "amp"
+    normalized_engine_override = (engine_override or "").strip() or None
+    if normalized_engine_override and normalized_engine_override not in _ENGINE_HARNESSES:
+        raise ValueError(f"Unknown engine override: {normalized_engine_override}")
+    if normalized in _ENGINE_HARNESSES:
+        return normalized_engine_override or normalized, None, None
+    profile = _PERSONA_PROFILES.get(normalized)
+    if profile:
+        return normalized_engine_override or profile["engine"], profile.get("persona"), profile.get("repo")
+    return normalized_engine_override or "amp", None, None
 
 
 def _ensure_reader(session: SandboxSession, *, force: bool = False) -> None:
@@ -93,13 +133,14 @@ def _spawn_sync(
     thread_key: str,
     harness: str,
     *,
+    engine_override: str | None = None,
     backend_override: str | None = None,
 ) -> SandboxSession:
     """Synchronous spawn: create sandbox + register session."""
-    engine = harness if harness in {"amp", "claude-code", "codex"} else "amp"
+    engine, persona, repo = _resolve_harness_profile(harness, engine_override=engine_override)
 
     backend = _get_override_backend(backend_override) if backend_override else get_backend()
-    session = backend.create(thread_key, harness, engine)
+    session = backend.create(thread_key, harness, engine, persona=persona, repo=repo)
 
     _init_session_metadata(session)
 
@@ -264,6 +305,7 @@ async def get_or_spawn(
     thread_key: str,
     harness: str = "amp",
     *,
+    engine: str | None = None,
     backend: str | None = None,
 ) -> SandboxSession:
     """Get existing session or spawn a new sandbox.
@@ -278,7 +320,7 @@ async def get_or_spawn(
             return session
         _sessions.pop(thread_key, None)
 
-    if not backend:
+    if not backend and not engine:
         from api.warm_pool import claim_container
 
         claimed = await asyncio.to_thread(claim_container, thread_key, harness)
@@ -286,7 +328,13 @@ async def get_or_spawn(
             _sessions[thread_key] = claimed
             return claimed
 
-    return await asyncio.to_thread(_spawn_sync, thread_key, harness, backend_override=backend)
+    return await asyncio.to_thread(
+        _spawn_sync,
+        thread_key,
+        harness,
+        engine_override=engine,
+        backend_override=backend,
+    )
 
 
 def _reconnect_and_stream(session: SandboxSession):

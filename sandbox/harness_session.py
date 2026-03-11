@@ -33,13 +33,6 @@ def emit(obj: dict) -> None:
 
 # ── Harness command builders ────────────────────────────────────────────────
 
-def _system_prompt_path() -> str | None:
-    if not persona:
-        return None
-    p = os.path.expanduser(f"~/AGENTS_{persona.upper()}.md")
-    return p if os.path.isfile(p) else None
-
-
 def build_persistent_cmd() -> list[str]:
     if engine == "amp":
         cmd = [
@@ -56,9 +49,8 @@ def build_persistent_cmd() -> list[str]:
     ]
     if model_override:
         cmd.extend(["--model", model_override])
-    sp = _system_prompt_path()
-    if sp:
-        cmd.extend(["--system-prompt", sp])
+    # Persona prompts are combined with the base prompt by entrypoint.sh into
+    # workspace/AGENTS.md, which claude-code reads automatically.
     return cmd
 
 

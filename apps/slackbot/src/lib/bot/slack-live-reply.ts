@@ -22,10 +22,50 @@ function viewerActionBlock(viewerUrl: string): SlackBlock {
   };
 }
 
+/**
+ * Workspace-level rate governor for chat.update.
+ * Slack Tier 3 allows ~50 req/min. We target 45/min to leave headroom.
+ * Each SlackLiveReply instance checks in with this governor before flushing.
+ */
+class UpdateRateGovernor {
+  private timestamps: number[] = [];
+  private readonly maxPerMinute: number;
+  private readonly windowMs = 60_000;
+
+  constructor(maxPerMinute = 45) {
+    this.maxPerMinute = maxPerMinute;
+  }
+
+  canUpdate(): boolean {
+    this.prune();
+    return this.timestamps.length < this.maxPerMinute;
+  }
+
+  record(): void {
+    this.timestamps.push(Date.now());
+  }
+
+  nextAvailableMs(): number {
+    this.prune();
+    if (this.timestamps.length < this.maxPerMinute) return 0;
+    const oldest = this.timestamps[0];
+    return Math.max(0, oldest + this.windowMs - Date.now() + 50);
+  }
+
+  private prune(): void {
+    const cutoff = Date.now() - this.windowMs;
+    while (this.timestamps.length > 0 && this.timestamps[0] <= cutoff) {
+      this.timestamps.shift();
+    }
+  }
+}
+
+const sharedGovernor = new UpdateRateGovernor(45);
+
 export class SlackLiveReply {
   private channel: string;
   private threadTs: string;
-  private flushIntervalMs: number;
+  private minIntervalMs: number;
   private messageTs: string | null = null;
   private pendingText: string | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -33,10 +73,10 @@ export class SlackLiveReply {
   private disposed = false;
   private viewerUrl: string | null = null;
 
-  constructor(channel: string, threadTs: string, opts?: { flushIntervalMs?: number }) {
+  constructor(channel: string, threadTs: string, opts?: { minIntervalMs?: number }) {
     this.channel = channel;
     this.threadTs = threadTs;
-    this.flushIntervalMs = opts?.flushIntervalMs ?? 2500;
+    this.minIntervalMs = opts?.minIntervalMs ?? 1200;
   }
 
   async start(initialText: string, opts?: { viewerUrl?: string }): Promise<void> {
@@ -63,7 +103,7 @@ export class SlackLiveReply {
     if (this.disposed || !this.messageTs) return;
     this.pendingText = markdown;
     if (!this.flushTimer && !this.inFlightFlush) {
-      this.flushTimer = setTimeout(() => this.flush(), this.flushIntervalMs);
+      this.scheduleFlush();
     }
   }
 
@@ -79,15 +119,11 @@ export class SlackLiveReply {
       await this.inFlightFlush;
     }
     if (this.messageTs) {
+      await this.reserveUpdateSlot();
       await this.updateMessage(markdown);
     }
   }
 
-  /**
-   * Edit the live reply in-place with rich blocks (the final result).
-   * If there are overflow payloads (content exceeding Slack's block limit),
-   * they are posted as follow-up messages in the same thread.
-   */
   async finishRich(payloads: SlackMessagePayload[]): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
@@ -101,7 +137,6 @@ export class SlackLiveReply {
     }
     if (!this.messageTs || payloads.length === 0) return;
 
-    // Update the existing message with the first payload
     const first = payloads[0];
     const blocks = [...(first.blocks || [])];
     if (this.viewerUrl) {
@@ -117,13 +152,13 @@ export class SlackLiveReply {
       updatePayload.attachments = first.attachments;
     }
 
+    await this.reserveUpdateSlot();
     let res = await this.slackApi("chat.update", updatePayload);
     if (!res.ok && res.error === "ratelimited") {
       await sleep(2000);
       res = await this.slackApi("chat.update", updatePayload);
     }
 
-    // Post overflow payloads as follow-up messages
     for (let i = 1; i < payloads.length; i++) {
       const overflow = payloads[i];
       await this.slackApi("chat.postMessage", {
@@ -145,18 +180,34 @@ export class SlackLiveReply {
     }
   }
 
+  private scheduleFlush(): void {
+    const governorDelay = sharedGovernor.nextAvailableMs();
+    const delay = Math.max(this.minIntervalMs, governorDelay);
+    this.flushTimer = setTimeout(() => this.flush(), delay);
+  }
+
   private flush(): void {
     this.flushTimer = null;
     if (this.disposed || !this.pendingText || !this.messageTs) return;
+
     const text = this.pendingText;
     this.pendingText = null;
-    this.inFlightFlush = this.updateMessage(text).finally(() => {
+    this.inFlightFlush = (async () => {
+      await this.reserveUpdateSlot();
+      await this.updateMessage(text);
+    })().finally(() => {
       this.inFlightFlush = null;
-      // If another update was queued during flush, schedule next flush
       if (this.pendingText && !this.disposed) {
-        this.flushTimer = setTimeout(() => this.flush(), this.flushIntervalMs);
+        this.scheduleFlush();
       }
     });
+  }
+
+  private async reserveUpdateSlot(): Promise<void> {
+    while (!sharedGovernor.canUpdate()) {
+      await sleep(Math.max(250, sharedGovernor.nextAvailableMs()));
+    }
+    sharedGovernor.record();
   }
 
   private async updateMessage(text: string): Promise<void> {

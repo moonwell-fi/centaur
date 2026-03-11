@@ -1,4 +1,12 @@
-export type Harness = "amp" | "claude-code" | "codex" | "pi-mono" | "eng" | "engineer" | "legal";
+export type Harness =
+  | "amp"
+  | "claude-code"
+  | "codex"
+  | "pi-mono"
+  | "eng"
+  | "engineer"
+  | "legal"
+  | "invest";
 export type ThreadState = "running" | "idle" | "stopped" | "stopping" | "working" | "error";
 
 export type ThreadTokenUsage = {
@@ -11,6 +19,19 @@ export type ThreadTokenUsage = {
   models: string[];
 };
 
+export type Turn = {
+  turn_id: number;
+  user_message: string;
+  events: Record<string, unknown>[];
+  artifacts?: Record<string, unknown>[];
+  result: string;
+  user_id?: string;
+  started_at: number | null;
+  finished_at: number | null;
+  exit_code: number | null;
+  timed_out: boolean;
+  duration_s: number;
+};
 export type Participant = {
   id: string;
   name: string;

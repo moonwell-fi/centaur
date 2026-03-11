@@ -10,6 +10,8 @@ from pathlib import Path
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
+from shared.tool_sdk import secret
+
 
 # Cache for channel list to avoid repeated API calls
 

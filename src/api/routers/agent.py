@@ -22,11 +22,12 @@ class ExecuteRequest(BaseModel):
     thread_key: str
     message: str
     harness: str = "amp"
+    engine: str | None = None
 
 
 @router.post("/execute", dependencies=[Depends(require_scope("agent:execute"))])
 async def execute(req: ExecuteRequest):
-    session = await get_or_spawn(req.thread_key, req.harness)
+    session = await get_or_spawn(req.thread_key, req.harness, engine=req.engine)
 
     async def event_stream():
         async for line in stream_exec(session, req.message):
@@ -39,6 +40,7 @@ async def execute(req: ExecuteRequest):
 class ReconnectRequest(BaseModel):
     thread_key: str
     harness: str = "amp"
+    engine: str | None = None
 
 
 @router.post("/reconnect", dependencies=[Depends(require_scope("agent:execute"))])
@@ -48,7 +50,7 @@ async def reconnect(req: ReconnectRequest):
     Used by the slackbot to recover an in-progress stream after an API restart.
     Returns 404 if no running session exists for this thread.
     """
-    session = await get_or_spawn(req.thread_key, req.harness)
+    session = await get_or_spawn(req.thread_key, req.harness, engine=req.engine)
 
     async def event_stream():
         async for line in stream_reconnect(session):

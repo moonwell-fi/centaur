@@ -113,6 +113,9 @@ class WebSearchClient:
         text_chars: int | None,
         highlights_chars: int | None,
         additional_queries: list[str] | None = None,
+        category: str | None = None,
+        start_published_date: str | None = None,
+        end_published_date: str | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "query": query,
@@ -134,6 +137,12 @@ class WebSearchClient:
             payload["maxAgeHours"] = max_age_hours
         if additional_queries:
             payload["additionalQueries"] = additional_queries
+        if category:
+            payload["category"] = category
+        if start_published_date:
+            payload["startPublishedDate"] = start_published_date
+        if end_published_date:
+            payload["endPublishedDate"] = end_published_date
         return payload
 
     def _extract_cost(self, payload: dict[str, Any]) -> float:
@@ -782,12 +791,21 @@ class WebSearchClient:
         include_domains: list[str] | None = None,
         exclude_domains: list[str] | None = None,
         max_age_hours: int | None = None,
+        category: str | None = None,
+        start_published_date: str | None = None,
+        end_published_date: str | None = None,
         timeout_seconds: float = 30.0,
         synthesize: bool = True,
         thread_context: list[str] | None = None,
         max_report_chars: int = 12000,
     ) -> dict:
-        """Search the web via Exa and optionally synthesize a cited answer."""
+        """Search the web via Exa and optionally synthesize a cited answer.
+
+        category: filter by content type — "company", "news", "research paper",
+                  "tweet", "financial report", "personal site", "people".
+        start_published_date / end_published_date: ISO 8601 date strings to
+                  restrict results to a time window.
+        """
         self._require_exa_api_key()
         started = time.perf_counter()
         normalized_query = query.strip()
@@ -803,6 +821,9 @@ class WebSearchClient:
             max_age_hours=max_age_hours,
             text_chars=None,
             highlights_chars=2000,
+            category=category,
+            start_published_date=start_published_date,
+            end_published_date=end_published_date,
         )
         response = await self._exa_search_async(payload, timeout_seconds=timeout_seconds)
         results: list[SourceDocument] = []

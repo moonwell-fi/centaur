@@ -29,12 +29,17 @@ export class AgentThreadTransport<
           typeof body?.harness === "string" && body.harness.trim().length > 0
             ? body.harness.trim()
             : undefined;
+        const engine =
+          typeof body?.engine === "string" && body.engine.trim().length > 0
+            ? body.engine.trim()
+            : undefined;
 
         return {
           body: {
             slack_thread_key: threadKey,
             message: text,
             ...(harness ? { harness } : {}),
+            ...(engine ? { engine } : {}),
             messages,
           },
         };

@@ -4,10 +4,49 @@ import { getPool } from "@/lib/db";
 import { normalizeHarnessEvent, type CanonicalEvent } from "@/lib/normalize-harness-event";
 
 export type Engine = "amp" | "claude-code" | "codex" | "pi-mono";
-export type Harness = Engine | "eng" | "legal";
+export type Harness = Engine | "eng" | "legal" | "invest";
 export type BudgetMode = "simple" | "auto" | "complex";
 export type FileAttachment = { url: string; name: string };
 export type ExecuteSource = "slack" | "thread_ui" | "api";
+export type ArchiverSourceType = "docsend" | "google_drive" | "local" | "unknown";
+export type ArchiverExtractedFile = {
+  status?: string;
+  error?: string;
+  file?: {
+    filename?: string;
+    source_type?: ArchiverSourceType | string;
+    title?: string;
+    mime_type?: string | null;
+  };
+  metadata?: Record<string, unknown>;
+  parsed_text?: string;
+  warnings?: string[];
+};
+export type ArchiverExtractResult = {
+  status?: string;
+  error?: string;
+  source?: string;
+  context?: Record<string, unknown>;
+  files?: ArchiverExtractedFile[];
+};
+
+function parseToolEnvelopeResult<T>(envelope: Record<string, unknown>, fallbackError: string): T {
+  const toolResult = envelope.result;
+  if (typeof toolResult === "string") {
+    try {
+      return JSON.parse(toolResult) as T;
+    } catch {
+      return { status: "error", error: toolResult } as T;
+    }
+  }
+  if (toolResult && typeof toolResult === "object") {
+    return toolResult as T;
+  }
+  return {
+    status: "error",
+    error: fallbackError,
+  } as T;
+}
 
 export type RunOptions = {
   harness: Harness;
@@ -35,8 +74,8 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
   let budgetExplicit = false;
   const activeHarness = context.activeHarness ?? null;
 
-  const isPersonaHarness = (value: Harness): value is "eng" | "legal" =>
-    value === "eng" || value === "legal";
+  const isPersonaHarness = (value: Harness): value is "eng" | "legal" | "invest" =>
+    value === "eng" || value === "legal" || value === "invest";
 
   const applyHarness = (value: Harness): void => {
     if (isPersonaHarness(value)) {
@@ -55,24 +94,32 @@ export function extractRunOptions(text: string, context: RunOptionContext = {}):
     engineExplicit = false;
   };
 
-  // --eng flag → harness="eng"
+  // Persona flags
   const engRegex = /(^|\s)--eng(?=\s|$)/gi;
   if (engRegex.test(cleaned)) {
     applyHarness("eng");
     cleaned = cleaned.replace(engRegex, " ");
     engRegex.lastIndex = 0;
   }
-
-  // --legal flag → harness="legal"
+  // --legal flag -> harness="legal"
   const legalRegex = /(^|\s)--legal(?=\s|$)/gi;
   if (legalRegex.test(cleaned)) {
     applyHarness("legal");
     cleaned = cleaned.replace(legalRegex, " ");
     legalRegex.lastIndex = 0;
   }
+  // --invest flag -> harness="invest"
+  const investRegex = /(^|\s)--invest(?=\s|$)/gi;
+  if (investRegex.test(cleaned)) {
+    applyHarness("invest");
+    cleaned = cleaned.replace(investRegex, " ");
+    investRegex.lastIndex = 0;
+  }
 
   // harness=<value> key-value
-  const kvMatch = cleaned.match(/\bharness\s*=\s*(amp|claude-code|codex|pi-mono|eng|legal)\b/i);
+  const kvMatch = cleaned.match(
+    /\bharness\s*=\s*(amp|claude-code|codex|pi-mono|eng|legal|invest)\b/i
+  );
   if (kvMatch) {
     applyHarness(kvMatch[1].toLowerCase() as Harness);
     cleaned = (
@@ -285,9 +332,11 @@ export async function* executeStreaming(
   threadKey: string,
   message: string,
   harness?: Harness | null,
+  engine?: Engine | null,
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const normalizedKey = normalizeThreadKey(threadKey);
-  const harnessName = harness || "amp";
+  const apiHarness = harness || "amp";
+  const normalizationKey = engine || apiHarness;
 
   // Initial execute request
   const res = await resilientFetch(`${API_URL}/agent/execute`, {
@@ -295,7 +344,8 @@ export async function* executeStreaming(
     body: JSON.stringify({
       thread_key: normalizedKey,
       message,
-      harness: harnessName,
+      harness: apiHarness,
+      ...(engine ? { engine } : {}),
     }),
     timeoutMs: 10 * 60_000,
     maxAttempts: 1,
@@ -317,7 +367,7 @@ export async function* executeStreaming(
   let yieldedCount = 0;
 
   try {
-    const inner = readSSEStream(res, harnessName);
+    const inner = readSSEStream(res, normalizationKey);
     while (true) {
       const { done, value } = await inner.next();
       if (done) {
@@ -335,16 +385,12 @@ export async function* executeStreaming(
     }
   } catch (err) {
     if (!isStreamNetworkError(err)) throw err;
-    // Mid-stream network error — fall through to reconnect
     log.warn("stream_disconnect", {
       thread: normalizedKey,
       reason: err instanceof Error ? err.message : String(err),
     });
   }
 
-  // Reconnect loop: the container is still running, just re-attach to stdout.
-  // The API replays full stdout history (logs=True) so we skip events we
-  // already yielded and only forward new ones (produced during the gap).
   for (let attempt = 0; attempt < RECONNECT_MAX_ATTEMPTS; attempt++) {
     const delay = Math.min(
       RECONNECT_BASE_MS * Math.pow(2, attempt),
@@ -364,7 +410,8 @@ export async function* executeStreaming(
         method: "POST",
         body: JSON.stringify({
           thread_key: normalizedKey,
-          harness: harnessName,
+          harness: harness || "amp",
+          ...(engine ? { engine } : {}),
         }),
         timeoutMs: 10 * 60_000,
         maxAttempts: 1,
@@ -386,7 +433,7 @@ export async function* executeStreaming(
     }
 
     try {
-      const inner = readSSEStream(reconnRes, harnessName);
+      const inner = readSSEStream(reconnRes, normalizationKey);
       let replayCount = 0;
       while (true) {
         const { done, value } = await inner.next();
@@ -425,10 +472,12 @@ export async function* executeStreaming(
 export async function* reconnectStreaming(
   threadKey: string,
   harness?: Harness | null,
+  engine?: Engine | null,
   skipCount: number = 0,
 ): AsyncGenerator<CanonicalEvent, string, undefined> {
   const normalizedKey = normalizeThreadKey(threadKey);
-  const harnessName = harness || "amp";
+  const apiHarness = harness || "amp";
+  const normalizationKey = engine || apiHarness;
   let yieldedCount = 0;
   let lastAssistantText = "";
   let resultText = "";
@@ -448,7 +497,8 @@ export async function* reconnectStreaming(
         method: "POST",
         body: JSON.stringify({
           thread_key: normalizedKey,
-          harness: harnessName,
+          harness: apiHarness,
+          ...(engine ? { engine } : {}),
         }),
         timeoutMs: 10 * 60_000,
         maxAttempts: 1,
@@ -470,7 +520,7 @@ export async function* reconnectStreaming(
     }
 
     try {
-      const inner = readSSEStream(res, harnessName);
+      const inner = readSSEStream(res, normalizationKey);
       let replayCount = 0;
       while (true) {
         const { done, value } = await inner.next();
@@ -504,11 +554,11 @@ export async function execute(
   _userId?: string,
   _source: ExecuteSource = "slack",
   _model?: string | null,
-  _engine?: Engine | null,
+  engine?: Engine | null,
   _continueSession: boolean = true,
 ): Promise<string> {
   let lastText = "";
-  const gen = executeStreaming(threadKey, message, harness);
+  const gen = executeStreaming(threadKey, message, harness, engine);
   while (true) {
     const { done, value } = await gen.next();
     if (done) {
@@ -559,6 +609,8 @@ export async function fetchThreadRuntimeConfig(
       ? "eng"
       : rawHarness === "legal"
         ? "legal"
+        : rawHarness === "invest"
+          ? "invest"
         : rawHarness === "amp" || rawHarness === "claude-code" || rawHarness === "codex" || rawHarness === "pi-mono"
           ? (rawHarness as Engine)
           : null;
@@ -610,6 +662,102 @@ export async function postThreadContextMessage(
     );
   }
   return { status: "accepted" };
+}
+
+export async function fetchThreadContextMessages(
+  threadKey: string,
+  options?: {
+    sources?: string[];
+    limit?: number;
+  },
+): Promise<string[]> {
+  const normalizedThreadKey = normalizeThreadKey(threadKey);
+  const pool = getPool();
+  const sources = options?.sources?.length ? options.sources : ["slack_archiver_ingest"];
+  const limit = Math.max(1, Math.min(options?.limit ?? 8, 20));
+  const { rows } = await pool.query(
+    `SELECT parts
+     FROM chat_messages
+     WHERE thread_key = $1
+       AND role = 'user'
+       AND metadata->>'source' = ANY($2::text[])
+     ORDER BY created_at DESC
+     LIMIT $3`,
+    [normalizedThreadKey, sources, limit],
+  );
+  const messages = rows
+    .map((row) => {
+      const parts = Array.isArray(row.parts) ? row.parts : [];
+      for (const part of parts) {
+        if (part && typeof part === "object" && typeof (part as { text?: unknown }).text === "string") {
+          return ((part as { text: string }).text || "").trim();
+        }
+      }
+      return "";
+    })
+    .filter((text) => text.length > 0);
+  return messages.reverse();
+}
+
+export async function extractArchiverSource(
+  sourceUrl: string,
+  options?: {
+    outputDir?: string;
+    company?: string;
+    account?: string;
+    password?: string;
+    email?: string;
+    maxDepth?: number;
+    context?: Record<string, unknown>;
+    timeoutMs?: number;
+  },
+): Promise<ArchiverExtractResult> {
+  const safeThread = sourceUrl
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .slice(0, 40)
+    .replace(/^-+|-+$/g, "") || "source";
+  const outputDir =
+    options?.outputDir ??
+    `/tmp/archiver/slack/${Date.now()}-${safeThread}`;
+  const payload: Record<string, unknown> = {
+    source_url: sourceUrl,
+    output_dir: outputDir,
+    ...(options?.company ? { company: options.company } : {}),
+    ...(options?.account ? { account: options.account } : {}),
+    ...(options?.password ? { password: options.password } : {}),
+    ...(options?.email ? { email: options.email } : {}),
+    ...(typeof options?.maxDepth === "number" ? { max_depth: options.maxDepth } : {}),
+    ...(options?.context ? { context: options.context } : {}),
+  };
+  const envelope = await apiPost("/tools/archiver/extract_source", payload, {
+    timeoutMs: options?.timeoutMs ?? 180_000,
+    maxAttempts: 1,
+  });
+  return parseToolEnvelopeResult<ArchiverExtractResult>(
+    envelope,
+    "Unexpected archiver tool response",
+  );
+}
+
+export async function extractArchiverSlackFiles(
+  files: FileAttachment[],
+  options?: {
+    context?: Record<string, unknown>;
+    timeoutMs?: number;
+  },
+): Promise<ArchiverExtractResult> {
+  const payload: Record<string, unknown> = {
+    files: files.map((file) => ({ url: file.url, name: file.name })),
+    ...(options?.context ? { context: options.context } : {}),
+  };
+  const envelope = await apiPost("/tools/archiver/extract_slack_files", payload, {
+    timeoutMs: options?.timeoutMs ?? 180_000,
+    maxAttempts: 1,
+  });
+  return parseToolEnvelopeResult<ArchiverExtractResult>(
+    envelope,
+    "Unexpected archiver Slack file response",
+  );
 }
 
 export function splitThreadKey(threadKey: string): { channel: string; threadTs: string } {

@@ -13,6 +13,7 @@ const HARNESS_STYLES: Record<string, string> = {
   codex: "bg-emerald-500/10 text-emerald-400",
   "pi-mono": "bg-blue-500/10 text-blue-400",
   eng: "bg-primary/10 text-primary",
+  invest: "bg-amber-500/10 text-amber-400",
   engineer: "bg-primary/10 text-primary",
   legal: "bg-amber-500/10 text-amber-400",
 };

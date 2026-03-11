@@ -66,6 +66,7 @@ export async function* executeStreamingWithBusyRetries(params: {
         params.threadKey,
         params.message,
         params.harness,
+        params.engine,
       );
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
@@ -80,6 +81,7 @@ export async function* executeStreamingWithBusyRetries(params: {
 export async function* reconnectStreamingWithRetries(params: {
   threadKey: string;
   harness: Harness;
+  engine?: Engine | null;
   skipCount?: number;
 }): AsyncGenerator<CanonicalEvent, string, undefined> {
   const maxAttempts = 4;
@@ -88,6 +90,7 @@ export async function* reconnectStreamingWithRetries(params: {
       return yield* reconnectStreaming(
         params.threadKey,
         params.harness,
+        params.engine,
         params.skipCount ?? 0,
       );
     } catch (error) {

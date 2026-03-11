@@ -12,7 +12,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     procps htop \
     && ln -sf /usr/bin/fdfind /usr/local/bin/fd
 
-RUN pip3 install --break-system-packages --no-cache-dir python-docx lxml docx-revisions
+RUN pip3 install --break-system-packages --no-cache-dir \
+    python-docx lxml docx-revisions \
+    matplotlib numpy pandas
 
 # ── GitHub CLI + Node.js 22 + Docker CLI (single layer, cached) ─────────────
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -74,6 +76,7 @@ COPY --chown=agent:agent harness_session.py /home/agent/harness_session.py
 COPY --chown=agent:agent SYSTEM_PROMPT.md /home/agent/AGENTS.md
 COPY --chown=agent:agent SYSTEM_PROMPT_ENG.md /home/agent/AGENTS_ENG.md
 COPY --chown=agent:agent SYSTEM_PROMPT_LEGAL.md /home/agent/AGENTS_LEGAL.md
+COPY --chown=agent:agent SYSTEM_PROMPT_INVEST.md /home/agent/AGENTS_INVEST.md
 
 WORKDIR /home/agent
 ENTRYPOINT ["/entrypoint.sh"]

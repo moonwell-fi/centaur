@@ -5,11 +5,15 @@ import { createSlackAdapter } from "@chat-adapter/slack";
 import { createRedisState } from "@chat-adapter/state-redis";
 import { createMemoryState } from "@chat-adapter/state-memory";
 import {
+  extractArchiverSlackFiles,
+  extractArchiverSource,
   extractRunOptions,
+  fetchThreadContextMessages,
   fetchThreadRuntimeConfig,
   normalizeThreadKey,
   postThreadContextMessage,
   splitThreadKey,
+  type ArchiverExtractResult,
   type BudgetMode,
   type Engine,
   type FileAttachment,
@@ -33,10 +37,10 @@ import { getPool } from "@/lib/db";
 function formatErrorForSlack(error: unknown, context: string): string {
   if (error instanceof ApiError) {
     if (error.retryable && error.status === null) {
-      return `${context}: API is unreachable (retried ${RETRY_DEFAULTS_MAX} times). The service may be restarting — try again in ~30s.`;
+      return `${context}: API is unreachable (retried ${RETRY_DEFAULTS_MAX} times). The service may be restarting - try again in ~30s.`;
     }
     if (error.status && error.status >= 500) {
-      return `${context}: API returned ${error.status}. The service may be overloaded — try again shortly.`;
+      return `${context}: API returned ${error.status}. The service may be overloaded - try again shortly.`;
     }
     return `${context}: ${error.message}`;
   }
@@ -78,6 +82,8 @@ const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "https://svc-ai.parad
 const MAX_TRACKED_MENTION_DELIVERIES = 5000;
 const MENTION_DELIVERY_TTL_MS = 10 * 60 * 1000;
 const SLACK_BOT_USERNAME = process.env.SLACK_BOT_USERNAME || "paradigm-ai";
+const MAX_ARCHIVER_LINKS_PER_MESSAGE = 3;
+const MAX_ARCHIVER_FILES_PER_MESSAGE = 5;
 
 type MarkdownNode = Root | Root["children"][number];
 
@@ -96,7 +102,7 @@ export function getSlackBootstrapState(): { ready: boolean; missingEnvKeys: stri
 }
 
 function isPersonaHarness(harness: Harness): boolean {
-  return harness === "legal" || harness === "eng";
+  return harness === "legal" || harness === "eng" || harness === "invest";
 }
 
 type SlackReply = {
@@ -105,6 +111,256 @@ type SlackReply = {
   text?: string;
   bot_id?: string;
 };
+
+type SupportedSourceLink = {
+  url: string;
+  kind: "docsend" | "google_drive";
+};
+
+function collapseWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function clipText(value: string, maxChars = 360): string {
+  return value.length > maxChars ? `${value.slice(0, maxChars)}...` : value;
+}
+
+function normalizeSharedUrl(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^<|>$/g, "")
+    .replace(/[.,;:!?]+$/g, "");
+}
+
+function classifySupportedSource(rawUrl: string): SupportedSourceLink["kind"] | null {
+  const normalized = rawUrl.toLowerCase();
+  if (normalized.includes("docsend.com")) return "docsend";
+  if (normalized.includes("docs.google.com") || normalized.includes("drive.google.com")) {
+    return "google_drive";
+  }
+  return null;
+}
+
+function extractSupportedSourceLinks(text: string): SupportedSourceLink[] {
+  const candidates = text.match(/https?:\/\/[^\s<>"'`)\]]+/gi) || [];
+  const unique = new Set<string>();
+  const links: SupportedSourceLink[] = [];
+  for (const raw of candidates) {
+    const url = normalizeSharedUrl(raw);
+    if (!url || unique.has(url)) continue;
+    const kind = classifySupportedSource(url);
+    if (!kind) continue;
+    unique.add(url);
+    links.push({ url, kind });
+  }
+  return links;
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function buildArchiverExtractionContext(
+  source: SupportedSourceLink,
+  payload: ArchiverExtractResult,
+): string {
+  const status = readString(payload.status) || "unknown";
+  const error = readString(payload.error);
+  const files = Array.isArray(payload.files) ? payload.files : [];
+  const successful = files.filter(
+    (file) =>
+      file &&
+      typeof file === "object" &&
+      readString(file.status) === "ok",
+  );
+  const lines: string[] = [
+    "## Source Ingestion (archiver)",
+    `- URL: ${source.url}`,
+    `- Source type: ${source.kind}`,
+    `- Status: ${status}`,
+    `- Parsed files: ${successful.length}/${files.length}`,
+  ];
+  if (error) {
+    lines.push(`- Error: ${error}`);
+  }
+  for (const file of successful.slice(0, 2)) {
+    const fileMeta = file.file || {};
+    const metadata = (file.metadata as Record<string, unknown> | undefined) || {};
+    const filename = readString(fileMeta.filename) || "unknown";
+    const company = readString(
+      (metadata.company as Record<string, unknown> | undefined)?.name,
+    );
+    const docType = readString(
+      (metadata.document as Record<string, unknown> | undefined)?.doc_type,
+    );
+    const oneLiner = readString(
+      (metadata.summary as Record<string, unknown> | undefined)?.one_liner,
+    );
+    const parsedText = readString(file.parsed_text);
+    lines.push(
+      `- File: ${filename}` +
+      (company ? ` | company=${company}` : "") +
+      (docType ? ` | type=${docType}` : ""),
+    );
+    if (oneLiner) {
+      lines.push(`- Metadata summary: ${clipText(collapseWhitespace(oneLiner), 220)}`);
+    }
+    if (parsedText) {
+      lines.push(`- Parsed excerpt: ${clipText(collapseWhitespace(parsedText), 320)}`);
+    }
+  }
+  if (status !== "ok") {
+    lines.push(
+      "- Note: If link is auth-gated, ask user for required email/password or direct file upload.",
+    );
+  }
+  return lines.join("\n");
+}
+
+function buildArchiverFilesContext(
+  files: FileAttachment[],
+  payload: ArchiverExtractResult,
+): string {
+  const status = readString(payload.status) || "unknown";
+  const error = readString(payload.error);
+  const parsedFiles = Array.isArray(payload.files) ? payload.files : [];
+  const successful = parsedFiles.filter(
+    (file) =>
+      file &&
+      typeof file === "object" &&
+      readString(file.status) === "ok",
+  );
+  const lines: string[] = [
+    "## Uploaded Materials (archiver)",
+    `- Uploaded files: ${files.map((file) => file.name).join(", ")}`,
+    `- Status: ${status}`,
+    `- Parsed files: ${successful.length}/${parsedFiles.length}`,
+  ];
+  if (error) {
+    lines.push(`- Error: ${error}`);
+  }
+  for (const file of successful.slice(0, 3)) {
+    const fileMeta = file.file || {};
+    const metadata = (file.metadata as Record<string, unknown> | undefined) || {};
+    const filename = readString(fileMeta.filename) || "unknown";
+    const docType = readString(
+      (metadata.document as Record<string, unknown> | undefined)?.doc_type,
+    );
+    const oneLiner = readString(
+      (metadata.summary as Record<string, unknown> | undefined)?.one_liner,
+    );
+    const parsedText = readString(file.parsed_text);
+    lines.push(
+      `- File: ${filename}` + (docType ? ` | type=${docType}` : ""),
+    );
+    if (oneLiner) {
+      lines.push(`- Metadata summary: ${clipText(collapseWhitespace(oneLiner), 220)}`);
+    }
+    if (parsedText) {
+      lines.push(`- Parsed excerpt: ${clipText(collapseWhitespace(parsedText), 320)}`);
+    }
+  }
+  if (status !== "ok") {
+    lines.push(
+      "- Note: If parsing failed or the file is unavailable, ask the user for a shareable link or extracted text.",
+    );
+  }
+  return lines.join("\n");
+}
+
+async function ingestSupportedLinksIntoThreadContext(params: {
+  threadKey: string;
+  sourceLinks: SupportedSourceLink[];
+  userId?: string;
+  messageIdBase: string;
+  timeoutMs?: number;
+  maxLinks?: number;
+}): Promise<void> {
+  const limit = params.maxLinks ?? MAX_ARCHIVER_LINKS_PER_MESSAGE;
+  const limited = params.sourceLinks.slice(0, limit);
+  if (limited.length === 0) return;
+  const startedAt = Date.now();
+  let successCount = 0;
+  let errorCount = 0;
+  for (let index = 0; index < limited.length; index += 1) {
+    const source = limited[index];
+    const contextMessageId = `${params.messageIdBase}:archiver:${index + 1}`;
+    try {
+      const payload = await extractArchiverSource(source.url, {
+        maxDepth: 2,
+        context: {
+          thread_key: params.threadKey,
+          source_kind: source.kind,
+          source: "slack_subscribed_message",
+        },
+        timeoutMs: params.timeoutMs ?? 180_000,
+      });
+      const contextText = buildArchiverExtractionContext(source, payload);
+      await postThreadContextMessage(params.threadKey, contextText, {
+        source: "slack_archiver_ingest",
+        userId: params.userId,
+        messageId: contextMessageId,
+      });
+      successCount += 1;
+    } catch (error) {
+      const err = error instanceof Error ? error.message : String(error);
+      await postThreadContextMessage(
+        params.threadKey,
+        [
+          "## Source Ingestion (archiver)",
+          `- URL: ${source.url}`,
+          `- Source type: ${source.kind}`,
+          "- Status: error",
+          `- Error: ${err}`,
+          "- Note: If link is auth-gated, ask user for required email/password or direct file upload.",
+        ].join("\n"),
+        {
+          source: "slack_archiver_ingest",
+          userId: params.userId,
+          messageId: contextMessageId,
+        },
+      );
+      errorCount += 1;
+    }
+  }
+  console.info("archiver_context_ingest_complete", {
+    thread: params.threadKey,
+    attempted: limited.length,
+    succeeded: successCount,
+    failed: errorCount,
+    elapsed_ms: Date.now() - startedAt,
+  });
+}
+
+async function ingestSlackFilesIntoThreadContext(params: {
+  threadKey: string;
+  files: FileAttachment[];
+  userId?: string;
+  messageIdBase: string;
+  slackTs?: string;
+  timeoutMs?: number;
+  maxFiles?: number;
+}): Promise<string> {
+  const limit = params.maxFiles ?? MAX_ARCHIVER_FILES_PER_MESSAGE;
+  const files = params.files.slice(0, limit);
+  if (files.length === 0) return "";
+  const payload = await extractArchiverSlackFiles(files, {
+    context: {
+      thread_key: params.threadKey,
+      source: "slack_upload",
+    },
+    timeoutMs: params.timeoutMs ?? 180_000,
+  });
+  const contextText = buildArchiverFilesContext(files, payload);
+  await postThreadContextMessage(params.threadKey, contextText, {
+    source: "slack_archiver_ingest",
+    userId: params.userId,
+    messageId: `${params.messageIdBase}:archiver-files`,
+    slackTs: params.slackTs,
+    attachments: files,
+  });
+  return contextText;
+}
 
 async function fetchThreadHistory(
   channel: string,
@@ -274,7 +530,7 @@ function createBot() {
     adapters: hasSlackCreds ? { slack: createSlackAdapter() } : {},
     state: process.env.REDIS_URL ? createRedisState() : createMemoryState(),
     onLockConflict: "force",
-  } as ConstructorParameters<typeof Chat>[0]);
+  } as unknown as ConstructorParameters<typeof Chat>[0]);
   const recentMentionDeliveries = new Map<string, number>();
 
   function claimMentionDelivery(
@@ -381,7 +637,7 @@ function createBot() {
     if (!isFirstMessage && !activeHarness && !parsed.harnessExplicit) {
       await thread.post(
         toSlackMessage(
-          "I could not recover the active harness for this thread. Please retry with an explicit harness flag (for example `--legal`)."
+          "I could not recover the active harness for this thread. Please retry with an explicit harness flag (for example `--legal` or `--invest`)."
         )
       );
       return;
@@ -424,21 +680,51 @@ function createBot() {
       return;
     }
 
-    setThreadConfig(threadKey, { harness, engine, model, budgetMode });
+    const instruction = parsed.cleanedText || "hey";
+
+    setThreadConfig(threadKey, {
+      harness,
+      engine,
+      model,
+      budgetMode,
+    });
 
     try {
-      const instruction = parsed.cleanedText || "hey";
       await thread.startTyping("Running...");
       let threadHistory = "";
       const { channel, threadTs } = splitThreadKey(threadKey);
       if (isFirstMessage) {
         threadHistory = await fetchThreadHistory(channel, threadTs);
       }
+      let persistedContext = "";
+      try {
+        const storedContexts = await fetchThreadContextMessages(threadKey, {
+          sources: ["slack_archiver_ingest"],
+          limit: 6,
+        });
+        if (storedContexts.length > 0) {
+          persistedContext = [
+            "## Previously Extracted Materials",
+            "",
+            ...storedContexts,
+            "",
+            "---",
+            "",
+          ].join("\n");
+        }
+      } catch (error) {
+        log.warn("thread_context_fetch_failed", {
+          thread: threadKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
 
       let message = instruction;
       if (isFirstMessage) {
         const contextPrefix = buildSessionContext(threadKey, userId);
-        message = contextPrefix + threadHistory + instruction;
+        message = contextPrefix + threadHistory + persistedContext + instruction;
+      } else if (persistedContext) {
+        message = `${persistedContext}${instruction}`;
       }
 
       if (budgetMode) {
@@ -449,11 +735,100 @@ function createBot() {
       const liveReply = new SlackLiveReply(channel, threadTs);
       await liveReply.start("⏳ Working...", { viewerUrl });
       const tracker = new ProgressTracker();
-      const executionStartedAt = Date.now();
+      if (files.length > 0 && isPersonaHarness(harness)) {
+        try {
+          await thread.startTyping("Reading shared files...");
+          const fileContext = await ingestSlackFilesIntoThreadContext({
+            threadKey,
+            files,
+            userId,
+            messageIdBase: requestId,
+            slackTs,
+            timeoutMs: 180_000,
+          });
+          if (fileContext) {
+            message = `${message}\n\n${fileContext}`;
+          }
+        } catch (error) {
+          log.warn("slack_file_ingest_sync_failed", {
+            thread: threadKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          message = [
+            message,
+            "",
+            "Shared Slack uploads were present, but I could not parse them yet.",
+            "If the files are important to the call, ask the user for a shareable link or extracted text.",
+          ].join("\n");
+        }
+      }
+      const sourceLinks = extractSupportedSourceLinks(instruction);
+      if (sourceLinks.length > 0 && isPersonaHarness(harness)) {
+        const immediateLinks = sourceLinks.slice(0, 1);
+        let syncLinkIngestSucceeded = false;
+        try {
+          await thread.startTyping("Extracting shared materials...");
+          console.info("source_link_ingest_sync_start", {
+            thread: threadKey,
+            harness,
+            request_id: requestId,
+            link_count: immediateLinks.length,
+          });
+          await ingestSupportedLinksIntoThreadContext({
+            threadKey,
+            sourceLinks: immediateLinks,
+            userId,
+            messageIdBase: `${requestId}:ingest`,
+            timeoutMs: 60_000,
+            maxLinks: 1,
+          });
+          syncLinkIngestSucceeded = true;
+        } catch (error) {
+          console.warn("source_link_ingest_sync_failed", {
+            thread: threadKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
 
-      let streamReturn = "";
+        const deferredLinks = sourceLinks.slice(1);
+        if (deferredLinks.length > 0) {
+          console.info("source_link_ingest_deferred_start", {
+            thread: threadKey,
+            harness,
+            request_id: requestId,
+            link_count: deferredLinks.length,
+          });
+          void ingestSupportedLinksIntoThreadContext({
+            threadKey,
+            sourceLinks: deferredLinks,
+            userId,
+            messageIdBase: `${requestId}:ingest-deferred`,
+            timeoutMs: 120_000,
+          }).catch((error) => {
+            console.warn("source_link_ingest_deferred_failed", {
+              thread: threadKey,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+
+        const sourceContext = [
+          "Detected source links (DocSend/Google Drive):",
+          ...sourceLinks.map((link) => `- ${link.url} (${link.kind})`),
+          "",
+          "Extract each link using: `call archiver extract_source '{\"source_url\":\"<url>\",\"output_dir\":\"/tmp/archiver/<company>\"}'`",
+          "If extraction fails due to auth, ask the user for the required email/password or a direct file upload.",
+          syncLinkIngestSucceeded
+            ? `Pre-ingested ${Math.min(1, sourceLinks.length)} link as thread context; ${deferredLinks.length > 0 ? `${deferredLinks.length} more ingesting in background.` : "all links covered."}`
+            : "Automatic pre-ingest did not complete yet. If the first extraction matters immediately, run `archiver.extract_source` manually or ask the user for auth details.",
+        ].join("\n");
+        message = `${message}\n\n${sourceContext}`;
+      }
+      const executionStartedAt = Date.now();
+      let finalMessage = "";
 
       try {
+        let streamReturn = "";
         // Track total events yielded across iterations so reconnect can skip
         // already-seen events (the API replays full stdout history on reconnect).
         let totalYieldedCount = 0;
@@ -503,6 +878,7 @@ function createBot() {
             const reconnGen = reconnectStreamingWithRetries({
               threadKey,
               harness,
+              engine,
               skipCount: totalYieldedCount,
             });
 
@@ -540,6 +916,7 @@ function createBot() {
             const recoveryGen = reconnectStreamingWithRetries({
               threadKey,
               harness,
+              engine,
               skipCount: totalYieldedCount,
             });
             while (true) {
@@ -557,12 +934,11 @@ function createBot() {
             // Recovery is best-effort — don't fail the whole request
           }
         }
+        finalMessage = (tracker.resultText || tracker.lastAssistantText || streamReturn).trim();
       } catch (error) {
         liveReply.dispose();
         throw error;
       }
-
-      const finalMessage = (tracker.resultText || tracker.lastAssistantText || streamReturn).trim();
 
       // Persist user + assistant messages to chat_messages for thread viewer.
       // Use the Slack message timestamp for the user message so it sorts in
@@ -665,6 +1041,8 @@ function createBot() {
     if (!message.isMention) {
       const text = (message.text || "").trim();
       const threadKey = normalizeThreadKey(thread.id);
+      const threadConfig = await getThreadConfig(threadKey);
+      let activeHarness: Harness | null = threadConfig?.harness ?? null;
       const files: FileAttachment[] = (attachments || [])
         .filter((a): a is { url: string; name: string } => !!a.url && !!a.name)
         .map((a) => ({ url: a.url, name: a.name }));
@@ -690,6 +1068,55 @@ function createBot() {
         log.warn("thread_context_post_failed", {
           thread: threadKey,
           error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (!activeHarness) {
+        try {
+          const recovered = await fetchThreadRuntimeConfig(threadKey);
+          activeHarness = recovered.harness;
+          if (recovered.harness) {
+            setThreadConfig(threadKey, {
+              harness: recovered.harness,
+              engine: recovered.engine,
+              model: null,
+              budgetMode: null,
+            });
+          }
+        } catch (error) {
+          console.warn("thread_runtime_config_recovery_failed_subscribed", {
+            thread: threadKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (activeHarness && isPersonaHarness(activeHarness as Harness) && text) {
+        const sourceLinks = extractSupportedSourceLinks(text);
+        if (sourceLinks.length > 0) {
+          void ingestSupportedLinksIntoThreadContext({
+            threadKey,
+            sourceLinks,
+            userId: message.author.userId,
+            messageIdBase: messageId,
+          }).catch((error) => {
+            console.warn("archiver_context_ingest_failed", {
+              thread: threadKey,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
+      }
+      if (activeHarness && isPersonaHarness(activeHarness as Harness) && files.length > 0) {
+        void ingestSlackFilesIntoThreadContext({
+          threadKey,
+          files,
+          userId: message.author.userId,
+          messageIdBase: messageId,
+          slackTs,
+        }).catch((error) => {
+          log.warn("slack_file_ingest_deferred_failed", {
+            thread: threadKey,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
       }
       return;

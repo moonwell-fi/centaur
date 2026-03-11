@@ -49,6 +49,10 @@ export async function GET(request: Request) {
           MIN(cm.created_at) AS created_at,
           MAX(cm.created_at) AS message_last_activity,
           COUNT(*)::int AS message_count,
+          (SELECT metadata->>'harness' FROM chat_messages cm1
+           WHERE cm1.thread_key = $1 AND metadata->>'harness' IS NOT NULL
+           ORDER BY cm1.created_at DESC LIMIT 1
+          ) AS harness,
           (SELECT parts FROM chat_messages cm2
            WHERE cm2.thread_key = $1 AND cm2.role = 'user'
            ORDER BY cm2.created_at DESC LIMIT 1
@@ -95,6 +99,7 @@ export async function GET(request: Request) {
         row.session_harness,
         row.session_engine,
       ),
+      engine: (row.session_engine as string | null) || null,
       state: deriveStoredThreadState(
         row.session_state,
         row.latest_role,
@@ -156,6 +161,7 @@ export async function GET(request: Request) {
           pipeStatus.engine,
           detail.harness,
         );
+        detail.engine = pipeStatus.engine ?? detail.engine ?? null;
       }
     } catch {
       // Pipe server unreachable — keep idle state

@@ -41,6 +41,8 @@ class SandboxBackend(abc.ABC):
         harness: str,
         engine: str,
         *,
+        persona: str | None = None,
+        repo: str | None = None,
         warm: bool = False,
     ) -> SandboxSession:
         """Create and start a new sandbox. Block until ready."""
