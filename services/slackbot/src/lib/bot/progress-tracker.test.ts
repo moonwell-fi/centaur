@@ -47,12 +47,50 @@ type StreamChunk =
 
 type ActiveTool = { name: string; input: Record<string, unknown>; startedAt: number };
 
+const MAX_VISIBLE_STEPS = 5;
+
+type HistoryEntry = { toolId: string; title: string; status: string };
+
 class ProgressTracker {
   lastAssistantText = "";
   resultText = "";
   private activeTools = new Map<string, ActiveTool>();
   private _pendingChunks: StreamChunk[] = [];
   private initCompleted = false;
+  private stepHistory: HistoryEntry[] = [];
+
+  private emitVisibleWindow(): void {
+    const start = Math.max(0, this.stepHistory.length - MAX_VISIBLE_STEPS);
+    for (let i = start; i < this.stepHistory.length; i++) {
+      const entry = this.stepHistory[i];
+      this._pendingChunks.push({ type: "task_update", id: `step-${i - start}`, title: entry.title, status: entry.status });
+    }
+  }
+
+  private emitSlot(historyIndex: number): void {
+    const windowStart = Math.max(0, this.stepHistory.length - MAX_VISIBLE_STEPS);
+    const slotIndex = historyIndex - windowStart;
+    if (slotIndex < 0 || slotIndex >= MAX_VISIBLE_STEPS) return;
+    const entry = this.stepHistory[historyIndex];
+    this._pendingChunks.push({ type: "task_update", id: `step-${slotIndex}`, title: entry.title, status: entry.status });
+  }
+
+  private addStep(toolId: string, title: string, status: string): void {
+    this.stepHistory.push({ toolId, title, status });
+    if (this.stepHistory.length > MAX_VISIBLE_STEPS) {
+      this.emitVisibleWindow();
+    } else {
+      this.emitSlot(this.stepHistory.length - 1);
+    }
+  }
+
+  private updateStep(toolId: string, title: string, status: string): void {
+    const idx = this.stepHistory.findLastIndex((e) => e.toolId === toolId);
+    if (idx === -1) return;
+    this.stepHistory[idx].title = title;
+    this.stepHistory[idx].status = status;
+    this.emitSlot(idx);
+  }
 
   update(event: CanonicalEvent): boolean {
     if (!this.initCompleted) {
@@ -67,7 +105,7 @@ class ProgressTracker {
           this.lastAssistantText = "";
           this.activeTools.set(block.id, { name: block.name, input: block.input, startedAt: Date.now() });
           changed = true;
-          this._pendingChunks.push({ type: "task_update", id: block.id, title: block.name, status: "in_progress" });
+          this.addStep(block.id, block.name, "in_progress");
         } else if (block.type === "text" && block.text) {
           textInThisEvent = block.text;
         }
@@ -84,15 +122,19 @@ class ProgressTracker {
         if (this.activeTools.has(block.tool_use_id)) {
           this.activeTools.delete(block.tool_use_id);
           changed = true;
-          this._pendingChunks.push({ type: "task_update", id: block.tool_use_id, title: "done", status: block.is_error ? "error" : "complete" });
+          this.updateStep(block.tool_use_id, "done", block.is_error ? "error" : "complete");
         }
       }
       return changed;
     }
 
     if (event.type === "subagent") {
-      if (event.status === "started" || event.status === "completed" || event.status === "failed") {
-        this._pendingChunks.push({ type: "task_update", id: event.subagent_id, title: event.name || "Subagent", status: event.status === "started" ? "in_progress" : event.status === "completed" ? "complete" : "error" });
+      if (event.status === "started") {
+        this.addStep(event.subagent_id, event.name || "Subagent", "in_progress");
+        return true;
+      }
+      if (event.status === "completed" || event.status === "failed") {
+        this.updateStep(event.subagent_id, event.name || "Subagent", event.status === "completed" ? "complete" : "error");
         return true;
       }
       return false;
@@ -115,7 +157,7 @@ class ProgressTracker {
     this.activeTools.clear();
     this.lastAssistantText = "";
     this.resultText = "";
-    this._pendingChunks.push({ type: "task_update", id: `handoff-${Date.now()}`, title: `Handed off → ${goal}`, status: "complete" });
+    this.addStep(`handoff-${Date.now()}`, `Handed off → ${goal}`, "complete");
   }
 
   pendingChunks(): StreamChunk[] {
@@ -352,13 +394,13 @@ test("subagent events produce task_update chunks but don't affect lastAssistantT
   const t = new ProgressTracker();
   t.update({ type: "subagent", status: "started", subagent_id: "sa-1", name: "Research task" });
   const chunks = t.pendingChunks();
-  // init + subagent start
-  assert.ok(chunks.some((c) => c.type === "task_update" && c.id === "sa-1" && c.status === "in_progress"));
+  // init + subagent start (slot-based id)
+  assert.ok(chunks.some((c) => c.type === "task_update" && c.id === "step-0" && c.status === "in_progress"));
   assert.equal(t.lastAssistantText, "", "subagent start doesn't set text");
 
   t.update({ type: "subagent", status: "completed", subagent_id: "sa-1", name: "Research task", summary: "Found 5 results" });
   const chunks2 = t.pendingChunks();
-  assert.ok(chunks2.some((c) => c.type === "task_update" && c.id === "sa-1" && c.status === "complete"));
+  assert.ok(chunks2.some((c) => c.type === "task_update" && c.id === "step-0" && c.status === "complete"));
   assert.equal(t.lastAssistantText, "", "subagent complete doesn't set text");
 });
 
@@ -506,6 +548,74 @@ test("handoff tool_use clears preamble like any other tool", () => {
   t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "h1", name: "handoff", input: { goal: "Continue research", follow: true } }] } });
   assert.equal(t.lastAssistantText, "", "handoff tool_use clears text");
   assert.equal(finalMessage(t), "");
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 15. Waterfall sliding window (max 5 visible steps, shift-up)
+// ═══════════════════════════════════════════════════════════════════════════
+
+console.log("\n── Waterfall sliding window ──");
+
+test("first 5 tools each get a unique slot", () => {
+  const t = new ProgressTracker();
+  const starts: StreamChunk[] = [];
+
+  for (let i = 0; i < 5; i++) {
+    t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Bash", input: { cmd: `echo ${i}` } }] } });
+    const chunks = t.pendingChunks();
+    const toolChunks = chunks.filter((c) => c.type === "task_update" && (c as any).id !== "init");
+    starts.push(...toolChunks);
+    t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] });
+    t.pendingChunks(); // drain completions
+  }
+
+  const ids = starts.map((c) => (c as any).id);
+  assert.deepEqual(ids, ["step-0", "step-1", "step-2", "step-3", "step-4"]);
+});
+
+test("6th tool shifts window: slots show tools 2-6 instead of 1-5", () => {
+  const t = new ProgressTracker();
+
+  // Complete 5 tools
+  for (let i = 0; i < 5; i++) {
+    t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/file${i}` } }] } });
+    t.pendingChunks();
+    t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] });
+    t.pendingChunks();
+  }
+
+  // Start 6th tool — should trigger a shift
+  t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: "t5", name: "Read", input: { path: "/file5" } }] } });
+  const shiftChunks = t.pendingChunks();
+
+  // Should re-emit all 5 slots with shifted content:
+  // step-0=t1✓, step-1=t2✓, step-2=t3✓, step-3=t4✓, step-4=t5⏳
+  const taskUpdates = shiftChunks.filter((c) => c.type === "task_update" && (c as any).id !== "init");
+  assert.equal(taskUpdates.length, 5, "full window re-emitted on shift");
+
+  // step-4 (newest) should be in_progress
+  const last = taskUpdates.find((c) => (c as any).id === "step-4");
+  assert.equal((last as any).status, "in_progress", "newest slot is in_progress");
+
+  // step-0 (shifted) should be complete (was t1)
+  const first = taskUpdates.find((c) => (c as any).id === "step-0");
+  assert.equal((first as any).status, "complete", "oldest visible slot is complete");
+});
+
+test("all slot IDs stay within step-0 to step-4 regardless of tool count", () => {
+  const t = new ProgressTracker();
+  const allChunks: StreamChunk[] = [];
+
+  for (let i = 0; i < 10; i++) {
+    t.update({ type: "assistant", message: { content: [{ type: "tool_use", id: `t${i}`, name: "Read", input: { path: `/f${i}` } }] } });
+    allChunks.push(...t.pendingChunks());
+    t.update({ type: "tool", content: [{ tool_use_id: `t${i}`, content: "ok", is_error: false }] });
+    allChunks.push(...t.pendingChunks());
+  }
+
+  const taskUpdates = allChunks.filter((c) => c.type === "task_update" && (c as any).id !== "init");
+  const ids = new Set(taskUpdates.map((c) => (c as any).id));
+  assert.deepEqual(ids, new Set(["step-0", "step-1", "step-2", "step-3", "step-4"]));
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

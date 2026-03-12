@@ -3,12 +3,67 @@ import type { StreamChunk } from "chat";
 
 type ActiveTool = { name: string; input: Record<string, unknown>; startedAt: number };
 
+const MAX_VISIBLE_STEPS = 5;
+
+type HistoryEntry = { toolId: string; title: string; status: string };
+
 export class ProgressTracker {
   lastAssistantText = "";
   resultText = "";
   private activeTools = new Map<string, ActiveTool>();
   private _pendingChunks: StreamChunk[] = [];
   private initCompleted = false;
+  /** Ordered history of all step entries (grows unbounded but entries are tiny). */
+  private stepHistory: HistoryEntry[] = [];
+
+  /** Emit task_update chunks for the visible window (last MAX_VISIBLE_STEPS). */
+  private emitVisibleWindow(): void {
+    const start = Math.max(0, this.stepHistory.length - MAX_VISIBLE_STEPS);
+    for (let i = start; i < this.stepHistory.length; i++) {
+      const entry = this.stepHistory[i];
+      this._pendingChunks.push({
+        type: "task_update",
+        id: `step-${i - start}`,
+        title: entry.title,
+        status: entry.status,
+      });
+    }
+  }
+
+  /** Emit a single slot update without re-emitting the full window. */
+  private emitSlot(historyIndex: number): void {
+    const windowStart = Math.max(0, this.stepHistory.length - MAX_VISIBLE_STEPS);
+    const slotIndex = historyIndex - windowStart;
+    if (slotIndex < 0 || slotIndex >= MAX_VISIBLE_STEPS) return; // off-screen
+    const entry = this.stepHistory[historyIndex];
+    this._pendingChunks.push({
+      type: "task_update",
+      id: `step-${slotIndex}`,
+      title: entry.title,
+      status: entry.status,
+    });
+  }
+
+  /** Add a new step entry. If it causes a shift, re-emits the full window. */
+  private addStep(toolId: string, title: string, status: string): void {
+    this.stepHistory.push({ toolId, title, status });
+    if (this.stepHistory.length > MAX_VISIBLE_STEPS) {
+      // Window shifted — re-emit all visible slots
+      this.emitVisibleWindow();
+    } else {
+      // Still within initial slots, just emit the new one
+      this.emitSlot(this.stepHistory.length - 1);
+    }
+  }
+
+  /** Update an existing step entry's title and status. */
+  private updateStep(toolId: string, title: string, status: string): void {
+    const idx = this.stepHistory.findLastIndex((e) => e.toolId === toolId);
+    if (idx === -1) return;
+    this.stepHistory[idx].title = title;
+    this.stepHistory[idx].status = status;
+    this.emitSlot(idx);
+  }
 
   update(event: CanonicalEvent): boolean {
     // Complete the "Starting…" task on the first real event
@@ -37,12 +92,7 @@ export class ProgressTracker {
             startedAt: Date.now(),
           });
           changed = true;
-          this._pendingChunks.push({
-            type: "task_update",
-            id: block.id,
-            title: friendlyToolLabel(block.name, block.input),
-            status: "in_progress",
-          });
+          this.addStep(block.id, friendlyToolLabel(block.name, block.input), "in_progress");
         } else if (block.type === "text" && block.text) {
           textInThisEvent = block.text;
         }
@@ -63,12 +113,11 @@ export class ProgressTracker {
           this.activeTools.delete(block.tool_use_id);
           changed = true;
           const isDone = !block.is_error;
-          this._pendingChunks.push({
-            type: "task_update",
-            id: block.tool_use_id,
-            title: friendlyToolLabel(active.name, active.input, isDone),
-            status: block.is_error ? "error" : "complete",
-          });
+          this.updateStep(
+            block.tool_use_id,
+            friendlyToolLabel(active.name, active.input, isDone),
+            block.is_error ? "error" : "complete",
+          );
         }
       }
       return changed;
@@ -82,21 +131,15 @@ export class ProgressTracker {
     if (event.type === "subagent") {
       const label = `Subagent: ${event.name || "Subagent"}`;
       if (event.status === "started") {
-        this._pendingChunks.push({
-          type: "task_update",
-          id: event.subagent_id,
-          title: label,
-          status: "in_progress",
-        });
+        this.addStep(event.subagent_id, label, "in_progress");
         return true;
       }
       if (event.status === "completed" || event.status === "failed") {
-        this._pendingChunks.push({
-          type: "task_update",
-          id: event.subagent_id,
-          title: label,
-          status: event.status === "completed" ? "complete" : "error",
-        });
+        this.updateStep(
+          event.subagent_id,
+          label,
+          event.status === "completed" ? "complete" : "error",
+        );
         return true;
       }
       return false;
@@ -123,12 +166,7 @@ export class ProgressTracker {
     this.activeTools.clear();
     this.lastAssistantText = "";
     this.resultText = "";
-    this._pendingChunks.push({
-      type: "task_update",
-      id: `handoff-${Date.now()}`,
-      title: `Handed off → ${goal}`,
-      status: "complete",
-    });
+    this.addStep(`handoff-${Date.now()}`, `Handed off → ${goal}`, "complete");
   }
 
   pendingChunks(): StreamChunk[] {
