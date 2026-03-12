@@ -102,7 +102,7 @@ git clone https://github.com/paradigmxyz/centaur
 cd centaur
 cp .env.example .env          # configure secrets
 docker compose up -d           # start the stack
-docker build -t agent2:latest services/sandbox/
+docker build -t centaur-agent:latest services/sandbox/
 ```
 
 ## Contributing

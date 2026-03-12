@@ -1926,7 +1926,7 @@ def _force_remove_case_container(case_thread_key: str) -> None:
         client = docker.from_env()
         containers = client.containers.list(
             all=True,
-            filters={"label": [f"ai2.thread={case_thread_key}", "agent2=true"]},
+            filters={"label": [f"ai2.thread={case_thread_key}", "centaur-agent=true"]},
         )
         for container in containers:
             with contextlib.suppress(Exception):

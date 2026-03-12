@@ -31,7 +31,7 @@ def _get_rt(session: SandboxSession):
 
 
 def _image() -> str:
-    return os.getenv("AGENT_IMAGE", "agent2:latest")
+    return os.getenv("AGENT_IMAGE", "centaur-agent:latest")
 
 
 def _repos_host_dir() -> str:
@@ -172,7 +172,7 @@ class DockerSandboxBackend(SandboxBackend):
             stale.remove(force=True)
 
         labels = {
-            "agent2": "true",
+            "centaur-agent": "true",
             "ai2.pipe": "true",
             "ai2.thread": thread_key,
             "ai2.harness": harness,

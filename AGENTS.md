@@ -46,7 +46,7 @@ Set `OP_SERVICE_ACCOUNT_TOKEN` and `OP_VAULT`, then store the same secrets as it
 
 ```bash
 docker compose up -d
-docker build -t agent2:latest services/sandbox/
+docker build -t centaur-agent:latest services/sandbox/
 ```
 
 ### 3. Test
@@ -91,7 +91,7 @@ curl -s -X POST http://localhost:8000/agent/execute \
                     │                     ▼
                     │             ┌──────────────┐       ┌──────────────┐
                     │             │  sandbox     │──────►│  firewall    │
-                    │             │  agent2:latest│ HTTPS │  mitmproxy   │
+                    │             │  centaur-agent:latest│ HTTPS │  mitmproxy   │
                     │             │  amp/claude/  │ proxy │  injects     │
                     │             │  codex        │       │  real keys   │
                     │             └──────┬────────┘       └──────┬───────┘
@@ -116,7 +116,7 @@ curl -s -X POST http://localhost:8000/agent/execute \
 ### End-to-End Request Flow
 
 1. User mentions bot in Slack → webhook → nginx → slackbot → api
-2. API spawns/reuses Docker container (`agent2:latest`) for that thread
+2. API spawns/reuses Docker container (`centaur-agent:latest`) for that thread
 3. Executes harness (amp/claude-code/codex) via `docker exec`
 4. Harness calls tools via `curl` back to API at `http://api:8000` (REST, NOT MCP)
 5. LLM API calls route through firewall proxy which injects real credentials
@@ -269,8 +269,8 @@ The entrypoint supports persona variants via `AGENT_PERSONA` env var. If set to 
 - Stub API keys so harnesses init in API-key mode (not browser login)
 - `HTTPS_PROXY=http://firewall:8080` routes LLM calls through the firewall
 - Resource limits: 4GB memory, 2 CPUs
-- Image tagged `agent2:latest`
-- Labels: `agent2=true`, `ai2.thread`, `ai2.harness` for discovery/recovery
+- Image tagged `centaur-agent:latest`
+- Labels: `centaur-agent=true`, `ai2.thread`, `ai2.harness` for discovery/recovery
 
 ### Credential Injection (Firewall)
 
@@ -386,7 +386,7 @@ All deploys happen automatically via GitHub Actions on merge to `main`.
 | `tools/**` only | Zero-downtime hot-reload (file watcher auto-detects, no restart) |
 | `services/api/**` | `docker compose up -d --build api` |
 | `services/slackbot/**` | `docker compose up -d --build slackbot` |
-| `services/sandbox/**` | `docker build -t agent2:latest services/sandbox/` |
+| `services/sandbox/**` | `docker build -t centaur-agent:latest services/sandbox/` |
 | `docker-compose.yml`, `services/api/Dockerfile` | Rebuild API |
 
 **Tool hot-reload:** The API watches bind-mounted `tools/` directories via `watchfiles`. When tool files change, the API auto-reloads within seconds — no container restart needed.
@@ -397,7 +397,7 @@ All deploys happen automatically via GitHub Actions on merge to `main`.
 
 ```bash
 docker compose up -d postgres api
-docker build -t agent2:latest services/sandbox/
+docker build -t centaur-agent:latest services/sandbox/
 source .env
 ```
 
@@ -441,6 +441,6 @@ curl -s -X POST http://localhost:8000/agent/stop \
 ### Debugging
 
 ```bash
-docker ps --filter label=agent2=true
+docker ps --filter label=centaur-agent=true
 docker exec <container_id> curl -s -H "Authorization: Bearer $CENTAUR_API_KEY" http://api:8000/health
 ```
