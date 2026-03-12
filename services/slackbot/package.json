@@ -7,7 +7,9 @@
     "dev": "next dev --port 3001 --turbopack",
     "build": "next build",
     "start": "next start --port 3001",
-    "lint": "eslint src/"
+    "lint": "eslint src/",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@centaur/api-client": "workspace:*",
@@ -26,6 +28,7 @@
     "@types/node": "22.19.13",
     "@types/pg": "^8.18.0",
     "@types/react": "19.2.14",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "^4.1.0"
   }
 }
