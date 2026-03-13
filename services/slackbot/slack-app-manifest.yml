@@ -42,6 +42,9 @@ oauth_config:
       - assistant:write
 
 settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://svc-ai.paradigm.xyz/api/slack/interactions
   event_subscriptions:
     request_url: https://svc-ai.paradigm.xyz/api/webhooks/slack
     bot_events:
