@@ -12,6 +12,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
+      - default
       - backend_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tempo -d ai_v2"]
