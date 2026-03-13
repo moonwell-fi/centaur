@@ -464,5 +464,34 @@ export async function postThreadContextMessage(
   return { status: "accepted" };
 }
 
+export async function postMessages(
+  threadKey: string,
+  messages: Array<{
+    role?: string;
+    parts: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }>;
+    user_id?: string;
+    metadata?: Record<string, unknown>;
+  }>,
+): Promise<{ ok: boolean; inserted: number }> {
+  const normalizedKey = normalizeThreadKey(threadKey);
+  const res = await resilientFetch(`${API_URL}/agent/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      thread_key: normalizedKey,
+      messages,
+    }),
+    timeoutMs: 10_000,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new ApiError(
+      `/agent/messages failed (${res.status}): ${text.slice(0, 300)}`,
+      res.status,
+      res.status >= 500,
+    );
+  }
+  return res.json();
+}
+
 export { normalizeThreadKey };
 

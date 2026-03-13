@@ -7,6 +7,7 @@ import {
   executeStreamingWithBusyRetries,
   fetchThreadHarness,
   normalizeThreadKey,
+  postMessages,
   postThreadContextMessage,
   reconnectStreamingWithRetries,
   type ContentBlock,
@@ -125,6 +126,25 @@ async function fetchThreadHistory(
       const user = m.userId ? `<@${m.userId}>` : "Unknown";
       return `${user}: ${m.text || "(no text)"}`;
     });
+
+    // Backfill prior messages via POST /agent/messages
+    try {
+      const backfillMessages = prior.map((m) => ({
+        role: "user" as const,
+        parts: [{ type: "text" as const, text: m.text || "(no text)" }],
+        user_id: m.userId || undefined,
+        metadata: { source: "slack_backfill" },
+      }));
+      if (backfillMessages.length > 0) {
+        const normalizedKey = normalizeThreadKey(thread.id);
+        await postMessages(normalizedKey, backfillMessages);
+      }
+    } catch (err) {
+      log.warn("backfill_messages_failed", {
+        thread: thread.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     return [
       "## Prior Thread Messages",
@@ -441,6 +461,27 @@ function createBot() {
       const message: string | ContentBlock[] = contentBlocks.length > 0
         ? [{ type: "text" as const, text: textMessage }, ...contentBlocks]
         : textMessage;
+
+      // Buffer the message via POST /agent/messages
+      try {
+        const parts: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> = [
+          { type: "text", text: textMessage },
+        ];
+        for (const block of contentBlocks) {
+          parts.push(block as any);
+        }
+        await postMessages(threadKey, [{
+          role: "user",
+          parts,
+          user_id: userId,
+          metadata: { slack_ts: slackTs, source: "slack" },
+        }]);
+      } catch (err) {
+        log.warn("message_buffer_failed", {
+          thread: threadKey,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
 
       const tracker = new ProgressTracker();
       const executionStartedAt = Date.now();
