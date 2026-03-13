@@ -1,4 +1,3 @@
-import * as crypto from "node:crypto";
 import { Chat } from "chat";
 import { createSlackAdapter, type SlackAdapter } from "@chat-adapter/slack";
 import { createPostgresState } from "@chat-adapter/state-pg";
@@ -6,394 +5,237 @@ import { normalizeThreadKey, splitThreadKey } from "@centaur/harness-events";
 import { CentaurClient } from "@centaur/api-client";
 import type { InputContentBlock } from "@centaur/api-client";
 import { AxiosError } from "axios";
-import type { CanonicalEvent } from "@centaur/harness-events";
 import type { StreamChunk } from "chat";
 import { Pool } from "pg";
 import { log } from "@/lib/logger";
 import { ProgressTracker } from "./progress-tracker";
 
-// ── Config ──────────────────────────────────────────────────────────────────
-
-const SLACK_BOT_USERNAME = process.env.SLACK_BOT_USERNAME || "ai-agent";
-const THREAD_VIEWER_URL = process.env.THREAD_VIEWER_URL || "";
-const KEEPALIVE_MS = 60_000;
-
-// ── Singletons ──────────────────────────────────────────────────────────────
-
-let _pool: Pool | null = null;
-function getPool(): Pool {
-  if (!_pool) {
-    _pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
-  }
-  return _pool;
-}
-
-let _client: CentaurClient | null = null;
-function getClient(): CentaurClient {
-  if (!_client) {
-    _client = new CentaurClient({
-      apiUrl: process.env.CENTAUR_API_URL || "http://api:8000",
-      apiKey: process.env.SLACKBOT_API_KEY || "",
-      logger: log,
-    });
-  }
-  return _client;
-}
-
-// ── Types ───────────────────────────────────────────────────────────────────
-
 type Thread = Parameters<Parameters<Chat["onNewMention"]>[0]>[0];
+type Message = Parameters<Parameters<Chat["onNewMention"]>[0]>[1];
+type Attachment = NonNullable<Message["attachments"]>[number];
 
-// ── Attachments ─────────────────────────────────────────────────────────────
+export class SlackBot {
+  readonly chat: Chat;
+  readonly client: CentaurClient;
+  private viewerUrl: string;
 
-async function resolveAttachments(
-  attachments: Array<{ url?: string; name?: string; mimeType?: string; fetchData?: () => Promise<Buffer> }>,
-): Promise<InputContentBlock[]> {
-  const blocks: InputContentBlock[] = [];
-  for (const att of attachments) {
-    if (!att.fetchData || !att.mimeType) continue;
-    try {
-      const data = await att.fetchData();
-      const b64 = data.toString("base64");
-      const base = { source: { type: "base64" as const, media_type: att.mimeType, data: b64 } };
-      blocks.push(
-        att.mimeType.startsWith("image/")
-          ? { type: "image", ...base } as InputContentBlock
-          : { type: "document", ...base } as InputContentBlock,
-      );
-    } catch (err) {
-      log.warn("attachment_fetch_failed", {
-        name: att.name || "unknown",
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-  return blocks;
-}
+  constructor(opts: { client: CentaurClient; pool: Pool; userName?: string; viewerUrl?: string }) {
+    this.client = opts.client;
+    this.viewerUrl = opts.viewerUrl || "";
+    this.chat = new Chat({
+      userName: opts.userName || "ai-agent",
+      adapters: Boolean(process.env.SLACK_BOT_TOKEN && process.env.SLACK_SIGNING_SECRET)
+        ? { slack: createSlackAdapter() } : {},
+      state: createPostgresState({ client: opts.pool }),
+      onLockConflict: "force",
+    } as ConstructorParameters<typeof Chat>[0]);
 
-// ── Formatting ──────────────────────────────────────────────────────────────
-
-const LOW_VALUE_RE = [
-  /^i('ve| have) (handed off|delegated)/i,
-  /^(handing off|delegating)/i,
-  /^continuing in/i,
-];
-
-function isLowValue(text: string): boolean {
-  return !text || LOW_VALUE_RE.some((p) => p.test(text.trim()));
-}
-
-function formatFinal(text: string, harness: string, tracker: ProgressTracker, startTime: number): string {
-  const dur = (Date.now() - startTime) / 1000;
-  const durStr = dur < 10 ? `${dur.toFixed(1)}s` : `${Math.round(dur)}s`;
-  const hLabel = tracker.agentThreadId
-    ? `[${harness}](https://ampcode.com/threads/${tracker.agentThreadId})`
-    : harness;
-  const meta = [process.env.APP_NAME || "Centaur", hLabel, durStr].filter(Boolean);
-  return `_${meta.join(" · ")}_\n\n${text}`;
-}
-
-function formatErrorForSlack(error: unknown, context: string): string {
-  if (error instanceof AxiosError) {
-    const status = error.response?.status;
-    if (!status) return `${context}: API is unreachable. The service may be restarting — try again in ~30s.`;
-    if (status >= 500) return `${context}: API returned ${status}. Try again shortly.`;
-    return `${context}: ${error.message}`;
-  }
-  if (error instanceof Error) return `${context}: ${error.message}`;
-  return `${context}: unknown error`;
-}
-
-// ── Streaming ───────────────────────────────────────────────────────────────
-
-async function* streamTurn(
-  threadKey: string,
-  message: string | InputContentBlock[],
-  tracker: ProgressTracker,
-  userId?: string,
-): AsyncGenerator<StreamChunk> {
-  if (THREAD_VIEWER_URL) {
-    yield { type: "markdown_text", text: `[Thread Viewer](${THREAD_VIEWER_URL}/${encodeURIComponent(threadKey)})` };
-  }
-  yield { type: "task_update", id: "init", title: "Starting…", status: "in_progress" };
-
-  const client = getClient();
-  const stream = client.execute({ threadKey, message, platform: "slack", userId });
-  let keepaliveId = 0;
-
-  while (true) {
-    const nextP = stream.next();
-    const winner = await Promise.race([
-      nextP.then((r) => ({ kind: "event" as const, result: r })),
-      new Promise<{ kind: "keepalive" }>((resolve) =>
-        setTimeout(() => resolve({ kind: "keepalive" }), KEEPALIVE_MS),
-      ),
-    ]);
-
-    let result: IteratorResult<CanonicalEvent>;
-    if (winner.kind === "keepalive") {
-      yield { type: "task_update", id: `keepalive-${keepaliveId++}`, title: "Working…", status: "in_progress" };
-      result = await nextP;
-    } else {
-      result = winner.result;
-    }
-
-    if (result.done) break;
-
-    if (tracker.update(result.value)) {
-      for (const chunk of tracker.pendingChunks()) yield chunk;
-    }
+    this.chat.onNewMention((t, m) => this.onNewMention(t, m));
+    this.chat.onSubscribedMessage((t, m) => this.onSubscribedMessage(t, m));
   }
 
-  if (!tracker.initCompleted) {
-    yield { type: "task_update", id: "init", title: "Started", status: "complete" };
-  }
-}
-
-// ── Message handler ─────────────────────────────────────────────────────────
-
-async function handleMessage(
-  bot: Chat,
-  thread: Thread,
-  messageText: string,
-  isFirstMessage: boolean,
-  attachments: Array<{ url?: string; name?: string; mimeType?: string; fetchData?: () => Promise<Buffer> }>,
-  userId?: string,
-  slackTs?: string,
-) {
-  const rawThreadId = thread.id;
-  const threadKey = normalizeThreadKey(rawThreadId);
-
-  log.info("message_received", {
-    thread_key: threadKey,
-    is_first_message: isFirstMessage,
-    has_attachments: Boolean(attachments.length),
-    user_id: userId,
-  });
-
-  const contentBlocks = await resolveAttachments(attachments);
-  const message: string | InputContentBlock[] = contentBlocks.length > 0
-    ? [{ type: "text" as const, text: messageText }, ...contentBlocks]
-    : messageText;
-
-  const tracker = new ProgressTracker();
-  const startTime = Date.now();
-  log.info("execute_start", { thread_key: threadKey });
-
-  try {
-    let sentMessage: Awaited<ReturnType<typeof thread.post>> | null = null;
-    try {
-      sentMessage = await thread.post(
-        streamTurn(threadKey, message, tracker, userId),
-      );
-    } catch (streamErr) {
-      const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
-      if (errMsg.includes("message_not_in_streaming_state")) {
-        log.warn("slack_stream_expired", { thread_key: threadKey });
-        try {
-          const status = await getClient().getStatus(threadKey);
-          const result = status.last_result;
-          if (typeof result === "string" && result.trim() && !isLowValue(result.trim())) {
-            await thread.post({ markdown: result.trim() });
-          } else if (THREAD_VIEWER_URL) {
-            await thread.post({ markdown: `Agent completed. [View full output](${THREAD_VIEWER_URL}/${encodeURIComponent(threadKey)})` });
-          }
-        } catch {
-          if (THREAD_VIEWER_URL) {
-            await thread.post({ markdown: `Agent completed. [View full output](${THREAD_VIEWER_URL}/${encodeURIComponent(threadKey)})` });
-          }
-        }
-        return;
-      }
-      throw streamErr;
-    }
-
-    const harness = (tracker as any).harness || "agent";
-    const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
-    const durationS = (Date.now() - startTime) / 1000;
-    log.info("execute_complete", {
-      thread_key: threadKey,
-      duration_s: Math.round(durationS * 10) / 10,
-      result_length: finalText.length,
+  static createFromEnv(): SlackBot {
+    return new SlackBot({
+      client: new CentaurClient({
+        apiUrl: process.env.CENTAUR_API_URL || "http://api:8000",
+        apiKey: process.env.SLACKBOT_API_KEY || "",
+        logger: log,
+      }),
+      pool: new Pool({ connectionString: process.env.DATABASE_URL, max: 10 }),
+      userName: process.env.SLACK_BOT_USERNAME || "ai-agent",
+      viewerUrl: process.env.THREAD_VIEWER_URL || "",
     });
-
-    if (finalText && !isLowValue(finalText)) {
-      try {
-        const editParts = [formatFinal(finalText, harness, tracker, startTime)];
-        if (THREAD_VIEWER_URL) {
-          editParts.push(`\n\n[Thread Viewer](${THREAD_VIEWER_URL}/${encodeURIComponent(threadKey)})`);
-        }
-        await sentMessage!.edit({ markdown: editParts.join("") });
-      } catch {
-        // best-effort — streamed message already has the final text
-      }
-    }
-
-    if (finalText) {
-      try {
-        const slack = bot.getAdapter("slack") as SlackAdapter;
-        const { channel, threadTs } = splitThreadKey(rawThreadId);
-        await slack.setAssistantTitle(channel, threadTs, finalText.slice(0, 60));
-      } catch {
-        // best-effort — only works in assistant threads (DMs)
-      }
-    }
-  } catch (error) {
-    log.error("execute_error", { thread_key: threadKey, error: error instanceof Error ? error.message : String(error) });
-    await thread.post(async function* () {
-      yield { type: "task_update" as const, id: "init", title: "Failed", status: "error" as const };
-      yield { type: "markdown_text" as const, text: formatErrorForSlack(error, "Agent request failed") };
-    }());
   }
-}
 
-// ── Bot setup ───────────────────────────────────────────────────────────────
+  static getBootstrapState() {
+    const required = ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"] as const;
+    const missing = required.filter((k) => !process.env[k]?.trim());
+    return { ready: missing.length === 0, missingEnvKeys: [...missing] };
+  }
 
-export function getSlackBootstrapState(): { ready: boolean; missingEnvKeys: string[] } {
-  const required = ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"] as const;
-  const missingEnvKeys = required.filter((k) => !process.env[k]?.trim());
-  return { ready: missingEnvKeys.length === 0, missingEnvKeys: [...missingEnvKeys] };
-}
+  // ── Handlers ────────────────────────────────────────────────────────────
 
-function messageIdentifier(message: { ts?: string; userId?: string; text?: string; threadId?: string }): string {
-  const ts = String(message.ts || "").trim();
-  if (ts) return ts;
-  return crypto.createHash("sha1").update(`${message.threadId || ""}:${message.userId || ""}:${message.text || ""}`).digest("hex");
-}
-
-function createBot() {
-  const hasSlackCreds = Boolean(process.env.SLACK_BOT_TOKEN && process.env.SLACK_SIGNING_SECRET);
-
-  const bot = new Chat({
-    userName: SLACK_BOT_USERNAME,
-    adapters: hasSlackCreds ? { slack: createSlackAdapter() } : {},
-    state: createPostgresState({ client: getPool() }),
-    onLockConflict: "force",
-  } as ConstructorParameters<typeof Chat>[0]);
-
-  // ── Mentions ────────────────────────────────────────────────────────────
-
-  bot.onNewMention(async (thread, message) => {
-    if (message.author.isMe || message.author.isBot) return;
+  async onNewMention(thread: Thread, msg: Message) {
+    if (msg.author.isMe || msg.author.isBot) return;
     await thread.subscribe();
+    const attachments = await this.loadAttachments(thread, msg);
+    await this.executeTurn(thread, msg.text, attachments, msg.author.userId);
+  }
 
-    let attachments = message.attachments ? [...message.attachments] : [];
-    const mentionTs = (message as { ts?: string }).ts || "";
+  async onSubscribedMessage(thread: Thread, msg: Message) {
+    if (msg.author.isMe || msg.author.isBot) return;
 
-    if (attachments.length === 0 && mentionTs) {
-      try {
-        const slack = bot.getAdapter("slack") as SlackAdapter;
-        const refetched = await slack.fetchMessage(thread.id, mentionTs);
-        if (refetched?.attachments?.length) {
-          attachments = [...refetched.attachments];
-          log.info("mention_files_refetched", { thread: thread.id, count: attachments.length });
-        }
-      } catch (err) {
-        log.warn("mention_files_refetch_failed", {
-          thread: thread.id,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    await handleMessage(bot, thread, message.text, true, attachments, message.author.userId, mentionTs);
-  });
-
-  // ── Subscribed messages ─────────────────────────────────────────────────
-
-  bot.onSubscribedMessage(async (thread, message) => {
-    if (message.author.isMe || message.author.isBot) return;
-
-    if (message.isMention) {
-      const subTs = (message as { ts?: string }).ts || "";
-      await handleMessage(bot, thread, message.text, false, message.attachments || [], message.author.userId, subTs);
+    if (msg.isMention) {
+      await this.executeTurn(thread, msg.text, msg.attachments || [], msg.author.userId);
       return;
     }
 
-    const text = (message.text || "").trim();
-    const threadKey = normalizeThreadKey(thread.id);
-    const rawAttachments = message.attachments || [];
-    const files = rawAttachments
+    const text = (msg.text || "").trim();
+    const files = (msg.attachments || [])
       .filter((a) => !!a.url && !!a.name)
       .map((a) => ({ url: a.url!, name: a.name!, mimeType: a.mimeType }));
     if (!text && files.length === 0) return;
 
-    const mid = messageIdentifier({
-      ts: (message as { ts?: string }).ts || (message as { id?: string }).id,
-      userId: message.author.userId,
-      text,
-      threadId: thread.id,
-    });
-
     try {
-      const client = getClient();
-      await client.postContext({
-        threadKey,
+      await this.client.postContext({
+        threadKey: normalizeThreadKey(thread.id),
         text: text || "Shared attachment in thread.",
-        userId: message.author.userId,
+        userId: msg.author.userId,
         attachments: files.length > 0 ? files : undefined,
       });
-    } catch (error) {
-      log.warn("thread_context_post_failed", {
-        thread: threadKey,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  });
-
-  // ── Orphan recovery ─────────────────────────────────────────────────────
-
-  async function checkOrphanedCompletions() {
-    if (!hasSlackCreds) return;
-    const client = getClient();
-    try {
-      const orphans = await client.listOrphaned({ maxAgeS: 300 });
-      if (orphans.length === 0) return;
-      log.info("orphan_check_found", { count: orphans.length });
-
-      const slack = bot.getAdapter("slack") as SlackAdapter;
-
-      for (const orphan of orphans) {
-        if (!orphan.text) continue;
-        let channel: string, threadTs: string;
-        try {
-          ({ channel, threadTs } = splitThreadKey(orphan.thread_key));
-        } catch {
-          continue;
-        }
-        if (!/^[CDG]/.test(channel)) continue;
-
-        try {
-          const claimed = await client.claimDelivery(orphan.thread_key);
-          if (!claimed) continue;
-        } catch {
-          continue;
-        }
-
-        try {
-          await slack.postMessage(`slack:${channel}:${threadTs}`, orphan.text);
-          log.info("orphan_delivered", { thread_key: orphan.thread_key });
-          await client.markDelivered(orphan.thread_key);
-        } catch (err) {
-          log.warn("orphan_delivery_failed", {
-            thread_key: orphan.thread_key,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
     } catch (err) {
-      log.warn("orphan_check_failed", { error: err instanceof Error ? err.message : String(err) });
+      log.warn("thread_context_post_failed", {
+        thread: thread.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
-  setTimeout(checkOrphanedCompletions, 10_000);
-  setInterval(checkOrphanedCompletions, 60_000);
+  // ── Core ─────────────────────────────────────────────────────────────────
 
-  return bot;
+  async executeTurn(thread: Thread, text: string, attachments: Attachment[], userId?: string) {
+    const threadKey = normalizeThreadKey(thread.id);
+    const input = await this.buildInput(text, attachments);
+    const tracker = new ProgressTracker();
+    const startTime = Date.now();
+
+    log.info("execute_start", { thread_key: threadKey, user_id: userId });
+
+    try {
+      const sentMessage = await thread.post(this.streamTurn(threadKey, input, tracker, userId));
+
+      const harness = (tracker as any).harness || "agent";
+      const finalText = (tracker.resultText || tracker.lastAssistantText).trim();
+      log.info("execute_complete", {
+        thread_key: threadKey,
+        duration_s: Math.round((Date.now() - startTime) / 100) / 10,
+        result_length: finalText.length,
+      });
+
+      if (finalText) {
+        const dur = (Date.now() - startTime) / 1000;
+        const durStr = dur < 10 ? `${dur.toFixed(1)}s` : `${Math.round(dur)}s`;
+        const hLabel = tracker.agentThreadId
+          ? `[${harness}](https://ampcode.com/threads/${tracker.agentThreadId})`
+          : harness;
+        const meta = [process.env.APP_NAME || "Centaur", hLabel, durStr].filter(Boolean);
+        let md = `_${meta.join(" · ")}_\n\n${finalText}`;
+        if (this.viewerUrl) md += `\n\n[Thread Viewer](${this.viewerUrl}/${encodeURIComponent(threadKey)})`;
+        try { await sentMessage.edit({ markdown: md }); } catch {}
+      }
+
+      if (finalText) {
+        try {
+          const slack = this.chat.getAdapter("slack") as SlackAdapter;
+          const { channel, threadTs } = splitThreadKey(thread.id);
+          await slack.setAssistantTitle(channel, threadTs, finalText.slice(0, 60));
+        } catch {}
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("message_not_in_streaming_state")) {
+        log.warn("slack_stream_expired", { thread_key: threadKey });
+        await this.recoverExpired(thread, threadKey);
+        return;
+      }
+      log.error("execute_error", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
+      await thread.post(async function* () {
+        yield { type: "task_update" as const, id: "init", title: "Failed", status: "error" as const };
+        yield { type: "markdown_text" as const, text: formatError(err, "Agent request failed") };
+      }());
+    }
+  }
+
+  // ── Streaming ────────────────────────────────────────────────────────────
+
+  private async *streamTurn(
+    threadKey: string, input: string | InputContentBlock[], tracker: ProgressTracker, userId?: string,
+  ): AsyncGenerator<StreamChunk> {
+    if (this.viewerUrl) {
+      yield { type: "markdown_text", text: `[Thread Viewer](${this.viewerUrl}/${encodeURIComponent(threadKey)})` };
+    }
+    yield { type: "task_update", id: "init", title: "Starting…", status: "in_progress" };
+
+    for await (const event of this.client.execute({ threadKey, message: input, platform: "slack", userId })) {
+      if (tracker.update(event)) {
+        for (const chunk of tracker.pendingChunks()) yield chunk;
+      }
+    }
+
+    if (!tracker.initCompleted) {
+      yield { type: "task_update", id: "init", title: "Started", status: "complete" };
+    }
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────────
+
+  private async loadAttachments(thread: Thread, msg: Message): Promise<Attachment[]> {
+    if (msg.attachments?.length) return [...msg.attachments];
+    const ts = (msg as { ts?: string }).ts || "";
+    if (!ts) return [];
+    try {
+      const slack = this.chat.getAdapter("slack") as SlackAdapter;
+      const refetched = await slack.fetchMessage(thread.id, ts);
+      if (refetched?.attachments?.length) {
+        log.info("mention_files_refetched", { thread: thread.id, count: refetched.attachments.length });
+        return [...refetched.attachments];
+      }
+    } catch (err) {
+      log.warn("mention_files_refetch_failed", { thread: thread.id, error: err instanceof Error ? err.message : String(err) });
+    }
+    return [];
+  }
+
+  private async buildInput(text: string, attachments: Attachment[]): Promise<string | InputContentBlock[]> {
+    const blocks: InputContentBlock[] = [];
+    for (const att of attachments) {
+      if (!att.fetchData || !att.mimeType) continue;
+      try {
+        const data = await att.fetchData();
+        const b64 = data.toString("base64");
+        const source = { type: "base64" as const, media_type: att.mimeType, data: b64 };
+        blocks.push(att.mimeType.startsWith("image/") ? { type: "image", source } : { type: "document", source });
+      } catch (err) {
+        log.warn("attachment_fetch_failed", { name: att.name || "unknown", error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return blocks.length > 0 ? [{ type: "text", text }, ...blocks] : text;
+  }
+
+  private async recoverExpired(thread: Thread, threadKey: string) {
+    try {
+      const status = await this.client.getStatus(threadKey);
+      const result = typeof status.last_result === "string" ? status.last_result.trim() : "";
+      if (result) {
+        await thread.post({ markdown: result });
+      } else if (this.viewerUrl) {
+        await thread.post({ markdown: `Agent completed. [View full output](${this.viewerUrl}/${encodeURIComponent(threadKey)})` });
+      }
+    } catch {
+      if (this.viewerUrl) {
+        await thread.post({ markdown: `Agent completed. [View full output](${this.viewerUrl}/${encodeURIComponent(threadKey)})` });
+      }
+    }
+  }
 }
 
-let _bot: ReturnType<typeof createBot> | null = null;
-export function getBot() {
-  if (!_bot) _bot = createBot();
+function formatError(err: unknown, context: string): string {
+  if (err instanceof AxiosError) {
+    const status = err.response?.status;
+    if (!status) return `${context}: API is unreachable. Try again in ~30s.`;
+    if (status >= 500) return `${context}: API returned ${status}. Try again shortly.`;
+    return `${context}: ${err.message}`;
+  }
+  return `${context}: ${err instanceof Error ? err.message : "unknown error"}`;
+}
+
+// ── Singleton for Next.js ──────────────────────────────────────────────────
+
+let _bot: SlackBot | null = null;
+export function getBot(): SlackBot {
+  if (!_bot) _bot = SlackBot.createFromEnv();
   return _bot;
+}
+
+export function getSlackBootstrapState() {
+  return SlackBot.getBootstrapState();
 }
