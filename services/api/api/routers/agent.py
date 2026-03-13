@@ -16,16 +16,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from api.agent import (
-    claim_for_delivery,
-    get_or_spawn,
-    get_status,
-    list_undelivered,
-    mark_delivered,
-    stop_session,
-    stream_exec,
-    stream_reconnect,
-)
+from api.agent import get_or_spawn, get_status, stop_session, stream_exec, stream_reconnect
 from api.deps import require_scope, verify_api_key
 from api.warm_pool import pool_status
 from api.warm_pool import replenish as replenish_pool

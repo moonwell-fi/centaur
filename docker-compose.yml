@@ -320,19 +320,6 @@ services:
       - obs_net
     restart: unless-stopped
 
-  alerting:
-    build: services/alerting
-    environment:
-      VLOGS_URL: http://victorialogs:9428
-      ALERT_SLACK_WEBHOOK: ${ALERT_SLACK_WEBHOOK:-}
-      CHECK_INTERVAL: "60"
-    depends_on:
-      victorialogs:
-        condition: service_healthy
-    networks:
-      - obs_net
-    restart: unless-stopped
-
 volumes:
   pgdata:
     external: true
