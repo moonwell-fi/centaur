@@ -36,7 +36,6 @@
     "nanoid": "^5.1.6",
     "next": "15.5.12",
     "next-themes": "0.4.6",
-    "pg": "^8.20.0",
     "postcss": "8.5.6",
     "radix-ui": "^1.4.3",
     "react": "19.2.4",
@@ -58,7 +57,6 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.1",
     "@types/node": "22.19.13",
-    "@types/pg": "^8.18.0",
     "@types/react": "19.2.14",
     "@types/react-grid-layout": "^2.1.0",
     "@typescript-eslint/parser": "^8.56.1",
