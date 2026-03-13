@@ -43,7 +43,7 @@ def _repo_host_dir() -> str:
     return os.getenv("REPO_HOST_DIR", os.path.join(_repos_host_dir(), "paradigmxyz", "centaur"))
 
 
-_HARNESS_STUB_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMP_API_KEY")
+_HARNESS_STUB_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMP_API_KEY", "GITHUB_TOKEN")
 
 
 def _build_harness_cmd(engine: str, model: str | None = None) -> list[str]:

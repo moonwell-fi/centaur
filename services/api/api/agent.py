@@ -359,7 +359,6 @@ async def stream_exec(
     """Run a turn: flush pending messages, write to stdin, stream stdout.
 
     Yields SSE-ready ``{"data": line}`` dicts directly to EventSourceResponse.
-    Emits a final ``{"data": "[DONE]"}`` sentinel when the turn completes.
 
     Pipeline (2 layers):
       aiodocker stdout async iterator → this generator → EventSourceResponse
@@ -521,8 +520,6 @@ async def stream_exec(
             duration_s=time.monotonic() - started_at,
         )
 
-        yield {"data": "[DONE]"}
-
     except Exception:
         await _db_update_state(session.thread_key, "error")
         record_agent_execution(
@@ -587,8 +584,6 @@ async def stream_reconnect(
                 "agent_thread_id": agent_thread_id or "",
             })}
             break
-
-    yield {"data": "[DONE]"}
 
 
 async def _persist_turn_messages(
