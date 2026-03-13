@@ -66,7 +66,7 @@ export class CentaurClient {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: this.http.defaults.headers.common?.["Authorization"] as string,
+          Authorization: (this.http.defaults.headers["Authorization"] ?? this.http.defaults.headers.common?.["Authorization"]) as string,
           "X-Trace-Id": threadKey,
         },
         body: JSON.stringify(body),
