@@ -27,13 +27,10 @@ jobs:
           git fetch origin main
           git reset --hard origin/main
 
-      - name: Build sandbox image
-        run: docker build -t centaur-agent:latest -f services/sandbox/Dockerfile .
-
-      - name: Deploy
+      - name: Build & deploy
         run: |
-          docker compose build
-          docker compose up -d
+          docker compose build sandbox
+          docker compose up -d --build
 
       - name: Health check
         run: |

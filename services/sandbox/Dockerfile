@@ -1,4 +1,6 @@
-FROM ubuntu:24.04
+# syntax=docker/dockerfile:1.7
+
+FROM ubuntu:24.04 AS toolchain
 
 # ── System packages (cached unless base image changes) ───────────────────────
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -12,7 +14,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     procps htop \
     && ln -sf /usr/bin/fdfind /usr/local/bin/fd
 
-RUN pip3 install --break-system-packages --no-cache-dir \
+# ── Python deps ──────────────────────────────────────────────────────────────
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    pip3 install --break-system-packages \
     python-docx lxml docx-revisions \
     matplotlib numpy pandas
 
@@ -31,38 +35,30 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && apt-get update && apt-get install -y gh nodejs docker-ce-cli
 
 # ── Non-root agent user ─────────────────────────────────────────────────────
-RUN useradd -m -s /bin/bash agent \
+RUN useradd -m -s /bin/bash -u 1001 agent \
     && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers.d/agent
+
+# ── Global npm CLIs (root, cached) ──────────────────────────────────────────
+RUN --mount=type=cache,target=/root/.npm,sharing=locked \
+    npm install -g @anthropic-ai/claude-code @openai/codex @mariozechner/pi-coding-agent agent-browser
+
 USER agent
 WORKDIR /home/agent
 
-# ── Rust (agent user only) ───────────────────────────────────────────────────
+ENV PATH="/home/agent/.cargo/bin:/home/agent/.local/bin:/home/agent/.foundry/bin:${PATH}"
+
+# ── Agent-scoped toolchains ─────────────────────────────────────────────────
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/home/agent/.cargo/bin:${PATH}"
-
-# ── uv (agent user only) ────────────────────────────────────────────────────
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/home/agent/.local/bin:${PATH}"
-
-# ── Foundry (agent user only) ───────────────────────────────────────────────
 RUN curl -L https://foundry.paradigm.xyz | bash \
     && /home/agent/.foundry/bin/foundryup
-ENV PATH="/home/agent/.foundry/bin:${PATH}"
-
-# ── Harness CLIs (amp, claude-code, codex, pi-mono) ──────────────────────────
 RUN curl -fsSL https://ampcode.com/install.sh | bash
-USER root
-RUN npm install -g @anthropic-ai/claude-code @openai/codex @mariozechner/pi-coding-agent agent-browser
-USER agent
 
-# ── agent-browser (Chromium + system deps for headless browser) ──────────────
+# ── agent-browser (Chromium + system deps — heavy, keep isolated) ────────────
 RUN agent-browser install --with-deps
 
-# ── Agent skills (agent-browser + dogfood) ───────────────────────────────────
+# ── Agent skills + workspace setup (rarely changes) ─────────────────────────
 RUN npx -y skills add vercel-labs/agent-browser
-COPY --chown=agent:agent .agents/skills/qa /home/agent/.agents/skills/dogfood
-
-# ── Agent workspace setup (rarely changes) ──────────────────────────────────
 RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace \
     && git config --global init.defaultBranch main \
     && git config --global push.autoSetupRemote true \
@@ -70,18 +66,27 @@ RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace 
     && git config --global user.name "Paradigm AI" \
     && git config --global user.email "ai@paradigm.xyz"
 
-# ── Stable helpers (change rarely → cached) ──────────────────────────────────
-COPY --chmod=755 services/sandbox/call.sh /usr/local/bin/call
-COPY --chmod=755 services/sandbox/slack-upload.sh /usr/local/bin/slack-upload
-COPY --chmod=755 services/sandbox/md2docx.py /usr/local/bin/md2docx
+# ==============================================================================
+# Final thin stage: only frequently-changing local files below.
+# Changing harness_session.py / SYSTEM_PROMPT.md / entrypoint.sh rebuilds only
+# the COPY layers — the entire toolchain stage stays cached.
+# ==============================================================================
 
-# ── Entrypoint + adapter (change sometimes) ─────────────────────────────────
-COPY --chmod=755 services/sandbox/entrypoint.sh /entrypoint.sh
-COPY --chown=agent:agent services/sandbox/harness_session.py /home/agent/harness_session.py
+FROM toolchain AS sandbox
 
-# ── System prompt fallback (bind-mounted at runtime; baked-in as safety net) ─
-COPY --chown=agent:agent services/sandbox/SYSTEM_PROMPT.md /home/agent/AGENTS.md
+USER root
+COPY --link --chmod=755 services/sandbox/call.sh /usr/local/bin/call
+COPY --link --chmod=755 services/sandbox/slack-upload.sh /usr/local/bin/slack-upload
+COPY --link --chmod=755 services/sandbox/md2docx.py /usr/local/bin/md2docx
+COPY --link --chmod=755 services/sandbox/entrypoint.sh /entrypoint.sh
 
+USER agent
 WORKDIR /home/agent
+
+# No RUN instructions after these — all repo-local content at the very end.
+COPY --link --chown=1001:1001 .agents/skills/qa /home/agent/.agents/skills/dogfood
+COPY --link --chown=1001:1001 services/sandbox/harness_session.py /home/agent/harness_session.py
+COPY --link --chown=1001:1001 services/sandbox/SYSTEM_PROMPT.md /home/agent/AGENTS.md
+
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python3", "/home/agent/harness_session.py"]

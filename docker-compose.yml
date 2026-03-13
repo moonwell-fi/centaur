@@ -218,6 +218,15 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Build-only target. Not started by `docker compose up` because it is profiled.
+  # Build with: docker compose build sandbox
+  sandbox:
+    build:
+      context: .
+      dockerfile: services/sandbox/Dockerfile
+    image: centaur-agent:latest
+    profiles: ["build"]
+
   nginx:
     build:
       context: services/nginx
@@ -307,6 +316,19 @@ services:
         condition: service_healthy
     networks:
       - default
+      - obs_net
+    restart: unless-stopped
+
+  alerting:
+    build: services/alerting
+    environment:
+      VLOGS_URL: http://victorialogs:9428
+      ALERT_SLACK_WEBHOOK: ${ALERT_SLACK_WEBHOOK:-}
+      CHECK_INTERVAL: "60"
+    depends_on:
+      victorialogs:
+        condition: service_healthy
+    networks:
       - obs_net
     restart: unless-stopped
 

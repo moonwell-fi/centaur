@@ -46,7 +46,7 @@ Set `OP_SERVICE_ACCOUNT_TOKEN` and `OP_VAULT`, then store the same secrets as it
 
 ```bash
 docker compose up -d
-docker build -t centaur-agent:latest services/sandbox/
+docker compose build sandbox
 ```
 
 ### 3. Test
@@ -479,7 +479,7 @@ All deploys happen automatically via GitHub Actions on merge to `main`.
 | `tools/**` only | Zero-downtime hot-reload (file watcher auto-detects, no restart) |
 | `services/api/**` | `docker compose up -d --build api` |
 | `services/slackbot/**` | `docker compose up -d --build slackbot` |
-| `services/sandbox/**` | `docker build -t centaur-agent:latest services/sandbox/` |
+| `services/sandbox/**` | `docker compose build sandbox` |
 | `docker-compose.yml`, `services/api/Dockerfile` | Rebuild API |
 
 **Tool hot-reload:** The API watches bind-mounted `tools/` directories via `watchfiles`. When tool files change, the API auto-reloads within seconds — no container restart needed.
@@ -490,7 +490,7 @@ All deploys happen automatically via GitHub Actions on merge to `main`.
 
 ```bash
 docker compose up -d postgres api
-docker build -t centaur-agent:latest services/sandbox/
+docker compose build sandbox
 source .env
 ```
 

@@ -39,7 +39,7 @@ services/nginx
 *.md
 !centaur_sdk/README.md
 !services/sandbox/SYSTEM_PROMPT.md
-!.agents/skills/**/*.md
+!.agents/skills/**
 
 # Environment (secrets)
 .env
