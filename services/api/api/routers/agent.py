@@ -11,16 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from api.agent import (
-    claim_for_delivery,
-    get_or_spawn,
-    get_status,
-    list_undelivered,
-    mark_delivered,
-    stop_session,
-    stream_exec,
-    stream_reconnect,
-)
+from api.agent import get_or_spawn, get_status, stop_session, stream_exec, stream_reconnect
 from api.deps import require_scope, verify_api_key
 from api.warm_pool import pool_status
 from api.warm_pool import replenish as replenish_pool
@@ -134,25 +125,3 @@ async def pool_replenish():
     return {"spawned": spawned, **pool_status()}
 
 
-@router.get("/orphaned", dependencies=[Depends(require_scope("agent:status"))])
-async def list_orphaned(max_age_s: int = 300):
-    """List threads that completed but may not have been delivered."""
-    return await list_undelivered(max_age_s)
-
-
-class MarkDeliveredRequest(BaseModel):
-    thread_key: str
-
-
-@router.post("/claim-delivery", dependencies=[Depends(require_scope("agent:execute"))])
-async def claim_delivery_endpoint(req: MarkDeliveredRequest):
-    """Atomically claim an idle session for delivery. Returns claimed=true if won the race."""
-    claimed = await claim_for_delivery(req.thread_key)
-    return {"claimed": claimed}
-
-
-@router.post("/mark-delivered", dependencies=[Depends(require_scope("agent:execute"))])
-async def mark_delivered_endpoint(req: MarkDeliveredRequest):
-    """Mark a thread as delivered so it won't appear in orphan checks."""
-    await mark_delivered(req.thread_key)
-    return {"ok": True}
