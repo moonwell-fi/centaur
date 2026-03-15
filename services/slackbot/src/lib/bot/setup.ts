@@ -20,7 +20,7 @@ function wrapThread(thread: any): BotThread {
     get id() { return thread.id; },
     subscribe: () => thread.subscribe(),
     startTyping: (status?: string) => thread.startTyping(status),
-    post: async (content, options) => {
+    post: async (content: AsyncGenerator<StreamChunk> | { markdown: string }, options?: { taskDisplayMode?: "timeline" | "plan" }) => {
       if (options?.taskDisplayMode && isAsyncIterable(content) && thread.adapter?.stream) {
         // Extract recipient fields from the thread's current message context
         // (same logic as chat's ThreadImpl.handleStream)
