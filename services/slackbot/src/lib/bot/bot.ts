@@ -8,6 +8,7 @@ import { log } from "@/lib/logger";
 import { ProgressTracker } from "./progress-tracker";
 
 const KEEPALIVE_MS = 120_000; // 2 min — Slack expires streaming state after ~5 min
+const STATUS_REFRESH_MS = 25_000; // Refresh setStatus before Slack's 30s TTL
 const STREAM_EXPIRED_POLL_INTERVAL_MS = 3_000;
 const STREAM_EXPIRED_POLL_MAX_MS = 5 * 60_000;
 const SLACK_MSG_MAX_CHARS = 3900; // Slack's hard limit is 4000; leave margin
@@ -205,9 +206,14 @@ export class SlackBot {
     const t0 = Date.now();
     log.info("execute_start", { thread_key: threadKey, user_id: userId });
 
-    thread.startTyping().catch((err) => {
+    thread.startTyping("Thinking…").catch((err) => {
       log.warn("start_typing_failed", { thread_key: threadKey, error: err instanceof Error ? err.message : String(err) });
     });
+
+    // Refresh typing indicator every 25s so it doesn't expire during long tool calls
+    const statusInterval = setInterval(() => {
+      thread.startTyping("Thinking…").catch(() => {});
+    }, STATUS_REFRESH_MS);
 
     try {
       await thread.post(this.stream(threadKey, text, tracker, userId, t0, ac.signal), { taskDisplayMode: "plan" });
@@ -245,6 +251,8 @@ export class SlackBot {
         log.error("error_post_failed", { thread_key: threadKey, error: postErr instanceof Error ? postErr.message : String(postErr) });
       }
       return;
+    } finally {
+      clearInterval(statusInterval);
     }
 
     // Clean up abort controller if we're still the active one

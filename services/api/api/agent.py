@@ -498,7 +498,6 @@ async def stream_connect(
     knows it's safe to call inject_stdin / POST /agent/execute.
     """
     rt = _get_runtime(session.sandbox_id)
-    last_heartbeat = time.monotonic()
 
     if platform:
         await _insert_system_message(session.thread_key, platform)
@@ -522,20 +521,36 @@ async def stream_connect(
         "turn_counter": rt.turn_counter,
     })}
 
+    # Heartbeat runs as an independent task so it fires even during long
+    # silent tool calls (when _stream_stdout yields nothing for minutes).
+    heartbeat_stop = asyncio.Event()
+
+    async def _heartbeat_loop() -> None:
+        while not heartbeat_stop.is_set():
+            try:
+                await asyncio.wait_for(heartbeat_stop.wait(), timeout=30)
+                return  # event was set → stop
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await _db_touch_wire(session.thread_key, lease_id)
+            except Exception:
+                pass
+
+    heartbeat_task = asyncio.create_task(_heartbeat_loop())
+
     try:
         async for sse_dict in _stream_stdout(
             session, backend, rt, rt.turn_counter, time.monotonic(),
         ):
             yield sse_dict
-            # Heartbeat every 30s (not per-event to avoid DB churn)
-            now = time.monotonic()
-            if now - last_heartbeat >= 30:
-                last_heartbeat = now
-                try:
-                    await _db_touch_wire(session.thread_key, lease_id)
-                except Exception:
-                    pass
     finally:
+        heartbeat_stop.set()
+        heartbeat_task.cancel()
+        try:
+            await heartbeat_task
+        except (asyncio.CancelledError, Exception):
+            pass
         await _db_clear_wire(session.thread_key, lease_id)
         await _db_update_state(session.thread_key, "idle")
         log.info(
