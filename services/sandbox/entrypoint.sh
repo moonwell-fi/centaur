@@ -63,6 +63,8 @@ PERSONA="${AGENT_PERSONA:-}"
 if [ -n "$PERSONA" ] && [ -f "$TARGET_PROMPT" ]; then
     OVERLAY="$HOME_DIR/tools/personas/$PERSONA/PROMPT.md"
     if [ -f "$OVERLAY" ]; then
+        # Replace generic identity with persona-aware identity so the overlay wins
+        sed -i 's/^|You are Paradigm'\''s AI assistant ("centaur")/|You are running the **'"$PERSONA"'** persona. See the persona overlay below for your identity and behavior./' "$TARGET_PROMPT"
         printf '\n\n---\n\n' >> "$TARGET_PROMPT"
         cat "$OVERLAY" >> "$TARGET_PROMPT"
     fi

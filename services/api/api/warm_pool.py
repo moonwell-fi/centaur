@@ -165,6 +165,16 @@ fi
             prompt_path = persona_info.tool_dir / "PROMPT.md"
             if prompt_path.is_file():
                 prompt_content = prompt_path.read_text()
+                # Replace generic identity so the persona overlay wins
+                await backend.exec_run(
+                    sandbox_id,
+                    [
+                        "sed", "-i",
+                        f's/^|You are Paradigm\'s AI assistant ("centaur")/|You are running the **{persona}** persona. See the persona overlay below for your identity and behavior./',
+                        "/home/agent/workspace/AGENTS.md",
+                    ],
+                    user="agent",
+                )
                 await backend.exec_run(
                     sandbox_id,
                     ["sh", "-c", 'printf "%s" "$_CONTENT" >> /home/agent/workspace/AGENTS.md'],
