@@ -18,4 +18,4 @@ build-backend = "hatchling.build"
 [tool.ai-v2]
 module = "client.py"
 hosts = ["api.bloomberg.com", "beta.api.bloomberg.com"]
-secrets = ["BLOOMBERG_CLIENT_ID", "BLOOMBERG_CLIENT_SECRET", "BLOOMBERG_API_KEY"]
+secrets = ["BLOOMBERG_CLIENT_ID", "BLOOMBERG_CLIENT_SECRET", "BLOOMBERG_API_KEY", "BLOOMBERG_DL_NUMBER"]
