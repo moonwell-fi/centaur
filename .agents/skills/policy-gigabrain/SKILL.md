@@ -1,6 +1,6 @@
 ---
 name: policy-gigabrain
-description: "Policy team intelligence system for Hill briefings, staffer tracking, bill analysis, vote prediction, and legislative trend detection. Use when asked about congressional meetings, staffers, legislation, regulatory actions, rulemakings, whip counts, policy team workflows, or any question about OCC, SEC, CFTC, FDIC, FinCEN, Treasury guidance, stablecoins, GENIUS Act, market structure bills, or crypto regulation. Triggers on: policy question, regulatory impact, bill analysis, legislation impact on portfolio."
+description: "Policy team intelligence system for Hill briefings, staffer tracking, bill analysis, vote prediction, and legislative trend detection. Use when asked about congressional meetings, staffers, legislation, regulatory actions, rulemakings, whip counts, policy team workflows, any question about OCC, SEC, CFTC, FDIC, FinCEN, Treasury guidance, stablecoins, GENIUS Act, market structure bills, crypto regulation, OR any question about a Member of Congress (Senator, Representative, their staff, their donors, their voting record, their committee assignments, or their positions on issues). Triggers on: policy question, regulatory impact, bill analysis, legislation impact on portfolio, Member of Congress inquiry, congressional staffer lookup, campaign finance question, voting record question."
 ---
 
 # Policy Gigabrain
@@ -180,6 +180,77 @@ call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31"
 # Or search all recent staff updates
 call legistorm get_staff '{"updated_from":"2026-01-01","updated_to":"2026-12-31","limit":20}'
 ```
+
+### 2b. Member of Congress Research
+
+Answer any question about a Member of Congress — their staff, donors, voting record, committee assignments, positions on issues, or ties to specific industries/interests.
+
+**Trigger Phrases:**
+- "What are [Member]'s ties to [industry/interest]?"
+- "Who are [Member]'s top donors?"
+- "What is [Member]'s position on [issue]?"
+- "Who are the senior staffers for [Member]?"
+- "How much money has [Member] received from [industry]?"
+- Any question naming a Senator or Representative
+
+**Steps:**
+1. **Identify the member** — resolve name, state, party, and chamber:
+   ```bash
+   call openfec search_candidates '{"name":"[member_name]","state":"[XX]","per_page":5}'
+   call congress get_member '{"bioguide_id":"[bioguide_id]"}'
+   ```
+2. **Get committee assignments** — check Senate.gov or Congress.gov:
+   ```bash
+   # Read committee assignments page for jurisdictional context
+   read_web_page https://www.senate.gov/general/committee_assignments/assignments.htm
+   ```
+3. **Pull staff roster from LegiStorm:**
+   ```bash
+   # First find the member_id
+   call legistorm get_members '{"updated_from":"2024-01-01","updated_to":"2026-12-31","state_id":"[XX]","limit":20}'
+   # Then get their staff
+   call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","member_id":[member_id],"limit":20}'
+   ```
+4. **Pull campaign finance data from OpenFEC:**
+   ```bash
+   # Get candidate IDs and committee IDs
+   call openfec search_candidates '{"name":"[member_name]","per_page":5}'
+   # Search for specific industry/interest contributions
+   call openfec get_contributions '{"committee_id":"[committee_id]","contributor_name":"[industry keyword]","min_date":"2016-01-01","per_page":20}'
+   # Get aggregate totals
+   call openfec get_candidate_totals '{"candidate_id":"[candidate_id]"}'
+   ```
+5. **Check OpenSecrets for industry-level aggregation:**
+   ```bash
+   # Top recipients for a specific industry (e.g., Indian Gaming = G6550)
+   read_web_page https://www.opensecrets.org/industries/recips?cycle=2024&ind=[industry_code]&recipdetail=A&mem=Y&sortorder=U
+   # Member's industry breakdown
+   read_web_page https://www.opensecrets.org/members-of-congress/[member-slug]/industries/[member_id]
+   ```
+6. **Search internal Slack and email for prior interactions:**
+   ```bash
+   call slack search_messages '{"query":"[member_name]"}'
+   call gsuite gmail_search '{"query":"[member_name]"}'
+   call paradigmdb notes_search '{"query":"[member_name]"}'
+   ```
+7. **Check #gigabrain-feed for recent policy intel:**
+   ```bash
+   call slack get_channel_history '{"channel":"C0AM0TR8N91","limit":50}'
+   ```
+8. **Search Congress.gov for sponsored/cosponsored legislation:**
+   ```bash
+   call congress get_member '{"bioguide_id":"[bioguide_id]"}'
+   # Also check via web for full bill list
+   read_web_page https://www.congress.gov/member/[member-name]/[bioguide_id]
+   ```
+
+**Output format:** Structured response covering:
+- Background (committees, party, state, seniority)
+- Campaign finance data with cycle-over-cycle trends
+- Specific donor breakdown (itemized FEC records where relevant)
+- Senior staff with roles and issue coverage areas
+- Legislative activity relevant to the question
+- Internal Paradigm touchpoints (Slack, email, notes)
 
 ### 3. Bill Tracking & Analysis
 

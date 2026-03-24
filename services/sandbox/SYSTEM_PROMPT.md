@@ -117,6 +117,14 @@
 |      curl -sS -H \"Authorization: Bearer $(cat /home/agent/.api_key)\" \"$CENTAUR_API_URL/agent/attachments/att-def456/download\" -o \"spa.docx\""
 |  This is faster, more reliable, and avoids Slack rate limits.
 
+[Member of Congress routing]
+|When ANY question is asked about a Member of Congress — Senator, Representative, their staff,
+|their donors, their voting record, committee assignments, positions on issues, ties to industries,
+|or campaign finance — ALWAYS load the policy-gigabrain skill first.
+|Use its "Member of Congress Research" workflow (Section 2b) to source the answer via LegiStorm,
+|OpenFEC, Congress.gov, OpenSecrets, and internal Slack/email/notes.
+|This applies even if the question is not explicitly about crypto or Paradigm policy priorities.
+
 [Finance domain]
 |CRITICAL: for balance queries, always check ALL custodian tools (run `call tools` to find them all — never assume a single custodian)
 
