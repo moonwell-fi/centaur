@@ -291,6 +291,53 @@ async def test_final_delivery_claim_filters_platform(client, db_pool, api_key: s
 
 
 @pytest.mark.asyncio
+async def test_thread_events_emits_terminal_snapshot_when_cursor_is_caught_up(
+    client,
+    db_pool,
+    api_key: str,
+):
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, terminal_reason, result_text, completed_at"
+        ") VALUES ($1, $2, 1, 'exec-terminal', 'hash-terminal', 'completed', '{}'::jsonb, '{}'::jsonb, "
+        "'completed', 'done', NOW())",
+        execution_id,
+        thread_key,
+    )
+    latest_event_id = await db_pool.fetchval(
+        "INSERT INTO agent_execution_events (thread_key, execution_id, event_kind, event_json) "
+        "VALUES ($1, $2, 'execution_state', $3::jsonb) RETURNING event_id",
+        thread_key,
+        execution_id,
+        json.dumps(
+            {
+                "type": "execution.state",
+                "execution_id": execution_id,
+                "thread_key": thread_key,
+                "status": "completed",
+                "terminal_reason": "completed",
+                "result_text": "done",
+            }
+        ),
+    )
+
+    res = await client.get(
+        f"/agent/threads/{thread_key}/events",
+        headers=_auth(api_key),
+        params={"execution_id": execution_id, "after_event_id": int(latest_event_id), "poll_ms": 10},
+    )
+
+    assert res.status_code == 200
+    assert "event: execution_state" in res.text
+    assert '"status":"completed"' in res.text
+    assert '"result_text":"done"' in res.text
+
+
+@pytest.mark.asyncio
 async def test_spawn_without_explicit_prompt_reuses_active_assignment_and_refreshes_runtime(
     client,
     db_pool,
@@ -495,6 +542,31 @@ async def test_claim_next_execution_runs_different_threads_concurrently_but_seri
 
 
 @pytest.mark.asyncio
+async def test_claim_next_execution_reclaims_expired_cancel_requested(db_pool):
+    from api.runtime_control import _claim_next_execution, _recover_stale_running
+
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "delivery, metadata, worker_lease_expires_at, created_at"
+        ") VALUES ($1, $2, 1, 'exec-cancelled', 'hash-cancelled', 'cancel_requested', '{}'::jsonb, '{}'::jsonb, "
+        "NOW() - INTERVAL '1 second', NOW() - INTERVAL '1 day')",
+        execution_id,
+        thread_key,
+    )
+
+    await _recover_stale_running(db_pool)
+    claimed = await _claim_next_execution(db_pool)
+
+    assert claimed is not None
+    assert claimed["execution_id"] == execution_id
+    assert claimed["status"] == "cancel_requested"
+
+
+@pytest.mark.asyncio
 async def test_recover_stale_running_requeues_expired_execution(db_pool):
     from api.runtime_control import _recover_stale_running
 
@@ -603,6 +675,90 @@ async def test_worker_marks_silence_deadline_exceeded_and_stops_session(db_pool)
 
 
 @pytest.mark.asyncio
+async def test_worker_reuses_durable_turn_id_without_reinjecting(db_pool):
+    from api.runtime_control import _process_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    prior_runtime_id = f"rt-old-{uuid.uuid4().hex[:8]}"
+    resumed_runtime_id = f"rt-new-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        prior_runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, durable_turn_id, "
+        "delivery, metadata, hard_deadline_at"
+        ") VALUES ($1, $2, 1, 'exec-existing', 'hash-existing', 'running', 'turn-existing', '{}'::jsonb, '{}'::jsonb, NOW() + INTERVAL '10 minutes')",
+        execution_id,
+        thread_key,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
+        "VALUES ($1, $2, '{}'::jsonb, 'awaiting_terminal')",
+        execution_id,
+        thread_key,
+    )
+
+    row = {
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "assignment_generation": 1,
+        "status": "running",
+        "durable_turn_id": "turn-existing",
+        "delivery": {},
+        "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
+    }
+    session = SandboxSession(
+        sandbox_id=resumed_runtime_id,
+        thread_key=thread_key,
+        harness="amp",
+        engine="amp",
+    )
+
+    async def _fake_stream(*_args, **_kwargs):
+        yield {
+            "data": json.dumps(
+                {
+                    "type": "turn.done",
+                    "result": "done",
+                    "is_error": False,
+                }
+            )
+        }
+
+    inject_stdin_mock = AsyncMock()
+    with (
+        patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
+        patch("api.runtime_control.inject_stdin", inject_stdin_mock),
+        patch("api.runtime_control.get_backend", return_value=object()),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
+        patch("api.runtime_control._stream_stdout", _fake_stream),
+    ):
+        await _process_execution(db_pool, row)
+
+    inject_stdin_mock.assert_not_awaited()
+
+    execution = await db_pool.fetchrow(
+        "SELECT status, durable_turn_id, result_text FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "completed"
+    assert execution["durable_turn_id"] == "turn-existing"
+    assert execution["result_text"] == "done"
+
+
+@pytest.mark.asyncio
 async def test_worker_reapplies_agents_override_on_runtime_replacement(db_pool):
     from api.runtime_control import _process_execution
 
@@ -680,30 +836,6 @@ async def test_worker_reapplies_agents_override_on_runtime_replacement(db_pool):
         resumed_runtime_id,
         "You are a very specific persona.",
     )
-
-
-@pytest.mark.asyncio
-async def test_legacy_connect_endpoint_disabled_by_default(client, api_key: str):
-    res = await client.post(
-        "/agent/connect",
-        headers=_auth(api_key),
-        json={"thread_key": f"slack:C-test:{uuid.uuid4().hex}"},
-    )
-    assert res.status_code == 410
-    body = res.json()
-    assert body["code"] == "LEGACY_ENDPOINT_REMOVED"
-
-
-@pytest.mark.asyncio
-async def test_legacy_reconnect_endpoint_disabled_by_default(client, api_key: str):
-    res = await client.post(
-        "/agent/reconnect",
-        headers=_auth(api_key),
-        json={"thread_key": f"slack:C-test:{uuid.uuid4().hex}"},
-    )
-    assert res.status_code == 410
-    body = res.json()
-    assert body["code"] == "LEGACY_ENDPOINT_REMOVED"
 
 
 @pytest.mark.asyncio

@@ -1,11 +1,10 @@
-"""Agent router — execute/stop/status/reconnect."""
+"""Agent router — durable control-plane endpoints for agents."""
 
 from __future__ import annotations
 
 import asyncio
 import base64
 import json as _json
-import os
 import re
 import uuid
 
@@ -19,17 +18,8 @@ from sse_starlette import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel
 
 from api.agent import (
-    _db_get_session,
-    claim_for_delivery,
-    get_or_spawn,
     get_status,
-    inject_stdin,
-    list_undelivered,
-    mark_delivered,
-    replay_inflight_turn,
     stop_session,
-    stream_connect,
-    stream_reconnect,
 )
 from api.deps import require_scope, verify_api_key
 from api.runtime_control import (
@@ -40,6 +30,7 @@ from api.runtime_control import (
     enqueue_execution,
     get_active_assignment,
     get_execution,
+    get_execution_terminal_snapshot,
     list_thread_executions,
     release_assignment,
     spawn_assignment,
@@ -180,27 +171,6 @@ def _json_error(code: str, message: str, status: int) -> JSONResponse:
     return JSONResponse(status_code=status, content={"code": code, "message": message})
 
 
-def _legacy_wire_api_enabled() -> bool:
-    return os.getenv("LEGACY_AGENT_WIRE_API_ENABLED", "0").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-def _legacy_wire_error(endpoint: str) -> JSONResponse:
-    return _json_error(
-        "LEGACY_ENDPOINT_REMOVED",
-        (
-            f"{endpoint} is no longer supported. "
-            "Use /agent/spawn, /agent/message, /agent/execute, and "
-            "/agent/threads/{thread_key}/events."
-        ),
-        410,
-    )
-
-
 @router.post("/execute", dependencies=[Depends(require_scope("agent:execute"))])
 async def execute(request: Request):
     body = ExecuteRequest.model_validate(await request.json())
@@ -266,34 +236,6 @@ async def post_message(request: Request):
         )
     except ControlPlaneError as exc:
         return _json_error(exc.code, exc.message, exc.status_code)
-
-
-@router.post("/connect", dependencies=[Depends(require_scope("agent:execute"))])
-async def connect(request: Request):
-    """Spawn/get a sandbox and return a persistent SSE stdout wire.
-
-    The wire stays open across multiple turns until the container exits.
-    Use POST /agent/execute to write to stdin.
-    """
-    if not _legacy_wire_api_enabled():
-        return _legacy_wire_error("/agent/connect")
-
-    body = await request.json()
-    thread_key = body.get("thread_key")
-    if not thread_key:
-        raise HTTPException(status_code=422, detail="thread_key is required")
-
-    harness = body.get("harness") or "amp"
-    engine = body.get("engine")
-    platform = body.get("platform")
-
-    session = await get_or_spawn(thread_key, harness, engine=engine)
-
-    return EventSourceResponse(
-        stream_connect(session, platform=platform),
-        ping_message_factory=lambda: ServerSentEvent(comment="keepalive"),
-        sep="\n",
-    )
 
 
 async def _extract_attachments(
@@ -665,46 +607,6 @@ async def get_messages(request: Request, thread_key: str, cursor: str | None = N
     }
 
 
-class ReconnectRequest(BaseModel):
-    thread_key: str
-    harness: str = "amp"
-    engine: str | None = None
-    skip_done_count: int = 0
-
-
-@router.post("/reconnect", dependencies=[Depends(require_scope("agent:execute"))])
-async def reconnect(req: ReconnectRequest):
-    """Re-attach to a running container's stdout without sending a new turn.
-
-    Used by the slackbot to recover an in-progress stream after an API restart.
-    Returns 404 if no running session exists for this thread.
-    """
-    if not _legacy_wire_api_enabled():
-        return _legacy_wire_error("/agent/reconnect")
-
-    # Snapshot existing session to detect container replacement
-    existing = await _db_get_session(req.thread_key)
-    existing_sandbox = existing.sandbox_id if existing else None
-
-    session = await get_or_spawn(req.thread_key, req.harness, engine=req.engine)
-
-    # If container was replaced (dead → new warm container), flush pending messages
-    if session.sandbox_id != existing_sandbox:
-        try:
-            replay = await replay_inflight_turn(session)
-            if not replay.get("replayed"):
-                await inject_stdin(session, "", platform=None, user_id=None)
-        except Exception:
-            log.warning("reconnect_flush_failed", thread_key=req.thread_key,
-                        sandbox=session.sandbox_id[:12])
-
-    return EventSourceResponse(
-        stream_reconnect(session, skip_done_count=req.skip_done_count),
-        ping_message_factory=lambda: ServerSentEvent(comment="keepalive"),
-        sep="\n",
-    )
-
-
 class StopRequest(BaseModel):
     thread_key: str
 
@@ -832,6 +734,17 @@ async def thread_events(
                 )
 
             if not rows:
+                if execution_id:
+                    snapshot = await get_execution_terminal_snapshot(pool, execution_id)
+                    if snapshot and snapshot["event_json"].get("thread_key") == thread_key:
+                        payload = snapshot["event_json"]
+                        snapshot_id = max(cursor, int(snapshot["event_id"]))
+                        yield ServerSentEvent(
+                            id=str(snapshot_id),
+                            event=str(snapshot["event_kind"]),
+                            data=_json.dumps(payload, separators=(",", ":")),
+                        )
+                        return
                 await asyncio.sleep(poll_s)
                 continue
 
@@ -1047,30 +960,6 @@ async def pool_replenish():
     """Manually trigger pool replenishment."""
     spawned = await replenish_pool()
     return {"spawned": spawned, **pool_status()}
-
-
-@router.get("/orphaned", dependencies=[Depends(require_scope("agent:status"))])
-async def list_orphaned(max_age_s: int = 300):
-    """List threads that completed but may not have been delivered."""
-    return await list_undelivered(max_age_s)
-
-
-class MarkDeliveredRequest(BaseModel):
-    thread_key: str
-
-
-@router.post("/claim-delivery", dependencies=[Depends(require_scope("agent:execute"))])
-async def claim_delivery_endpoint(req: MarkDeliveredRequest):
-    """Atomically claim an idle session for delivery. Returns claimed=true if won the race."""
-    claimed = await claim_for_delivery(req.thread_key)
-    return {"claimed": claimed}
-
-
-@router.post("/mark-delivered", dependencies=[Depends(require_scope("agent:execute"))])
-async def mark_delivered_endpoint(req: MarkDeliveredRequest):
-    """Mark a thread as delivered so it won't appear in orphan checks."""
-    await mark_delivered(req.thread_key)
-    return {"ok": True}
 
 
 @router.get("/threads", dependencies=[Depends(require_scope("agent:status"))])

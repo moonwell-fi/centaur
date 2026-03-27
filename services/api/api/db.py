@@ -44,6 +44,7 @@ REQUIRED_MIGRATIONS = frozenset(
         "008",
         "009",
         "010",
+        "011",
     }
 )
 

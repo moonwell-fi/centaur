@@ -207,6 +207,30 @@ describe("SlackBot runtime control", () => {
     expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-new", undefined);
   });
 
+  it("uses the stored terminal result when the event stream reconnects after completion", async () => {
+    const client = createImmediateStreamClient();
+    client.streamEvents = vi.fn(() => (async function* () {
+      // API reconnect edge-case: no unseen events remain, so consumeExecutionEvents
+      // has to fall back to the durable execution row.
+    })());
+    client.getExecution = vi.fn(async () => ({ status: "completed", result_text: "stored answer" }));
+
+    const bot = new SlackBot(client as any);
+    const runtime = createThread();
+
+    await bot.onSubscribedMessage(runtime.thread, userMessage("follow-up", {
+      id: "1700000000.000004",
+      isMention: true,
+    }));
+
+    expect(client.getExecution).toHaveBeenCalledWith("exe-new");
+    expect(
+      runtime.streamedChunks.some(
+        (chunk) => chunk.type === "markdown_text" && chunk.text.includes("stored answer"),
+      ),
+    ).toBe(true);
+  });
+
   it("claims only Slack final deliveries and posts completed results once", async () => {
     const client = createImmediateStreamClient();
     client.claimFinalDeliveries = vi.fn(async () => ({

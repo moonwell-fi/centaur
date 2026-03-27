@@ -488,6 +488,29 @@ export class SlackBot {
     return "";
   }
 
+  private async hydrateStoredTerminalResult(
+    executionId: string,
+    tracker: ProgressTracker,
+  ): Promise<boolean> {
+    try {
+      const data = await this.client.getExecution(executionId);
+      const status = String(data.status || "");
+      if (!["completed", "failed_permanent", "cancelled"].includes(status)) {
+        return false;
+      }
+
+      const result = typeof data.result_text === "string" ? data.result_text.trim() : "";
+      const error = typeof data.error_text === "string" ? data.error_text.trim() : "";
+      const terminalReason = typeof data.terminal_reason === "string"
+        ? data.terminal_reason.trim()
+        : "";
+      tracker.resultText = result || error || terminalReason;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async *streamExecution(
     threadKey: string,
     executionId: string,
@@ -622,6 +645,9 @@ export class SlackBot {
       }
 
       if (terminal) return;
+      if (await this.hydrateStoredTerminalResult(executionId, tracker)) {
+        return;
+      }
       if (!streamBroke) return;
 
       if (retriesLeft <= 0 || signal.aborted) {

@@ -28,7 +28,7 @@ log = structlog.get_logger()
 
 EXECUTION_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_SILENCE_TIMEOUT_S", "600"))
 EXECUTION_HARD_TIMEOUT_S = int(os.getenv("EXECUTION_HARD_TIMEOUT_S", "3600"))
-EXECUTION_WATCHDOG_POLL_S = float(os.getenv("EXECUTION_WATCHDOG_POLL_S", "5.0"))
+EXECUTION_WATCHDOG_POLL_S = float(os.getenv("EXECUTION_WATCHDOG_POLL_S", "1.0"))
 EXECUTION_RECONCILE_INTERVAL_S = float(os.getenv("EXECUTION_RECONCILE_INTERVAL_S", "0.5"))
 EXECUTION_STALE_RECOVERY_INTERVAL_S = float(
     os.getenv("EXECUTION_STALE_RECOVERY_INTERVAL_S", "5.0")
@@ -37,10 +37,15 @@ EXECUTION_WORKER_CONCURRENCY = max(
     int(os.getenv("EXECUTION_WORKER_CONCURRENCY", "4")),
     1,
 )
+EXECUTION_WORKER_LEASE_S = max(
+    float(os.getenv("EXECUTION_WORKER_LEASE_S", "5.0")),
+    max(EXECUTION_WATCHDOG_POLL_S * 2, 1.0),
+)
 FINAL_DELIVERY_READY_GRACE_S = max(
     float(os.getenv("FINAL_DELIVERY_READY_GRACE_S", "2.0")),
     0.0,
 )
+WORKER_INSTANCE_ID = f"{os.getenv('HOSTNAME') or 'api'}:{uuid.uuid4().hex[:8]}"
 
 _worker_tasks: list[asyncio.Task] = []
 _worker_wake = asyncio.Event()
@@ -573,6 +578,33 @@ def execution_terminal(status: str) -> bool:
     return status in {"completed", "failed_permanent", "cancelled"}
 
 
+def build_execution_state_payload(
+    *,
+    execution_id: str,
+    thread_key: str,
+    status: str,
+    terminal_reason: str | None = None,
+    result_text: str | None = None,
+    error_text: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "type": "execution.state",
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "status": status,
+    }
+    if terminal_reason is not None:
+        payload["terminal_reason"] = terminal_reason
+    if result_text is not None:
+        payload["result_text"] = result_text
+    if error_text:
+        payload["error_text"] = error_text
+    if extra:
+        payload.update(extra)
+    return payload
+
+
 async def append_execution_event(
     pool,
     *,
@@ -601,13 +633,12 @@ async def append_execution_state(
     status: str,
     extra: dict[str, Any] | None = None,
 ) -> int:
-    payload = {
-        "type": "execution.state",
-        "execution_id": execution_id,
-        "thread_key": thread_key,
-        "status": status,
-        **(extra or {}),
-    }
+    payload = build_execution_state_payload(
+        execution_id=execution_id,
+        thread_key=thread_key,
+        status=status,
+        extra=extra,
+    )
     return await append_execution_event(
         pool,
         thread_key=thread_key,
@@ -615,6 +646,45 @@ async def append_execution_state(
         event_kind="execution_state",
         event_json=payload,
     )
+
+
+async def get_execution_terminal_snapshot(pool, execution_id: str) -> dict[str, Any] | None:
+    row = await pool.fetchrow(
+        "SELECT thread_key, status, terminal_reason, result_text, error_text "
+        "FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    if not row or not execution_terminal(str(row["status"] or "")):
+        return None
+
+    latest_event_id = await pool.fetchval(
+        "SELECT COALESCE(MAX(event_id), 0) FROM agent_execution_events WHERE execution_id = $1",
+        execution_id,
+    )
+    return {
+        "event_id": int(latest_event_id or 0),
+        "event_kind": "execution_state",
+        "event_json": build_execution_state_payload(
+            execution_id=execution_id,
+            thread_key=str(row["thread_key"]),
+            status=str(row["status"]),
+            terminal_reason=(
+                str(row["terminal_reason"])
+                if row["terminal_reason"] is not None
+                else None
+            ),
+            result_text=(
+                str(row["result_text"])
+                if row["result_text"] is not None
+                else None
+            ),
+            error_text=(
+                str(row["error_text"])
+                if row["error_text"] is not None
+                else None
+            ),
+        ),
+    }
 
 
 async def enqueue_execution(
@@ -955,7 +1025,8 @@ async def _mark_execution_terminal(
     )
     await pool.execute(
         "UPDATE agent_execution_requests SET status = $1, terminal_reason = $2, "
-        "result_text = $3, error_text = $4, completed_at = NOW(), updated_at = NOW() "
+        "result_text = $3, error_text = $4, completed_at = NOW(), "
+        "worker_id = NULL, worker_lease_expires_at = NULL, updated_at = NOW() "
         "WHERE execution_id = $5",
         status,
         terminal_reason,
@@ -1012,14 +1083,27 @@ async def _touch_execution_progress(pool, execution_id: str) -> dt.datetime:
     row = await pool.fetchrow(
         "UPDATE agent_execution_requests SET last_progress_at = NOW(), "
         "silence_deadline_at = NOW() + make_interval(secs => $1::double precision), "
-        "updated_at = NOW() WHERE execution_id = $2 RETURNING silence_deadline_at",
+        "worker_lease_expires_at = NOW() + make_interval(secs => $2::double precision), "
+        "updated_at = NOW() WHERE execution_id = $3 RETURNING silence_deadline_at",
         float(EXECUTION_SILENCE_TIMEOUT_S),
+        float(EXECUTION_WORKER_LEASE_S),
         execution_id,
     )
     if row and row["silence_deadline_at"]:
         return row["silence_deadline_at"]
     return dt.datetime.now(dt.timezone.utc) + dt.timedelta(
         seconds=EXECUTION_SILENCE_TIMEOUT_S
+    )
+
+
+async def _heartbeat_execution_lease(pool, execution_id: str) -> None:
+    await pool.execute(
+        "UPDATE agent_execution_requests SET "
+        "worker_lease_expires_at = NOW() + make_interval(secs => $1::double precision), "
+        "updated_at = NOW() "
+        "WHERE execution_id = $2 AND status IN ('running', 'cancel_requested', 'retry_wait')",
+        float(EXECUTION_WORKER_LEASE_S),
+        execution_id,
     )
 
 
@@ -1041,11 +1125,24 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
             candidates = await conn.fetch(
                 "SELECT er.execution_id, er.thread_key "
                 "FROM agent_execution_requests er "
-                "WHERE er.status = 'queued' "
+                "WHERE ("
+                "  er.status = 'queued' "
+                "  OR ("
+                "    er.status = 'cancel_requested' "
+                "    AND (er.worker_lease_expires_at IS NULL OR er.worker_lease_expires_at <= NOW())"
+                "  )"
+                ") "
                 "AND NOT EXISTS ("
                 "  SELECT 1 FROM agent_execution_requests active "
                 "  WHERE active.thread_key = er.thread_key "
-                "  AND active.status IN ('running', 'cancel_requested', 'retry_wait')"
+                "  AND active.execution_id <> er.execution_id "
+                "  AND ("
+                "    active.status IN ('running', 'retry_wait') "
+                "    OR ("
+                "      active.status = 'cancel_requested' "
+                "      AND active.worker_lease_expires_at > NOW()"
+                "    )"
+                "  )"
                 ") "
                 "ORDER BY er.created_at ASC "
                 "LIMIT 32 "
@@ -1064,24 +1161,34 @@ async def _claim_next_execution(pool) -> dict[str, Any] | None:
                 has_active = await conn.fetchval(
                     "SELECT 1 FROM agent_execution_requests "
                     "WHERE thread_key = $1 "
-                    "AND status IN ('running', 'cancel_requested', 'retry_wait') "
+                    "AND execution_id <> $2 "
+                    "AND ("
+                    "  status IN ('running', 'retry_wait') "
+                    "  OR (status = 'cancel_requested' AND worker_lease_expires_at > NOW())"
+                    ") "
                     "LIMIT 1",
                     thread_key,
+                    candidate["execution_id"],
                 )
                 if has_active:
                     continue
                 row = await conn.fetchrow(
                     "UPDATE agent_execution_requests er "
-                    "SET status = 'running', claimed_at = NOW(), "
+                    "SET status = CASE WHEN er.status = 'queued' THEN 'running' ELSE er.status END, "
+                    "claimed_at = NOW(), "
                     "started_at = COALESCE(er.started_at, NOW()), "
-                    "last_progress_at = NOW(), "
-                    "silence_deadline_at = NOW() + make_interval(secs => $1::double precision), "
+                    "last_progress_at = COALESCE(er.last_progress_at, NOW()), "
+                    "silence_deadline_at = COALESCE(er.silence_deadline_at, NOW() + make_interval(secs => $1::double precision)), "
+                    "worker_id = $2, "
+                    "worker_lease_expires_at = NOW() + make_interval(secs => $3::double precision), "
                     "updated_at = NOW() "
-                    "WHERE er.execution_id = $2 AND er.status = 'queued' "
+                    "WHERE er.execution_id = $4 AND er.status IN ('queued', 'cancel_requested') "
                     "RETURNING er.execution_id, er.thread_key, er.assignment_generation, "
-                    "er.execute_id, er.delivery, er.metadata, er.silence_deadline_at, "
+                    "er.execute_id, er.durable_turn_id, er.status, er.delivery, er.metadata, er.silence_deadline_at, "
                     "er.hard_deadline_at",
                     float(EXECUTION_SILENCE_TIMEOUT_S),
+                    WORKER_INSTANCE_ID,
+                    float(EXECUTION_WORKER_LEASE_S),
                     candidate["execution_id"],
                 )
                 if row:
@@ -1093,7 +1200,20 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
     execution_id = row["execution_id"]
     thread_key = row["thread_key"]
     assignment_generation = int(row["assignment_generation"])
+    execution_status = str(row.get("status") or "running")
     delivery = decode_jsonb(row.get("delivery"), {})
+
+    if execution_status == "cancel_requested":
+        await _mark_execution_terminal(
+            pool,
+            execution_id=execution_id,
+            thread_key=thread_key,
+            status="cancelled",
+            terminal_reason="cancel_requested",
+            result_text="",
+            error_text="cancel_requested",
+        )
+        return
 
     await append_execution_state(
         pool,
@@ -1150,28 +1270,32 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
     if assignment_override:
         await _write_agents_override(session.sandbox_id, str(assignment_override))
 
-    inject_result = await inject_stdin(
-        session,
-        "",
-        platform=delivery.get("platform") if isinstance(delivery, dict) else None,
-        user_id=delivery.get("recipient_user_id") if isinstance(delivery, dict) else None,
-    )
-    durable_turn_id = str(inject_result.get("durable_turn_id") or "")
-    await pool.execute(
-        "UPDATE agent_execution_requests SET durable_turn_id = $1, updated_at = NOW() "
-        "WHERE execution_id = $2",
-        durable_turn_id or None,
-        execution_id,
-    )
-    if inject_result.get("injected"):
-        await pool.execute(
-            "UPDATE agent_message_requests SET delivered_execution_id = $1 "
-            "WHERE thread_key = $2 AND assignment_generation = $3 AND delivered_execution_id IS NULL",
-            execution_id,
-            thread_key,
-            assignment_generation,
+    durable_turn_id = str(row.get("durable_turn_id") or "")
+    if durable_turn_id:
+        await _heartbeat_execution_lease(pool, execution_id)
+    else:
+        inject_result = await inject_stdin(
+            session,
+            "",
+            platform=delivery.get("platform") if isinstance(delivery, dict) else None,
+            user_id=delivery.get("recipient_user_id") if isinstance(delivery, dict) else None,
         )
-        silence_deadline = await _touch_execution_progress(pool, execution_id)
+        durable_turn_id = str(inject_result.get("durable_turn_id") or "")
+        await pool.execute(
+            "UPDATE agent_execution_requests SET durable_turn_id = $1, updated_at = NOW() "
+            "WHERE execution_id = $2",
+            durable_turn_id or None,
+            execution_id,
+        )
+        if inject_result.get("injected"):
+            await pool.execute(
+                "UPDATE agent_message_requests SET delivered_execution_id = $1 "
+                "WHERE thread_key = $2 AND assignment_generation = $3 AND delivered_execution_id IS NULL",
+                execution_id,
+                thread_key,
+                assignment_generation,
+            )
+            silence_deadline = await _touch_execution_progress(pool, execution_id)
 
     backend = get_backend()
     rt = _get_runtime(session.sandbox_id)
@@ -1230,6 +1354,7 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
             )
             done, _ = await asyncio.wait({pending_event}, timeout=wait_s)
             if not done:
+                await _heartbeat_execution_lease(pool, execution_id)
                 status_row = await pool.fetchrow(
                     "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
                     execution_id,
@@ -1244,6 +1369,8 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                         result_text="",
                         error_text="cancel_requested",
                     )
+                    with contextlib.suppress(Exception):
+                        await backend.close_streams(session)
                     return
                 continue
 
@@ -1280,6 +1407,8 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                     result_text="",
                     error_text="cancel_requested",
                 )
+                with contextlib.suppress(Exception):
+                    await backend.close_streams(session)
                 return
 
             if payload.get("type") == "turn.done":
@@ -1354,14 +1483,11 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
 
 async def _recover_stale_running(pool) -> None:
     await pool.execute(
-        "UPDATE agent_execution_requests SET status = 'queued', updated_at = NOW() "
-        "WHERE status = 'running' "
-        "AND COALESCE("
-        "  silence_deadline_at, "
-        "  last_progress_at + make_interval(secs => $1::double precision), "
-        "  created_at + make_interval(secs => $1::double precision)"
-        ") < NOW()",
-        float(EXECUTION_SILENCE_TIMEOUT_S),
+        "UPDATE agent_execution_requests SET "
+        "status = CASE WHEN status IN ('running', 'retry_wait') THEN 'queued' ELSE status END, "
+        "worker_id = NULL, worker_lease_expires_at = NULL, updated_at = NOW() "
+        "WHERE status IN ('running', 'retry_wait', 'cancel_requested') "
+        "AND (worker_lease_expires_at IS NULL OR worker_lease_expires_at <= NOW())",
     )
 
 
