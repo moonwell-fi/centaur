@@ -110,6 +110,10 @@ class SandboxBackend(abc.ABC):
         """Stop and remove a container by ID (no session needed)."""
         raise NotImplementedError
 
+    async def interrupt_by_id(self, sandbox_id: str) -> None:
+        """Interrupt the active turn for a sandbox without destroying it."""
+        raise NotImplementedError
+
     async def rename_by_id(self, sandbox_id: str, new_name: str) -> None:
         """Rename a container by ID."""
         raise NotImplementedError

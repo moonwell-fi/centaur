@@ -303,20 +303,25 @@ async def _db_find_stale_wires(ttl_s: int = 120) -> list[dict]:
 async def _flush_pending(thread_key: str, last_delivered_id: str | None) -> list[dict]:
     """Fetch messages from chat_messages that haven't been delivered yet.
 
-    If last_delivered_id is NULL, returns ALL messages (full replay).
-    Otherwise returns messages created after the cursor's created_at.
+    Persistent harness sessions already retain their own assistant context, so
+    we only replay user/system messages from durable storage.
+
+    If last_delivered_id is NULL, returns all non-assistant messages.
+    Otherwise returns non-assistant messages created after the cursor's
+    created_at.
     """
     pool = _get_pool()
     if last_delivered_id is None:
         rows = await pool.fetch(
             "SELECT id, role, parts, user_id, metadata, created_at "
-            "FROM chat_messages WHERE thread_key = $1 ORDER BY created_at",
+            "FROM chat_messages WHERE thread_key = $1 AND role <> 'assistant' ORDER BY created_at",
             thread_key,
         )
     else:
         rows = await pool.fetch(
             "SELECT id, role, parts, user_id, metadata, created_at "
             "FROM chat_messages WHERE thread_key = $1 "
+            "AND role <> 'assistant' "
             "AND created_at > (SELECT created_at FROM chat_messages WHERE id = $2) "
             "ORDER BY created_at",
             thread_key,
@@ -661,6 +666,20 @@ async def _stream_stdout(
             tid = extract_thread_id(session.engine, evt)
             if tid:
                 agent_thread_id = tid
+                if session.agent_thread_id != tid:
+                    session.agent_thread_id = tid
+                    try:
+                        pool = _get_pool()
+                        await pool.execute(
+                            "UPDATE sandbox_sessions SET agent_thread_id = $1, updated_at = NOW() "
+                            "WHERE thread_key = $2",
+                            tid,
+                            session.thread_key,
+                        )
+                    except Exception:
+                        log.warning(
+                            "agent_thread_id_persist_failed", thread_key=session.thread_key
+                        )
             r = extract_result(session.engine, evt)
             if r is not None:
                 result_text = r
@@ -675,7 +694,7 @@ async def _stream_stdout(
                 terminal_result = result_text or terminal_error or ""
                 rt.last_result = result_text
                 # Persist agent_thread_id for conversation resume
-                if agent_thread_id:
+                if agent_thread_id and session.agent_thread_id != agent_thread_id:
                     try:
                         pool = _get_pool()
                         await pool.execute(
@@ -684,6 +703,7 @@ async def _stream_stdout(
                             agent_thread_id,
                             session.thread_key,
                         )
+                        session.agent_thread_id = agent_thread_id
                     except Exception:
                         log.warning(
                             "agent_thread_id_persist_failed", thread_key=session.thread_key
@@ -1338,4 +1358,3 @@ async def get_status(thread_key: str) -> dict[str, Any]:
         # Best-effort bridge while the turn.done DB write is in-flight.
         result["last_result"] = rt.last_result
     return result
-

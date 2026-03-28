@@ -138,3 +138,32 @@ async def test_inject_stdin_persists_inflight_turn() -> None:
     assert result["injected"] is True
     assert result["durable_turn_id"].startswith("turn-")
     set_inflight.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_flush_pending_skips_assistant_messages(db_pool) -> None:
+    thread_key = "test:thread-flush"
+    user_one = "msg-1"
+    assistant = "asst-1"
+    user_two = "msg-2"
+
+    await db_pool.execute(
+        "INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at) VALUES "
+        "($1, $4, 'user', '[{\"type\":\"text\",\"text\":\"first\"}]'::jsonb, '{}'::jsonb, "
+        " TIMESTAMPTZ '2026-01-01T00:00:00Z'), "
+        "($2, $4, 'assistant', '[{\"type\":\"text\",\"text\":\"reply\"}]'::jsonb, '{}'::jsonb, "
+        " TIMESTAMPTZ '2026-01-01T00:00:01Z'), "
+        "($3, $4, 'user', '[{\"type\":\"text\",\"text\":\"second\"}]'::jsonb, '{}'::jsonb, "
+        " TIMESTAMPTZ '2026-01-01T00:00:02Z')",
+        user_one,
+        assistant,
+        user_two,
+        thread_key,
+    )
+
+    with patch("api.agent._get_pool", return_value=db_pool):
+        from api.agent import _flush_pending
+
+        rows = await _flush_pending(thread_key, user_one)
+
+    assert [row["id"] for row in rows] == [user_two]

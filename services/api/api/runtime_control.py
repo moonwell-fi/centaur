@@ -878,7 +878,7 @@ async def list_thread_executions(pool, thread_key: str, limit: int = 20) -> list
 
 async def cancel_execution(pool, execution_id: str) -> dict[str, Any] | None:
     row = await pool.fetchrow(
-        "SELECT execution_id, thread_key, status FROM agent_execution_requests "
+        "SELECT execution_id, thread_key, assignment_generation, status FROM agent_execution_requests "
         "WHERE execution_id = $1",
         execution_id,
     )
@@ -887,7 +887,16 @@ async def cancel_execution(pool, execution_id: str) -> dict[str, Any] | None:
 
     status = row["status"]
     thread_key = row["thread_key"]
+    assignment_generation = int(row["assignment_generation"])
     if execution_terminal(status):
+        return {
+            "ok": True,
+            "execution_id": execution_id,
+            "status": status,
+            "idempotent": True,
+        }
+
+    if status == "cancel_requested":
         return {
             "ok": True,
             "execution_id": execution_id,
@@ -917,6 +926,36 @@ async def cancel_execution(pool, execution_id: str) -> dict[str, Any] | None:
             thread_key=thread_key,
             status="cancel_requested",
         )
+        await pool.execute(
+            "UPDATE sandbox_sessions SET state = 'idle', inflight_turn_id = NULL, inflight_turn_input = NULL, "
+            "inflight_started_at = NULL, inflight_attempts = 0, updated_at = NOW() "
+            "WHERE thread_key = $1",
+            thread_key,
+        )
+        runtime_id = await pool.fetchval(
+            "SELECT runtime_id FROM agent_runtime_assignments "
+            "WHERE thread_key = $1 AND assignment_generation = $2",
+            thread_key,
+            assignment_generation,
+        )
+        if runtime_id:
+            try:
+                await get_backend().interrupt_by_id(str(runtime_id))
+            except NotImplementedError:
+                log.warning(
+                    "execution_interrupt_not_supported",
+                    thread_key=thread_key,
+                    execution_id=execution_id,
+                    runtime_id=str(runtime_id)[:12],
+                )
+            except Exception:
+                log.warning(
+                    "execution_interrupt_failed",
+                    thread_key=thread_key,
+                    execution_id=execution_id,
+                    runtime_id=str(runtime_id)[:12],
+                    exc_info=True,
+                )
 
     _worker_wake.set()
     return {

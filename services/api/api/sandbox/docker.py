@@ -416,6 +416,17 @@ class DockerSandboxBackend(SandboxBackend):
         if sandbox_name:
             await self._stop_dind(sandbox_name)
 
+    async def interrupt_by_id(self, sandbox_id: str) -> None:
+        """Interrupt the current turn while keeping the sandbox container alive."""
+        client = self._get_client()
+        try:
+            container = await client.containers.get(sandbox_id)
+            await container.kill(signal="SIGUSR1")
+        except aiodocker.exceptions.DockerError as exc:
+            if exc.status == 404:
+                return
+            raise
+
     async def _stop_dind(self, sandbox_name: str) -> None:
         """Stop and remove the DinD sidecar for a sandbox."""
         client = self._get_client()

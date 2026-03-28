@@ -567,6 +567,68 @@ async def test_claim_next_execution_reclaims_expired_cancel_requested(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_cancel_execution_interrupts_runtime_and_clears_inflight(db_pool):
+    from api.runtime_control import cancel_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, delivery, metadata"
+        ") VALUES ($1, $2, 1, 'exec-cancel', 'hash-cancel', 'running', '{}'::jsonb, '{}'::jsonb)",
+        execution_id,
+        thread_key,
+    )
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, started_at, inflight_turn_id, "
+        "inflight_turn_input, inflight_started_at, inflight_attempts"
+        ") VALUES ($1, $2, 'amp', 'amp', 'running', NOW(), 'turn-live', '{}'::jsonb, NOW(), 1)",
+        thread_key,
+        runtime_id,
+    )
+
+    backend = SimpleNamespace(interrupt_by_id=AsyncMock())
+    with patch("api.runtime_control.get_backend", return_value=backend):
+        result = await cancel_execution(db_pool, execution_id)
+
+    assert result == {
+        "ok": True,
+        "execution_id": execution_id,
+        "status": "cancel_requested",
+    }
+    backend.interrupt_by_id.assert_awaited_once_with(runtime_id)
+
+    execution = await db_pool.fetchrow(
+        "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "cancel_requested"
+
+    session = await db_pool.fetchrow(
+        "SELECT state, inflight_turn_id, inflight_turn_input, inflight_attempts "
+        "FROM sandbox_sessions WHERE thread_key = $1",
+        thread_key,
+    )
+    assert session is not None
+    assert session["state"] == "idle"
+    assert session["inflight_turn_id"] is None
+    assert session["inflight_turn_input"] is None
+    assert session["inflight_attempts"] == 0
+
+
+@pytest.mark.asyncio
 async def test_recover_stale_running_requeues_expired_execution(db_pool):
     from api.runtime_control import _recover_stale_running
 

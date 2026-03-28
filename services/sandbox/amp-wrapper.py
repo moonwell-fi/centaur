@@ -16,6 +16,9 @@ import subprocess
 import sys
 
 TID_RE = re.compile(r"T-[a-f0-9-]+")
+CURRENT_PROC: subprocess.Popen[str] | None = None
+CURRENT_SESSION_ID: str | None = None
+INTERRUPT_REQUESTED = False
 
 
 def _amp_subprocess_env() -> dict[str, str]:
@@ -78,21 +81,50 @@ def extract_handoff_tid(evt: dict) -> str | None:
 
 
 class RunResult:
-    __slots__ = ("code", "chain_tid")
+    __slots__ = ("code", "chain_tid", "resume_tid", "interrupted")
 
-    def __init__(self, code: int, chain_tid: str | None = None):
+    def __init__(
+        self,
+        code: int,
+        chain_tid: str | None = None,
+        resume_tid: str | None = None,
+        interrupted: bool = False,
+    ):
         self.code = code
         self.chain_tid = chain_tid
+        self.resume_tid = resume_tid
+        self.interrupted = interrupted
+
+
+def _exit_wrapper(*_args: object) -> None:
+    sys.exit(0)
+
+
+def _interrupt_current_turn(*_args: object) -> None:
+    global INTERRUPT_REQUESTED
+
+    proc = CURRENT_PROC
+    if proc is None or proc.poll() is not None:
+        return
+
+    INTERRUPT_REQUESTED = True
+    try:
+        os.killpg(proc.pid, signal.SIGINT)
+    except ProcessLookupError:
+        pass
 
 
 def run(cmd: list[str], stdin_data: str | None = None) -> RunResult:
     """Run Amp, stream stdout, and detect handoff chaining."""
+    global CURRENT_PROC, CURRENT_SESSION_ID, INTERRUPT_REQUESTED
+
     kw = dict(
         stdout=subprocess.PIPE,
         stderr=sys.stderr,
         text=True,
         bufsize=1,
         env=_amp_subprocess_env(),
+        start_new_session=True,
     )
     if stdin_data:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, **kw)
@@ -101,6 +133,7 @@ def run(cmd: list[str], stdin_data: str | None = None) -> RunResult:
         proc.stdin.close()
     else:
         proc = subprocess.Popen(cmd, stdin=sys.stdin, **kw)
+    CURRENT_PROC = proc
 
     handoff_tid = None
     suppressing = False
@@ -121,6 +154,9 @@ def run(cmd: list[str], stdin_data: str | None = None) -> RunResult:
             continue
 
         evt_type = evt.get("type", "")
+        session_id = evt.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            CURRENT_SESSION_ID = session_id
 
         # Keep successful result handling centralized in API _stream_stdout
         # turn.done synthesis. Error results are forwarded so API can persist a
@@ -146,6 +182,11 @@ def run(cmd: list[str], stdin_data: str | None = None) -> RunResult:
         emit(line)
 
     proc.wait()
+    CURRENT_PROC = None
+    resume_tid = handoff_tid or CURRENT_SESSION_ID
+    if INTERRUPT_REQUESTED:
+        INTERRUPT_REQUESTED = False
+        return RunResult(0, resume_tid=resume_tid, interrupted=True)
     if handoff_tid:
         return RunResult(0, chain_tid=handoff_tid)
     return RunResult(proc.returncode or 0)
@@ -163,8 +204,9 @@ MAX_CRASH_RESTARTS = 5
 
 
 def main() -> None:
-    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-    signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGTERM, _exit_wrapper)
+    signal.signal(signal.SIGINT, _exit_wrapper)
+    signal.signal(signal.SIGUSR1, _interrupt_current_turn)
 
     startup_tid = (os.environ.get("AMP_CONTINUE_THREAD_ID") or "").strip()
     first_cmd = AMP_BASE + ["threads", "continue", startup_tid] if startup_tid else AMP_BASE
@@ -183,6 +225,15 @@ def main() -> None:
                 AMP_BASE + ["threads", "continue", result.chain_tid],
                 stdin_data=CONTINUE_MSG,
             )
+
+        if result.interrupted:
+            crashes = 0
+            next_cmd = (
+                AMP_BASE + ["threads", "continue", result.resume_tid]
+                if result.resume_tid
+                else AMP_BASE
+            )
+            continue
 
         if result.code == 0:
             break
