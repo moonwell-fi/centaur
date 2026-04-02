@@ -60,7 +60,8 @@ This is the **Policy Explainer Index** ([link](https://docs.google.com/document/
 |--------|------|---------|
 | **Shift / paradigmdb** | `call paradigmdb` | Portfolio companies, prior interactions, notes |
 | **Slack** | `call slack search_messages` | Policy team discussions, intel |
-| **#gigabrain-feed** | `call slack get_channel_history '{"channel":"C0AM0TR8N91"}'` | Curated policy intel feed — regulatory updates, legislative signals, and policy analysis posted by the policy team. Check this channel early in any policy workflow. |
+| **#gigabrain-feed** | `call slack get_channel_history '{"channel":"C0AM0TR8N91"}'` | Curated policy intel feed — regulatory updates, legislative signals, policy analysis, and `#touchpoint` posts. Search this channel early in any policy workflow and use it as the primary source of substantive office intel for briefers. |
+| **Google Sheet touchpoint log** | `call gsuite sheets_read` | Minimal backup log for office touchpoints. Stores only canonical office/member name, date, and meeting type. Use this first for recency/frequency questions like "when did we last meet with X?" and "how many times have we met with Y?". |
 | **GSuite** | `call gsuite` | Meeting notes, Hill interaction logs, Drive docs |
 | **Archived docs / notes** | `call gsuite`, `call slack search_messages`, `call websearch search` | Archived policy documents, notes, and discussion |
 
@@ -83,34 +84,41 @@ Generate a policy briefing memo before Hill meetings.
 **Input:** Member/staffer name, meeting context, date
 
 **Steps:**
-1. Read the Policy Explainer Index first and pull any recent `#gigabrain-feed` intel relevant to the meeting topic.
-2. Search internal sources for prior Paradigm interactions or policy context:
+1. Read the Policy Explainer Index first.
+2. For office recency/frequency questions, read the Google Sheet touchpoint log first:
    ```bash
+   call gsuite drive_search '{"query":"Policy Touchpoint Log","max_results":10}'
+   call gsuite sheets_read '{"spreadsheet_id":"[touchpoint_sheet_id]","range_notation":"A:C"}'
+   ```
+3. Search `#gigabrain-feed` for all relevant posts about the office or member, with special weight on `#touchpoint` messages:
+   ```bash
+   call slack search_messages '{"query":"in:#gigabrain-feed [office_name]"}'
+   call slack search_messages '{"query":"in:#gigabrain-feed #touchpoint [office_name]"}'
    call slack search_messages '{"query":"from:#policy [member_name]"}'
-   call slack search_messages '{"query":"in:#gigabrain-feed [member_name]"}'
    call gsuite gmail_search '{"query":"[member_name]"}'
    call paradigmdb notes_search '{"query":"[member_name]"}'
    ```
-3. Look up the member profile via web search and LegiStorm:
+4. Use those `#gigabrain-feed` results to extract the office's substantive intel — positions, concerns, asks, openings, and framing that landed or failed. Most recent intel should lead unless older intel is clearly more probative.
+5. Look up the member profile via web search and LegiStorm:
    ```bash
    # LegiStorm member profile, committee assignments, staff
    call legistorm get_members '{"updated_from":"2025-01-01","updated_to":"2026-12-31","state_id":"[XX]"}'
    ```
-4. Find relevant pending legislation:
+6. Find relevant pending legislation:
    ```bash
    call congress bills '{"congress":119}'
    call congress bill '{"congress":119,"type":"s","number":123}'
    ```
-5. Check FEC for campaign contribution context:
+7. Check FEC for campaign contribution context:
    ```bash
    call openfec candidates '{"name":"[member_name]"}'
    call openfec contributions '{"contributor_name":"[member_name]"}'
    ```
-6. Cross-reference with paradigmdb for portfolio company relevance:
+8. Cross-reference with paradigmdb for portfolio company relevance:
    ```bash
    call paradigmdb db_query '{"query":"SELECT * FROM \"Organization\" WHERE name ILIKE '\''%relevant_company%'\'';"}'
    ```
-7. Generate the briefer using the format and style rules below.
+9. Generate the briefer using the format and style rules below.
 
 **Audience**
 - Write for a Paradigm executive with deep fluency in crypto, DeFi, and relevant legislation.
@@ -143,9 +151,18 @@ Generate a policy briefing memo before Hill meetings.
   6. `Stance on Defense Tech`
   7. `Goals`
 - Do not generate a `Specific Topics To Address` section.
+- Do not generate a `Touchpoints` section.
+- Fold prior office touchpoint intel into `Landscape Summary` and the relevant stance sections instead.
 - `Landscape Summary` and `Biography` should be short prose sections.
 - `Crypto Knowledge`, `Stance on Prediction Markets`, `Stance on AI`, and `Stance on Defense Tech` should use full-sentence bullets.
 - `Goals` should remain concise bullets.
+
+**Touchpoint Intel Rules**
+- Search `#gigabrain-feed` broadly for the office or member, not just `#touchpoint` posts. `#touchpoint` posts usually carry the highest weight, but other relevant posts in `#gigabrain-feed` can also inform the briefer.
+- Use the Google Sheet touchpoint log for recency and frequency. Use Slack posts for substance.
+- Inject substantive office intel directly into `Landscape Summary` and the relevant stance sections (`Crypto Knowledge`, `Stance on Prediction Markets`, `Stance on AI`, `Stance on Defense Tech`).
+- Present that intel as synthesized analysis, not attributed sourcing. Do not write phrases like "per my meeting with" or "in a recent touchpoint."
+- Lead with the most recent office intel unless an older signal is more probative.
 
 **Landscape Summary Rules**
 - Open with committee assignments and relevant subcommittees.
@@ -188,6 +205,37 @@ Use full-sentence bullets covering: defense-industrial priorities, acquisition r
 - **Primary Ask:** [What we want from this meeting]
 - **Secondary Objectives:** [Relationship-building goals, intel to gather, positions to reinforce]
 - **Success Criteria:** [How we'll know the meeting went well]
+```
+
+### 1a. `#touchpoint` Capture
+
+Use this workflow when a user posts `#touchpoint [freeform text]` in `#gigabrain-feed` (`C0AM0TR8N91`).
+
+**Capture behavior**
+1. Reply in thread with exactly: `got it.`
+2. Treat the Slack post itself as the full capture step.
+3. Do not ask for staffer names or any additional structure.
+4. Canonicalize the office/member name from the message text.
+5. Default the date to the Slack message timestamp unless the text clearly specifies another date.
+6. Normalize `meeting_type` to one of `coffee`, `call`, `event`, `meeting`, or `other`. Default to `meeting` when unclear.
+7. Extract and store only:
+   - `office`
+   - `date`
+   - `meeting_type`
+
+**Google Sheet backup**
+1. Silently append the minimal row to a Google Sheet named `Policy Touchpoint Log`.
+2. If the sheet does not exist yet, create it with columns `office`, `date`, and `meeting_type`.
+3. Share the sheet only with the requesting user and post the sheet link in-thread once when it is first created.
+4. After the sheet exists, continue writing to it silently in the background. Do not mention the sheet on subsequent `#touchpoint` captures.
+
+**Tool pattern**
+```bash
+call gsuite drive_search '{"query":"Policy Touchpoint Log","max_results":10}'
+call gsuite sheets_create '{"title":"Policy Touchpoint Log","content":[["office","date","meeting_type"]]}'
+call gsuite sheets_read '{"spreadsheet_id":"[touchpoint_sheet_id]","range_notation":"A:C"}'
+call gsuite sheets_update '{"spreadsheet_id":"[touchpoint_sheet_id]","range_notation":"A[append_row]:C[append_row]","values":[["[office]","[date]","[meeting_type]"]]}'
+call gsuite drive_share '{"file_id":"[touchpoint_sheet_id]","email":"[requester_email]","role":"writer","send_notification":false}'
 ```
 
 ### 2. Staffer Tracking
@@ -502,12 +550,12 @@ For a given issue, route to the right staffer:
 
 ### Log All Hill Interactions
 
-After every Hill meeting or call:
-1. Log in Shift as meeting note
-2. Record commitments made (by us and by them)
-3. Note follow-ups owed
-4. Update relevant whip sheet entries
-5. Tag portfolio-relevant intel
+For lightweight capture after a Hill meeting or call:
+1. Default to a `#touchpoint` post in `#gigabrain-feed`.
+2. Reply with `got it.` and treat the Slack post as the full capture step.
+3. Silently write the minimal backup row to the Google Sheet touchpoint log.
+4. Do not store staffer names in that backup log.
+5. Only create a separate formal note, whip update, or structured follow-up log when the user explicitly asks for it.
 
 ### Periodic Reports
 
@@ -525,7 +573,11 @@ The system should answer questions like:
 - "Which bills introduced this session could affect our stablecoin portfolio companies?"
 - "Who are the key staffers on Senate Banking covering crypto?"
 - "What have we heard about stablecoin reserve requirements in the last 90 days?"
+- "When did we last meet with Dingell's office?"
+- "How many touchpoints have we had with Warner's office this year?"
+- "What has Dingell's office been saying recently about prediction markets?"
 - "Generate a briefer for my meeting with Rep Y tomorrow"
+- "Generate a briefer for my meeting with Rep Y tomorrow using recent `#gigabrain-feed` intel"
 - "What is the current whip count on [bill]?"
 - "Which states have introduced DeFi-related bills this year?"
 
@@ -537,29 +589,35 @@ The system should answer questions like:
 
 **Agent:**
 1. Read Policy Explainer Index first for internal analysis
-2. Pull recent #gigabrain-feed posts for stablecoin intel:
+2. Check the Google Sheet touchpoint log first for recency and frequency:
    ```bash
-   call slack get_channel_history '{"channel":"C0AM0TR8N91","limit":50}'
+   call gsuite drive_search '{"query":"Policy Touchpoint Log","max_results":10}'
+   call gsuite sheets_read '{"spreadsheet_id":"[touchpoint_sheet_id]","range_notation":"A:C"}'
    ```
-3. Look up Senator Lummis via LegiStorm and web search:
+3. Search `#gigabrain-feed` for all recent Lummis intel, with special weight on `#touchpoint` posts:
+   ```bash
+   call slack search_messages '{"query":"in:#gigabrain-feed Lummis"}'
+   call slack search_messages '{"query":"in:#gigabrain-feed #touchpoint Lummis"}'
+   ```
+4. Look up Senator Lummis via LegiStorm and web search:
    ```bash
    call legistorm get_members '{"updated_from":"2025-01-01","updated_to":"2026-12-31","state_id":"WY"}'
    call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","member_id":[lummis_member_id]}'
    ```
-4. Search internal sources:
+5. Search other internal sources:
    ```bash
    call slack search_messages '{"query":"Lummis"}'
-   call slack search_messages '{"query":"in:#gigabrain-feed Lummis"}'
    call gsuite gmail_search '{"query":"Lummis"}'
    call paradigmdb notes_search '{"query":"Lummis"}'
    ```
-5. Find current stablecoin legislation — federal and state:
+6. Find current stablecoin legislation — federal and state:
    ```bash
    call congress bills '{"congress":119}'
    call plural search_bills '{"q":"stablecoin","action_since":"2026-01-01"}'
    ```
-6. Check portfolio companies in stablecoin space
-7. Generate briefer using template
+7. Check portfolio companies in stablecoin space
+8. Weave the most relevant `#gigabrain-feed` intel directly into `Landscape Summary` and the relevant stance sections without creating a standalone touchpoints section
+9. Generate briefer using template
 
 ---
 
