@@ -65,10 +65,20 @@
 |  call vlogs sandbox_activity                                 → sandbox container lifecycle
 |  call vlogs tool_analytics '{"start":"7d"}'                   → tool usage stats (calls, failures, avg latency)
 |  call vlogs tool_usage_by_thread '{"thread_key":"C0AJ07U8Z1N:1234"}' → tool calls for a thread
-|  call vlogs execution_summaries '{"start":"24h"}'             → per-execution summaries for prompt/tool/runtime analysis
+|  call vlogs execution_summaries '{"start":"24h"}'             → per-execution summaries (TTFT, 1-shot, tool retries, error categories)
 |  call vlogs prompt_analytics '{"start":"7d"}'                 → aggregate outcomes by prompt lineage
 |  call vlogs model_analytics '{"start":"24h"}'                 → aggregate model usage, tokens, and cost
 |  call vlogs query '{"query":"level:error AND event:tool_call_completed","limit":20}' → raw LogsQL
+|
+|Metrics (VictoriaMetrics via `call vmetrics`):
+|  call vmetrics query '{"expr":"last_over_time(agent_sessions_active[5m])"}'  → current active sessions
+|  call vmetrics query '{"expr":"sum(last_over_time(agent_execution_terminal_total[1h]))"}'  → total executions
+|  call vmetrics query '{"expr":"histogram_quantile(0.95, sum by (le) (last_over_time(agent_ttft_seconds_bucket[1h])))"}'  → TTFT p95
+|  call vmetrics query '{"expr":"sum(last_over_time(agent_oneshot_total{success=\"true\"}[1h])) / clamp_min(sum(last_over_time(agent_oneshot_total[1h])), 1)"}'  → 1-shot success rate
+|  call vmetrics query '{"expr":"sum by (category) (last_over_time(agent_tool_error_categories_total[1h]))"}'  → tool errors by category
+|  call vmetrics query '{"expr":"topk(5, sum by (tool_name) (last_over_time(agent_tool_calls_total[1h])))"}'  → top tools by call volume
+|  call vmetrics metric_names                                    → list all agent_* metric names
+|  call vmetrics query_range '{"expr":"sum(increase(agent_execution_terminal_total[5m]))","start":"2026-04-03T18:00:00Z","step":"5m"}'  → execution rate over time
 |
 |Execution data (Postgres via self-query):
 |  # Recent executions with timing
