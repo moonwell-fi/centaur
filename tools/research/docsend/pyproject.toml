@@ -16,5 +16,5 @@ build-backend = "hatchling.build"
 
 [tool.ai-v2]
 module = "client.py"
-hosts = ["docsend.com"]
+hosts = ["docsend.com", "api.browser-use.com"]
 secrets = ["BROWSER_USE_API_KEY"]

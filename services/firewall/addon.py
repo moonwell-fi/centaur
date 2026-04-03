@@ -103,7 +103,8 @@ SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS"})
 # Allowed outbound request headers — anything not in this set is stripped.
 ALLOWED_OUTBOUND_HEADERS: frozenset[str] = frozenset({
     "host", "content-type", "content-length", "accept", "accept-encoding",
-    "accept-language", "authorization", "x-api-key", "anthropic-version",
+    "accept-language", "authorization", "x-api-key", "x-browser-use-api-key",
+    "anthropic-version",
     "anthropic-beta", "openai-organization", "openai-project",
     "x-request-id", "x-stainless-arch", "x-stainless-os",
     "x-stainless-lang", "x-stainless-runtime", "x-stainless-runtime-version",
