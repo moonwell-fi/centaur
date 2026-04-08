@@ -955,6 +955,7 @@ class _RegisteredHandler:
     input_cls: type | None  # Optional typed Input dataclass
     source_path: str
     version: str
+    schedule: dict[str, Any] | None = None  # Optional SCHEDULE export
 
 
 # Maps workflow_name → registered handler + optional input class
@@ -1047,12 +1048,17 @@ def _load_workflow_file(
             )
             return
         input_cls = getattr(mod, "Input", None)
+        schedule = getattr(mod, "SCHEDULE", None)
+        if schedule is not None and not isinstance(schedule, dict):
+            log.warning("workflow_schedule_skip", file=str(py_file), reason="SCHEDULE must be a dict")
+            schedule = None
         version = hashlib.sha256(py_file.read_bytes()).hexdigest()
         _WORKFLOW_HANDLERS[wf_name] = _RegisteredHandler(
             handler=wf_handler,
             input_cls=input_cls,
             source_path=str(py_file),
             version=version,
+            schedule=schedule,
         )
         discovered[wf_name] = str(py_file)
     except Exception:
@@ -1141,63 +1147,65 @@ def _split_thread_key(thread_key: str) -> tuple[str, str]:
 
 
 def _registered_schedule_specs() -> list[ScheduleSpec]:
-    thread_key = (os.getenv("PARADIGM_PULSE_THREAD_KEY") or "").strip()
-    if not thread_key:
-        return []
-    try:
-        channel, thread_ts = _split_thread_key(thread_key)
-    except ControlPlaneError:
-        log.warning(
-            "workflow_schedule_skipped_invalid_thread_key",
-            thread_key=thread_key,
-        )
-        return []
+    """Collect schedule specs from all registered workflow handlers.
 
-    team_id = (
-        (os.getenv("PARADIGM_PULSE_TEAM_ID") or "").strip() or None
-    )
-    enabled = os.getenv(
-        "PARADIGM_PULSE_ENABLED", "1",
-    ).strip().lower() not in {"0", "false", "no"}
-    schedule_expr = (
-        os.getenv("PARADIGM_PULSE_SCHEDULE") or "45 7 * * *"
-    ).strip()
-    timezone = (
-        (os.getenv("PARADIGM_PULSE_TIMEZONE") or "America/Los_Angeles")
-        .strip() or "UTC"
-    )
-    prompt_selector = (
-        (os.getenv("PARADIGM_PULSE_PROMPT_SELECTOR") or "").strip()
-        or None
-    )
-    input_json: dict[str, Any] = {
-        "thread_key": thread_key,
-        "delivery": {
-            "channel": channel,
-            "thread_ts": thread_ts,
-            "platform": "slack",
-            **({"recipient_team_id": team_id} if team_id else {}),
-        },
-        "metadata": {
-            "source": "workflow_schedule",
-            "workflow_name": "paradigm_pulse_daily",
-        },
-    }
-    if prompt_selector:
-        input_json["prompt_selector"] = prompt_selector
+    Each handler may export a ``SCHEDULE`` dict with keys:
+    - ``cron`` or ``interval_seconds`` — the schedule trigger
+    - ``timezone`` — (default "UTC")
+    - ``input`` — static input dict merged with the handler's Input
+    - ``enabled`` — (default True)
+    - ``catchup_policy`` — "skip" (default) or "catch_up"
 
-    return [
-        ScheduleSpec(
-            schedule_id="paradigm_pulse_daily",
-            workflow_name="paradigm_pulse_daily",
-            schedule_kind="cron",
-            schedule_expr=schedule_expr,
-            timezone=timezone,
-            catchup_policy="skip",
+    Environment variables in the ``input`` values are expanded via
+    ``os.path.expandvars`` so you can write ``"$SOME_ENV_VAR"`` in the
+    workflow file and have it resolved at startup.
+    """
+    specs: list[ScheduleSpec] = []
+    for wf_name, reg in _WORKFLOW_HANDLERS.items():
+        sched = reg.schedule
+        if not sched:
+            continue
+        cron_expr = sched.get("cron")
+        interval_s = sched.get("interval_seconds")
+        if not cron_expr and not interval_s:
+            log.warning(
+                "workflow_schedule_skip",
+                workflow_name=wf_name,
+                reason="SCHEDULE must have 'cron' or 'interval_seconds'",
+            )
+            continue
+
+        raw_input = sched.get("input", {})
+        # Expand env vars in string values (one level deep)
+        input_json = _expand_env_vars(raw_input)
+
+        enabled_val = sched.get("enabled", True)
+        if isinstance(enabled_val, str):
+            enabled_val = enabled_val.strip().lower() not in {"0", "false", "no"}
+
+        specs.append(ScheduleSpec(
+            schedule_id=sched.get("schedule_id", wf_name),
+            workflow_name=wf_name,
+            schedule_kind="cron" if cron_expr else "interval",
+            schedule_expr=cron_expr,
+            timezone=sched.get("timezone", "UTC"),
+            interval_seconds=interval_s,
+            catchup_policy=sched.get("catchup_policy", "skip"),
             input_json=input_json,
-            enabled=enabled,
-        ),
-    ]
+            enabled=bool(enabled_val),
+        ))
+    return specs
+
+
+def _expand_env_vars(obj: Any) -> Any:
+    """Recursively expand $ENV_VAR references in string values."""
+    if isinstance(obj, str):
+        return os.path.expandvars(obj)
+    if isinstance(obj, dict):
+        return {k: _expand_env_vars(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env_vars(v) for v in obj]
+    return obj
 
 
 # ── Cron helpers ──────────────────────────────────────────────────────

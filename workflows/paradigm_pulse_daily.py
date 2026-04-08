@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -9,6 +10,28 @@ from api.runtime_control import ControlPlaneError
 from api.workflow_engine import Delivery, WorkflowContext
 
 WORKFLOW_NAME = "paradigm_pulse_daily"
+
+# Schedule is configured via env vars on the deploy box.
+# Set PARADIGM_PULSE_THREAD_KEY to enable.
+_thread_key = os.getenv("PARADIGM_PULSE_THREAD_KEY", "").strip()
+
+SCHEDULE = {
+    "cron": os.getenv("PARADIGM_PULSE_SCHEDULE", "45 7 * * *"),
+    "timezone": os.getenv("PARADIGM_PULSE_TIMEZONE", "America/Los_Angeles"),
+    "enabled": os.getenv("PARADIGM_PULSE_ENABLED", "1"),
+    "input": {
+        "thread_key": _thread_key,
+        "prompt_selector": os.getenv("PARADIGM_PULSE_PROMPT_SELECTOR", "") or None,
+        "delivery": {
+            "platform": "slack",
+            "recipient_team_id": os.getenv("PARADIGM_PULSE_TEAM_ID", "") or None,
+        },
+        "metadata": {
+            "source": "workflow_schedule",
+            "workflow_name": "paradigm_pulse_daily",
+        },
+    },
+} if _thread_key else None  # disabled when no thread_key configured
 
 
 @dataclass

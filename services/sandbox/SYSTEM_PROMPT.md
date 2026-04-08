@@ -146,6 +146,13 @@
 |        thread_key: str = ""
 |        # ... your fields
 |
+|    # Optional: run on a cron schedule
+|    SCHEDULE = {
+|        "cron": "0 9 * * *",        # 9am daily (cron expr or interval_seconds)
+|        "timezone": "America/New_York",
+|        "input": {"thread_key": os.getenv("MY_THREAD_KEY", "")},
+|    }
+|
 |    async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
 |        result = await ctx.step("step_1", lambda: {"status": "ok"})
 |        await ctx.sleep("wait", timedelta(minutes=5))
@@ -155,6 +162,7 @@
 |
 |  Available primitives: ctx.step(name, fn), ctx.sleep(name, duration),
 |  ctx.wait_for_event(name, event_type, correlation_id), do_agent_turn(ctx, ...).
+|  Export SCHEDULE dict with `cron` or `interval_seconds` to auto-register a schedule.
 |
 |Check status:  call workflow get <run_id>
 |Cancel:        call workflow cancel <run_id>
