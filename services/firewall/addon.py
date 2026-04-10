@@ -71,11 +71,23 @@ SECRET_INJECTION_HOSTS: frozenset[str] = frozenset(
 )
 
 _PRIVATE_NETWORKS = (
+    ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("169.254.0.0/16"),
+    # IPv6 loopback and private ranges
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("fc00::/7"),
+    # IPv4-mapped IPv6 ranges
+    ipaddress.ip_network("::ffff:127.0.0.0/104"),
+    ipaddress.ip_network("::ffff:10.0.0.0/104"),
+    ipaddress.ip_network("::ffff:172.16.0.0/108"),
+    ipaddress.ip_network("::ffff:192.168.0.0/112"),
+    ipaddress.ip_network("::ffff:169.254.0.0/112"),
+    ipaddress.ip_network("::ffff:0.0.0.0/104"),
 )
 
 # Internal hosts that sandboxes are allowed to reach despite resolving to
@@ -124,6 +136,7 @@ RATE_LIMIT = int(os.environ.get("FIREWALL_RATE_LIMIT", "500"))
 RATE_WINDOW = 60  # seconds
 
 BODY_INSPECTION_ENABLED = os.environ.get("FIREWALL_BODY_INSPECTION", "0") == "1"
+CONTROL_TOKEN = os.environ.get("FIREWALL_CONTROL_TOKEN", "")
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +278,19 @@ class CredentialInjector:
         parent = self
 
         class Handler(BaseHTTPRequestHandler):
+            def _check_control_auth(self) -> bool:
+                """Verify control token for sensitive endpoints. Returns True if OK."""
+                if not CONTROL_TOKEN:
+                    return True
+                auth = self.headers.get("Authorization", "")
+                if auth == f"Bearer {CONTROL_TOKEN}":
+                    return True
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "forbidden"}).encode())
+                return False
+
             def do_GET(self) -> None:
                 if self.path == "/health":
                     with parent._lock:
@@ -283,6 +309,8 @@ class CredentialInjector:
                     self.end_headers()
                     self.wfile.write(body.encode())
                 elif self.path.startswith("/secrets/"):
+                    if not self._check_control_auth():
+                        return
                     key = self.path[len("/secrets/"):]
                     key = urllib.parse.unquote(key)
                     val = parent._get_secret(key)
@@ -302,6 +330,8 @@ class CredentialInjector:
 
             def do_POST(self) -> None:
                 if self.path == "/injection-map":
+                    if not self._check_control_auth():
+                        return
                     length = int(self.headers.get("Content-Length", 0))
                     body = self.rfile.read(length) if length else b""
                     try:
@@ -399,7 +429,7 @@ class CredentialInjector:
         with self._injection_map_lock:
             injection_map = self._injection_map.copy()
         if not injection_map:
-            return None  # No map loaded yet — fallback behavior
+            return frozenset()  # No map loaded — deny all (fail-closed)
         allowed: set[str] = set()
         matched = False
         for pattern, keys in injection_map.items():
@@ -877,6 +907,11 @@ class CredentialInjector:
 
         # Re-read host after potential provider rewrite
         host = flow.request.pretty_host.lower().rstrip(".")
+
+        # 4b. Re-check SSRF after provider rewrite — the rewritten host
+        # could resolve to a private IP
+        if rewritten and self._block_private_ip(flow, host):
+            return
 
         # 5. HTTP method filtering: hosts not in the unrestricted set are
         #    limited to safe methods only (GET/HEAD/OPTIONS).  LLM API hosts,

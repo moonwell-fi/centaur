@@ -9,7 +9,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
 
-from api.deps import verify_api_key
+from api.deps import get_sandbox_claims, verify_api_key
 
 log = structlog.get_logger()
 
@@ -20,9 +20,20 @@ router = APIRouter(
 )
 
 
+def _enforce_sandbox_thread_scope(request: Request, thread_key: str) -> None:
+    """Reject if a sandbox token is trying to access a different thread."""
+    claims = get_sandbox_claims(request)
+    if claims is None:
+        return
+    allowed = claims.get("thread_key")
+    if allowed and allowed != thread_key:
+        raise HTTPException(status_code=403, detail="Sandbox token is scoped to a different thread")
+
+
 @router.get("")
 async def list_attachments(request: Request, thread_key: str):
     """List attachment metadata for a thread."""
+    _enforce_sandbox_thread_scope(request, thread_key)
     pool = request.app.state.db_pool
     rows = await pool.fetch(
         "SELECT id, thread_key, message_id, name, mime_type, created_at "
@@ -65,6 +76,8 @@ async def upload_attachment(request: Request):
             status_code=422,
             detail="thread_key, name, mime_type, and data are required",
         )
+
+    _enforce_sandbox_thread_scope(request, thread_key)
 
     try:
         raw_bytes = base64.b64decode(data_b64)

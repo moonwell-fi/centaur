@@ -17,9 +17,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # ── Python deps ──────────────────────────────────────────────────────────────
 RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     pip3 install --break-system-packages \
-    python-docx lxml docx-revisions \
-    matplotlib numpy pandas \
-    python-pptx openpyxl PyMuPDF mammoth
+    python-docx==1.2.0 lxml==6.0.2 docx-revisions==0.1.4 \
+    matplotlib==3.10.8 numpy==2.4.4 pandas==3.0.2 \
+    python-pptx==1.0.2 openpyxl==3.1.5 PyMuPDF==1.27.2 mammoth==1.12.0
 
 # ── GitHub CLI + Node.js 22 + Docker CLI (single layer, cached) ─────────────
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -41,7 +41,7 @@ RUN useradd -m -s /bin/bash -u 1001 agent \
 
 # ── Global npm CLIs (root, cached) ──────────────────────────────────────────
 RUN --mount=type=cache,target=/root/.npm,sharing=locked \
-    npm install -g @anthropic-ai/claude-code @openai/codex @mariozechner/pi-coding-agent agent-browser
+    npm install -g @anthropic-ai/claude-code@1.0.16 @openai/codex@0.1.5 @mariozechner/pi-coding-agent@0.5.0 agent-browser@0.1.8
 
 USER agent
 WORKDIR /home/agent

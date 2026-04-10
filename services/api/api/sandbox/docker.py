@@ -231,8 +231,11 @@ class DockerSandboxBackend(SandboxBackend):
                     "ai2.thread": thread_key,
                 },
                 "HostConfig": {
-                    "Privileged": True,
+                    "Privileged": False,
+                    "CapAdd": ["SYS_ADMIN", "NET_ADMIN"],
+                    "SecurityOpt": ["apparmor=unconfined"],
                     "NetworkMode": network,
+                    "StorageOpt": {"size": "20G"},
                 },
             },
         )

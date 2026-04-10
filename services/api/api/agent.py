@@ -39,6 +39,13 @@ from api.sandbox.registry import get_backend
 
 log = structlog.get_logger()
 
+_VALID_STDOUT_EVENT_TYPES = frozenset({
+    "system", "assistant", "result", "turn.done", "error",
+    "tool_use", "tool_result", "content_block_start", "content_block_delta",
+    "content_block_stop", "message_start", "message_delta", "message_stop",
+    "amp_raw_event", "status",
+})
+
 _ENGINE_HARNESSES = {"amp", "claude-code", "codex", "pi-mono"}
 _REUSABLE_DB_STATES = {"running", "idle", "delivering", "error", "suspended"}
 
@@ -683,6 +690,15 @@ async def _stream_stdout(
                 evt = json.loads(line)
             except (json.JSONDecodeError, TypeError):
                 continue
+
+            evt_type = evt.get("type", "") if isinstance(evt, dict) else ""
+            if evt_type and evt_type not in _VALID_STDOUT_EVENT_TYPES:
+                log.warning(
+                    "stdout_unknown_event_type",
+                    type=evt_type,
+                    thread_key=session.thread_key,
+                    sandbox=session.sandbox_id[:12],
+                )
 
             tid = extract_thread_id(session.engine, evt)
             if tid:
