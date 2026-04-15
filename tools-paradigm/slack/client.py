@@ -57,10 +57,11 @@ class SlackClient:
 
     def _resolve_channel(self, channel: str) -> str:
         """Resolve a channel name to its ID using cached channel list."""
-        if channel.startswith("C") or channel.startswith("G"):
-            return channel
+        normalized = channel.lstrip("#")
+        if normalized.startswith("C") or normalized.startswith("G"):
+            return normalized
         channels = self.list_bot_channels()
-        name = channel.lstrip("#")
+        name = normalized
         for ch in channels:
             if ch["name"] == name:
                 return ch["id"]
