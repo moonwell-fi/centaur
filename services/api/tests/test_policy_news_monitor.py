@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import uuid
 
 import pytest
 import pytest_asyncio
 
 from api.policy_news import (
+    DEFAULT_POLICY_NEWS_FEEDS_FILE,
     QueryRequest,
     build_alert_message,
+    load_monitor_config,
     normalize_title,
     parse_feedback_command,
     parse_query_request,
@@ -57,6 +60,42 @@ def test_title_similarity_clusters_obvious_near_duplicates():
         "Scott announces digital asset market structure markup in Senate Banking"
     )
     assert title_similarity(left, right) >= 0.70
+
+
+def test_load_monitor_config_ignores_scheduler_metadata_and_uses_default_file(
+    tmp_path, monkeypatch
+):
+    config_path = tmp_path / "policy_news_sources.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "slack_channel": "C0ASR4NFLPR",
+                "sources": [
+                    {
+                        "name": "Reuters",
+                        "url": "https://www.reutersagency.com/feed/",
+                    }
+                ],
+            }
+        )
+    )
+    monkeypatch.setenv("POLICY_NEWS_FEEDS_FILE", str(config_path))
+
+    config = load_monitor_config(
+        {
+            "metadata": {"source": "workflow_schedule"},
+            "unexpected": "ignored",
+        }
+    )
+
+    assert config.slack_channel == "C0ASR4NFLPR"
+    assert config.sources[0].name == "Reuters"
+
+
+def test_load_monitor_config_falls_back_to_checked_in_default_file(monkeypatch):
+    monkeypatch.delenv("POLICY_NEWS_FEEDS_FILE", raising=False)
+
+    assert DEFAULT_POLICY_NEWS_FEEDS_FILE == "/app/workflows/policy_news_sources.json"
 
 
 @pytest.mark.asyncio

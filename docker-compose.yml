@@ -141,9 +141,6 @@ services:
       DOCKER_HOST: tcp://docker-socket-proxy:2375
       HTTPS_PROXY: http://firewall:8080
       BROWSER_USE_PROFILE_ID: ${BROWSER_USE_PROFILE_ID:-}
-      POLICY_NEWS_FEEDS_FILE: /app/workflows/policy_news_sources.json
-      POLICY_NEWS_SLACK_CHANNEL: C0ASR4NFLPR
-      POLICY_NEWS_ENABLED: "1"
       REQUESTS_CA_BUNDLE: /firewall-certs/ca-cert.pem
       SSL_CERT_FILE: /firewall-certs/ca-cert.pem
     extra_hosts:

@@ -8,7 +8,7 @@ import json
 import os
 import re
 import uuid
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -227,6 +227,7 @@ NOISE_TERMS = [
     "conference",
     "summit",
 ]
+DEFAULT_POLICY_NEWS_FEEDS_FILE = "/app/workflows/policy_news_sources.json"
 
 
 @dataclass
@@ -242,6 +243,7 @@ class MonitorInput:
     max_query_results: int = 8
     classifier_provider: str = "auto"
     model: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -349,12 +351,18 @@ def normalize_slack_channel(value: str) -> str:
 
 
 def _coerce_input(inp: Any) -> MonitorInput:
+    allowed_fields = {field_info.name for field_info in fields(MonitorInput)}
     if isinstance(inp, MonitorInput):
         return inp
     if is_dataclass(inp):
-        return MonitorInput(**asdict(inp))
+        raw = asdict(inp)
+        return MonitorInput(
+            **{key: value for key, value in raw.items() if key in allowed_fields}
+        )
     if isinstance(inp, dict):
-        return MonitorInput(**inp)
+        return MonitorInput(
+            **{key: value for key, value in inp.items() if key in allowed_fields}
+        )
     return MonitorInput()
 
 
@@ -363,7 +371,9 @@ def load_monitor_config(raw_input: Any) -> MonitorConfig:
     file_sources: list[dict[str, Any]] = []
     file_channel = ""
     feeds_file = (
-        inp.feeds_file.strip() or os.getenv("POLICY_NEWS_FEEDS_FILE", "").strip()
+        inp.feeds_file.strip()
+        or os.getenv("POLICY_NEWS_FEEDS_FILE", "").strip()
+        or DEFAULT_POLICY_NEWS_FEEDS_FILE
     )
     if feeds_file:
         data = json.loads(Path(feeds_file).read_text())
