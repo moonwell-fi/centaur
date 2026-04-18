@@ -16,21 +16,26 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from api.runtime_control import ControlPlaneError, decode_jsonb
-from api.workflow_engine import Delivery, WorkflowContext
+from api.workflow_engine import (
+    CancelledWorkflow,
+    Delivery,
+    NonRetryableError,
+    SuspendWorkflow,
+    WorkflowContext,
+)
 from workflows.json_payloads import extract_json_payload, has_required_keys, missing_required_keys
 
 WORKFLOW_NAME = "self_improve_daily"
 SCHEDULE = {
     "cron": "0 22 * * *",
     "timezone": "America/Los_Angeles",
-    "slack_channel": "ai-v2",
+    "slack_channel": "ai-agent",
     "catchup_policy": "skip",
 }
 
 PRIOR_CONTEXT_WINDOW = 3
 FOLLOWUP_LIMIT = 8
 FOLLOWUP_CUTOFF_HOURS = 4
-NOTIFIER_STATS_WINDOW_HOURS = 24
 CHILD_TIMEOUT_HOURS = 2
 DEDUP_WINDOW_HOURS = 72
 MAX_DELIVERY_TEXT_CHARS = 2000
@@ -1150,12 +1155,22 @@ async def _run_batch_review_pass(
         The `target_surface` must name a real file in the Centaur codebase.
         Vague recommendations are not acceptable.
 
-        `slack_narrative` is a 2-4 sentence human note for the internal
-        `ai-v2` Slack channel. Use `source_user_mention` when present;
-        otherwise fall back to `source_user_name`. Name who surfaced the
-        issue and describe what they were trying to do. This field is posted
-        internally and stripped before any PR is written, so user mentions or
-        first names and concrete session details are encouraged here.
+        `slack_narrative` is a 2-4 sentence human note used internally for
+        archival. Always refer to the subject as "Centaur" (never "the bot"
+        or "the agent"). Use `source_user_name` to refer to the user
+        (plain first name only — never `source_user_mention` or raw Slack
+        IDs). Name who surfaced the issue and describe what they were
+        trying to do. This field is stripped before any PR is written.
+
+        Also emit an OPTIONAL `credit_line` — one short warm sentence
+        (≤120 chars) that credits the user for the specific thing they
+        did well, using plain `source_user_name` (never a mention, never
+        raw IDs). Good shapes: "good catch from Katie", "made possible
+        because Matt asked for the gsuite tool directly". Only emit
+        `credit_line` when the evidence credibly supports a specific good
+        ask or observation. If it doesn't, leave `credit_line` as the
+        empty string and the scorecard will fall back to a plain name.
+        Never invent a credit line — evidence first, warmth second.
 
         Prefer structural fix types (workflow_fix, bug_fix, tool_improvement,
         new_skill, new_persona) when the root cause is structural. Reach for
@@ -1279,15 +1294,27 @@ async def _run_learning_synthesis_pass(
         Every opportunity must name a specific target_surface (file path) and a
         concrete implementation_sketch.
         Select all materially justified opportunities for autonomous implementation.
+
         Each `selected_builds` entry MUST include `slack_narrative` — 2-4
-        sentences of plain-English prose that name the users who surfaced the
-        pattern (use `source_user_mention` when present, otherwise
-        `source_user_name`), describe what they were trying to do, and explain
-        why this opportunity is worth building now. This narrative is posted
-        internally on `ai-v2` and stripped before the implementing agent sees
-        the fix packet, so user mentions or first names and concrete session
-        details are encouraged here. Stay grounded in provided evidence — do
-        not invent situations.
+        sentences of plain-English prose. Always refer to the subject as
+        "Centaur" (never "the bot" or "the agent"). Name the users who
+        surfaced the pattern using plain `source_user_name` (never
+        `source_user_mention`, never raw Slack IDs), describe what they
+        were trying to do, and explain why this opportunity is worth
+        building now. This narrative is stripped before the implementing
+        agent sees the fix packet. Stay grounded in provided evidence —
+        do not invent situations.
+
+        Also emit an OPTIONAL `credit_line` on each selected_build — one
+        short warm sentence (≤120 chars) crediting the user for the
+        specific good ask or observation that surfaced this opportunity,
+        using plain `source_user_name` only (never a mention, never raw
+        IDs). Good shapes: "good ask from Arjun", "made possible because
+        Katie kept asking for an editorial voice directly". Only emit
+        `credit_line` when the evidence credibly supports a specific
+        action; otherwise leave it as the empty string and the scorecard
+        will fall back to a plain name.
+
         Return JSON only matching the output contract in the skill.
 
         Compact task summary batch:
@@ -1406,46 +1433,123 @@ def _render_source_thread_links(
     return ", ".join(links)
 
 
-def _clip(text: str, max_chars: int = 500) -> str:
+def _clip(text: str, max_chars: int = 160) -> str:
     stripped = str(text or "").strip()
     if len(stripped) <= max_chars:
         return stripped
     return stripped[: max_chars - 1].rstrip() + "\u2026"
 
 
-_SCORECARD_FLAIR_LINES = (
-    "Some clean wins, a couple rough edges, and a few upgrades worth shipping.",
-    "A pretty healthy nightly pass, with just enough splinters to keep us honest.",
-    "Good instincts in the batch today, plus a few sharp corners worth sanding down.",
-    "A nice mix tonight: a few real fixes, a few growth ideas, and not much theater.",
+_MENTION_PATTERN = re.compile(r"<@U[A-Z0-9]+>")
+_INLINE_WHITESPACE_COLLAPSE = re.compile(r"[ \t]{2,}")
+
+
+def _strip_mentions(text: str) -> str:
+    """Remove any `<@U...>` Slack mention patterns from *text*.
+
+    Safety net: the scorecard must never leak raw Slack user IDs into a
+    public channel. The LLM prompts ask for plain first names, but this
+    helper catches any stray `<@UXXXX>` that slips through. Also
+    collapses the double-space residue a mid-sentence mention leaves
+    behind so the body doesn't look mechanical.
+
+    Intended for body-level text only — do NOT apply this to a
+    multi-line scorecard, because it will squash the two-space indent
+    on sub-bullets into one space. Use ``_strip_mentions_multiline`` at
+    the whole-message boundary instead.
+    """
+    cleaned = _MENTION_PATTERN.sub("", str(text or ""))
+    cleaned = _INLINE_WHITESPACE_COLLAPSE.sub(" ", cleaned)
+    return cleaned.strip()
+
+
+def _strip_mentions_multiline(text: str) -> str:
+    """Whole-message mention strip that preserves bullet indentation.
+
+    Only removes `<@U...>` matches; leaves all whitespace alone so sub-
+    bullets keep their two-space indent and blank separator lines stay
+    intact. Strips leading/trailing whitespace on the overall block.
+    """
+    return _MENTION_PATTERN.sub("", str(text or "")).strip()
+
+
+def _fallback_body(item: dict[str, Any], field_names: tuple[str, ...]) -> str:
+    """Last-resort body when the polish LLM is unavailable.
+
+    Takes the first non-empty structured field, strips any stray Slack
+    mentions, and clips at a generous limit so Slack never truncates the
+    post mid-word. We accept an awkwardly long sentence here because
+    polish-failed fallback is better than a failed post; the primary
+    path is always the LLM polish pass.
+    """
+    for name in field_names:
+        raw = str(item.get(name) or "").strip()
+        if not raw:
+            continue
+        return _clip(_strip_mentions(raw), max_chars=240)
+    return ""
+
+
+# Ten variants — seed-picked once per run so the post feels fresh without
+# going random. The first five read naturally when a capability actually
+# shipped; the last five read naturally on quiet nights. Never reference
+# "the bot" or "the agent" — the subject is always Centaur.
+_SCORECARD_FLAIR_SHIPPED = (
+    "A new skill landed; a couple of fixes are cooling off in review.",
+    "Turns out everyone here writes memos on Fridays. Centaur noticed and shipped an editorial voice for it.",
+    "Portfolio reviews are apparently a daily ritual around here — Centaur learned the structured view you've been reinventing.",
+    "The team keeps asking for cleaner Sheets writes; Centaur is finally in on the joke.",
+    "A fresh capability you can poke at tomorrow and a couple of fixes waiting on human eyes.",
+)
+
+_SCORECARD_FLAIR_QUIET = (
+    "Mostly calibration tonight — quiet wins and a few sharp corners.",
+    "Everything is still gathering opinions in review.",
+    "Centaur picked up a new trick tonight and left a couple of rough edges for us to look at.",
+    "Small, useful night. A few fixes waiting on review.",
+    "Light pass today. Mostly Centaur learning not to debug by redesign.",
 )
 
 
-def _scorecard_flair(review: dict[str, Any], synthesis: dict[str, Any]) -> str:
+def _scorecard_flair(
+    review: dict[str, Any],
+    synthesis: dict[str, Any],
+    *,
+    shipped_count: int,
+) -> str:
+    """Pick one flair line deterministically from the pool.
+
+    The seed mixes in counts from the run so consecutive nights with
+    different shapes land on different lines. `shipped_count` selects
+    between the "something shipped" pool and the "quiet night" pool so
+    the opening line never fights the body of the post.
+    """
     seed = (
         int(review.get("tasks_reviewed") or 0)
         + int(review.get("below_bar_count") or 0)
         + len(list(review.get("selected_fixes") or []))
         + len(list(synthesis.get("selected_builds") or []))
+        + int(shipped_count)
     )
-    return _SCORECARD_FLAIR_LINES[seed % len(_SCORECARD_FLAIR_LINES)]
+    pool = _SCORECARD_FLAIR_SHIPPED if shipped_count > 0 else _SCORECARD_FLAIR_QUIET
+    return pool[seed % len(pool)]
 
 
 _FAILURE_MODE_EXPLANATIONS = {
-    "verification_miss": "The agent skipped or under-verified work before handoff.",
-    "intent_miss": "The agent answered a different problem than the one the user actually asked.",
-    "debugging_intent_miss": "The agent treated a debugging request like ideation instead of investigating the live system.",
+    "verification_miss": "Centaur skipped or under-verified work before handoff.",
+    "intent_miss": "Centaur answered a different problem than the one the user actually asked.",
+    "debugging_intent_miss": "Centaur treated a debugging request like ideation instead of investigating the live system.",
     "intent_miss_investigation_replaced_by_ideation": (
-        "The agent proposed redesigns instead of inspecting the broken workflow first."
+        "Centaur proposed redesigns instead of inspecting the broken workflow first."
     ),
-    "research_miss": "The agent missed important evidence that was available in the repo, tools, or data.",
-    "tool_misuse": "The agent used the wrong tool path or missed the right tool entirely.",
-    "reliability_issue": "The system failed before it could deliver a usable answer.",
+    "research_miss": "Centaur missed important evidence that was available in the repo, tools, or data.",
+    "tool_misuse": "Centaur used the wrong tool path or missed the right tool entirely.",
+    "reliability_issue": "Centaur failed before delivering a usable answer.",
     "reliability_timeout_before_progress": (
-        "Active executions timed out before the system recognized startup progress."
+        "Active executions timed out before Centaur recognized startup progress."
     ),
     "missing_sheet_tab_capability": (
-        "The agent could not create the Google Sheet structure the user asked for."
+        "Centaur could not create the Google Sheet structure the user asked for."
     ),
 }
 
@@ -1469,235 +1573,577 @@ def _humanize_failure_mode(entry: dict[str, Any]) -> str:
     return label
 
 
-def _gap_thread_suffix(source_threads: list[dict[str, Any]] | None) -> str:
-    thread_links = _render_source_thread_links(source_threads, link_text="gap thread")
-    if not thread_links:
-        return ""
-    if source_threads and len(source_threads) == 1:
-        return f" {thread_links}"
-    return f" (gap threads: {thread_links})"
+def _build_polish_payload(
+    review: dict[str, Any],
+    synthesis: dict[str, Any],
+    child_results: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Collect the per-item inputs the polish LLM needs to write bodies.
+
+    Each item is trimmed to just the framing fields the LLM should
+    consider so we keep the prompt small and focused. Item IDs are
+    stable and index-based so the caller can map polished bodies back
+    onto the rendered scorecard bullets deterministically.
+    """
+
+    def _trim(item: dict[str, Any], field_names: tuple[str, ...]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for name in field_names:
+            value = item.get(name)
+            if value in (None, "", [], {}):
+                continue
+            if isinstance(value, str):
+                out[name] = _clip(_strip_mentions(value), max_chars=600)
+            else:
+                out[name] = value
+        return out
+
+    gap_fixes = [
+        _trim(
+            fix,
+            (
+                "title",
+                "fix_type",
+                "dominant_failure_mode",
+                "why_now",
+                "what_to_change",
+                "what_should_exist",
+            ),
+        )
+        | {"id": f"gap-{index}"}
+        for index, fix in enumerate(
+            [item for item in list(review.get("selected_fixes") or [])[:5] if isinstance(item, dict)]
+        )
+    ]
+    builds = [
+        _trim(
+            build,
+            (
+                "title",
+                "opportunity_type",
+                "what_should_exist",
+                "user_value",
+                "implementation_sketch",
+                "evidence_summary",
+            ),
+        )
+        | {"id": f"growth-{index}"}
+        for index, build in enumerate(
+            [item for item in list(synthesis.get("selected_builds") or [])[:3] if isinstance(item, dict)]
+        )
+    ]
+
+    shipped: list[dict[str, Any]] = []
+    in_review: list[dict[str, Any]] = []
+    for entry in child_results:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("error") or not entry.get("pr_number") or not entry.get("pr_url"):
+            continue
+        trimmed = _trim(
+            entry,
+            (
+                "title",
+                "fix_type",
+                "dominant_failure_mode",
+                "why_now",
+                "what_to_change",
+                "what_should_exist",
+                "user_value",
+            ),
+        )
+        if str(entry.get("auto_merge_status") or "") == "merged":
+            trimmed["id"] = f"shipped-{len(shipped)}"
+            shipped.append(trimmed)
+        else:
+            trimmed["id"] = f"in_review-{len(in_review)}"
+            in_review.append(trimmed)
+
+    return {
+        "gap": gap_fixes,
+        "growth": builds,
+        "shipped": shipped,
+        "in_review": in_review,
+    }
 
 
-def _scorecard_item_line(label: str, narrative: str, source_threads: list[dict[str, Any]] | None = None) -> str:
-    body = str(narrative or "").strip()
-    suffix = _gap_thread_suffix(source_threads)
-    if suffix:
-        body = f"{body}{suffix}" if body else suffix.strip()
-    if body:
-        return f"  • {label} — {body}"
-    return f"  • {label}"
+def _build_flair_digest(
+    all_tasks: list[dict[str, Any]],
+    *,
+    limit: int = 24,
+) -> list[dict[str, Any]]:
+    """Compact per-thread digest that feeds the flair line's creative hook.
+
+    Returns up to *limit* records of ``{user, ask, outcome}`` drawn
+    from tonight's reconstructed tasks, one per unique thread so a
+    chatty single thread can't dominate the signal. This gives the
+    polish LLM enough raw material to anchor the opening line in a
+    real topic or team pattern from tonight — ``portfolio reviews``,
+    ``gsuite sheets writes``, ``memo drafting`` — rather than a
+    generic "quiet night" template. User names are plain first names
+    only; the polish prompt still rejects any raw `<@U...>` mention.
+    """
+    seen_thread_keys: set[str] = set()
+    digest: list[dict[str, Any]] = []
+    for task in all_tasks:
+        if not isinstance(task, dict):
+            continue
+        ask = str(task.get("ask_text") or "").strip()
+        if not ask:
+            continue
+        thread_key = str(task.get("thread_key") or "").strip()
+        if thread_key and thread_key in seen_thread_keys:
+            continue
+        if thread_key:
+            seen_thread_keys.add(thread_key)
+        digest.append(
+            {
+                "user": str(task.get("source_user_name") or "").strip(),
+                "ask": _clip(_strip_mentions(ask), max_chars=160),
+                "outcome": str(task.get("status") or "unknown").strip()
+                or "unknown",
+            }
+        )
+        if len(digest) >= limit:
+            break
+    return digest
 
 
-def _fix_headline(item: dict[str, Any]) -> str:
-    fix_type = str(item.get("fix_type") or "unknown")
-    title = str(item.get("title") or "Untitled fix").strip()
-    return f"`{fix_type}` {title}"
-
-
-def _build_scorecard_markdown(
+async def _polish_scorecard_bullets(
+    ctx: WorkflowContext,
     *,
     review: dict[str, Any],
     synthesis: dict[str, Any],
     child_results: list[dict[str, Any]],
-    notifier_stats: dict[str, int],
-    coverage: dict[str, int] | None = None,
-) -> str:
-    """Build the nightly Slack scorecard as flat lines joined by \n.
+    flair_digest: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Polish bullet bodies and the flair line with one small LLM pass.
 
-    We deliberately avoid ``textwrap.dedent`` with multi-line f-string
-    substitutions: when a substituted value's continuation lines have
-    less leading whitespace than the surrounding template, dedent can
-    no longer find a common prefix and leaves the outer indent intact,
-    which is what produced the mangled 8-space-indented scorecard posts.
+    Returns ``{"flair": str, "bodies": {item_id: str}}``. On any failure
+    returns empty values so the scorecard falls back to the seeded
+    flair pool and a strip+clip on the most informative raw field.
+    Reliability first: the nightly post must go out even if this pass
+    misbehaves, so every error is logged and swallowed.
+
+    The pass is intentionally scoped small — it only writes the short
+    per-bullet body text + one flair line. Section titles, attribution
+    suffixes, and PR / thread links are still assembled deterministically
+    by ``_build_scorecard_markdown`` so the tone spec can't drift into
+    those structural pieces.
+
+    ``flair_digest`` is a compact summary of tonight's reconstructed
+    threads used ONLY to anchor the opening flair line in a real topic
+    or team pattern that came up in Slack tonight. None or empty is
+    fine — the LLM falls back to a generic (but still tight) opener.
     """
-    composite = _mean_composite(review)
-    tasks_reviewed = int(review.get("tasks_reviewed") or 0)
-    below_bar_rate = float(review.get("below_bar_rate") or 0.0)
+    payload = _build_polish_payload(review, synthesis, child_results)
+    item_count = sum(len(v) for v in payload.values())
+    digest = list(flair_digest or [])
+    if item_count == 0 and not digest:
+        return {"flair": "", "bodies": {}}
+
+    prompt = textwrap.dedent(
+        f"""
+        You are polishing one pass of the nightly `#ai-agent` gap-analysis
+        scorecard. The audience is everyone at the company who uses
+        Centaur. Write like a teammate sharing a quick daily update, not
+        like a release-notes generator.
+
+        Voice:
+        - The subject is ALWAYS **Centaur** — never "the bot", never
+          "the agent".
+        - Active voice, present tense, concrete verbs: picks up, handles,
+          routes, lands, tightens.
+        - Occasional dry wit, occasional self-deprecation at Centaur's
+          past stumbles, or — very rarely, when it clearly lands — a
+          light tease of a user. Never mean-spirited.
+        - Humor (when it lands) targets Centaur's behavior. Subtle
+          team-pattern jokes are OK when they're positive/growth-mindset
+          ("you all kept asking for X — Centaur finally caught up"),
+          never mean-spirited.
+        - No corporate openers ("We're excited to…", "Proud to announce…").
+        - No AI/PM jargon ("leverage", "orchestrated", "cross-functional").
+        - No rule-of-three lists, no em-dash pile-ups, no hype for a
+          one-line prompt tweak.
+        - No emoji.
+
+        Hard constraints on EVERY body:
+        - ONE short sentence, ~120–180 characters. Never more than two
+          sentences. Never longer than 220 characters.
+        - Never include the user's name, `<@USER_ID>` mentions, PR links,
+          or thread links — the renderer adds those separately.
+        - Never use internal terms in the body ("gap analysis",
+          "self-improvement loop", "below-bar"). Those are structural;
+          the body is about what Centaur does for the team.
+        - No sign-off, no "—", no leading bullet. Return the body text
+          only.
+
+        Shape by section:
+        - `gap`: why this matters to fix — what Centaur gets wrong,
+          framed concretely. Example shape: "Debugging asks keep
+          turning into ideation sessions — the prompt should push
+          Centaur to investigate first."
+        - `growth`: what the new capability unlocks — one concrete user
+          moment. Example shape: "Editorial persona for decision memos
+          — memo asks surfaced across three different threads this
+          week."
+        - `shipped`: invite the reader to use it. For new_skill /
+          new_persona, start with "now available when you …" or
+          similar. For prompt_tweak, name the behavior change then end
+          with "Live." Example shapes: "ask how positions are tracking
+          vs the market and Centaur picks up this view automatically.
+          Try it on your next portfolio check." / "Centaur used to
+          answer debugging asks by proposing redesigns; now it actually
+          goes and looks. Live."
+        - `in_review`: one short sentence naming what changed. Example:
+          "The silence watchdog kept mistaking startup for stalling;
+          this fix teaches Centaur the difference."
+
+        The `flair` line is the primary creativity surface — write it
+        last, and make it specific to tonight. Anchor it in a real
+        topic, user moment, or team pattern you can see in the
+        `flair_digest` below. Good shapes:
+
+        - Team pattern ("you all kept asking for X"):
+          `Turns out everyone here writes memos on Fridays. Centaur
+          noticed and shipped an editorial voice for it.`
+        - Recurring topic (≥2 asks in different threads tonight):
+          `Portfolio reviews are apparently a daily ritual around
+          here — Centaur learned the structured view you've been
+          reinventing.`
+        - Self-deprecation tied to tonight's actual stumble:
+          `Centaur tried to debug three Sheets exports by suggesting
+          redesigns. Fixed the impulse; tab-writing is still catching up.`
+        - Micro-moment (one person's specific ask, called out warmly):
+          `Katie asked for a decision-memo voice this afternoon and
+          the editorial persona landed by bedtime.`
+
+        Flair rules:
+        - ~120 characters. ONE sentence, never two.
+        - Anchor in something actually present in `flair_digest` or
+          the item lists — never invent a topic. If the digest is
+          empty or there's nothing concrete to hook into, fall back
+          to a Centaur-behavior self-deprecation line. Never generic
+          temperament phrases ("an honest night", "a solid pass").
+        - Plain first names only (never `<@UXXXX>`, never "a user").
+          Use the `user` field from `flair_digest` verbatim. Omit the
+          name entirely when you don't have one — do not invent one.
+        - Paraphrase what users asked about; never quote asks word for
+          word. The flair is inspired by the digest, not a transcript.
+        - Warm when something shipped; dry when nothing did.
+        - Humor is optional — tonight's digest may not offer a clean
+          angle, and that's fine. A tight factual opener beats a
+          forced joke.
+
+        Return JSON ONLY with EXACTLY this shape (no prose, no fences,
+        no explanation):
+        {{
+          "flair": "…",
+          "bodies": {{
+            "<item_id>": "<body>"
+          }}
+        }}
+
+        Input items (write one body per id):
+        ```json
+        {json.dumps(payload, indent=2, ensure_ascii=False)}
+        ```
+
+        `flair_digest` (anchor the flair here; may be empty on a quiet
+        night):
+        ```json
+        {json.dumps(digest, indent=2, ensure_ascii=False)}
+        ```
+        """
+    ).strip()
+
+    # Let SuspendWorkflow / CancelledWorkflow / NonRetryableError propagate
+    # — they are workflow-engine control signals, not failures we can
+    # swallow. Any genuine exception (network blip etc.) will ride the
+    # normal step retry path; if all retries exhaust the workflow fails
+    # loudly and we learn about it on the next deploy, which is the
+    # right signal. What we DO protect against here is "execution
+    # succeeded but returned garbage" — the parse step below handles
+    # that by degrading to empty polish.
+    polish_turn = await ctx.agent_turn(
+        prompt,
+        thread_key=f"workflow:{ctx.run_id}:scorecard-polish",
+        delivery=Delivery.dev(),
+        prompt_selector="eng",
+        metadata={
+            "source": WORKFLOW_NAME,
+            "mode": "parent",
+            "stage": "scorecard_polish",
+        },
+    )
+
+    async def _parse() -> dict[str, Any]:
+        raw = str(polish_turn.get("result_text") or "")
+        try:
+            parsed = extract_json_payload(raw, preferred_keys=("flair", "bodies"))
+        except Exception:
+            return {"flair": "", "bodies": {}}
+        flair = _strip_mentions(str(parsed.get("flair") or "").strip())
+        bodies_raw = parsed.get("bodies") or {}
+        bodies: dict[str, str] = {}
+        if isinstance(bodies_raw, dict):
+            for key, value in bodies_raw.items():
+                text = _strip_mentions(str(value or "").strip())
+                if not text:
+                    continue
+                # Cap each body at a generous limit so a misbehaving
+                # polish run can never explode the Slack message size.
+                bodies[str(key)] = _clip(text, max_chars=220)
+        return {"flair": _clip(flair, max_chars=180), "bodies": bodies}
+
+    try:
+        return await ctx.step("scorecard_polish_parse", _parse, step_kind="review")
+    except (SuspendWorkflow, CancelledWorkflow, NonRetryableError):
+        # Control-flow signals must propagate so the workflow engine
+        # can suspend / cancel / fail cleanly.
+        raise
+    except Exception as exc:
+        # Parse genuinely failed (malformed JSON, unexpected shape).
+        # Degrade silently so the scorecard still posts.
+        ctx.log("self_improve_polish_parse_failed", error=str(exc))
+        return {"flair": "", "bodies": {}}
+
+
+def _thread_suffix(source_threads: list[dict[str, Any]] | None) -> str:
+    """Render `· <url|thread>` suffix when source threads are available.
+
+    Returns empty string when nothing is usable so the caller can simply
+    concatenate without branching.
+    """
+    links = _render_source_thread_links(source_threads, link_text="thread")
+    return f" · {links}" if links else ""
+
+
+def _attribution_suffix(
+    item: dict[str, Any],
+    thread_user_names: dict[str, str] | None,
+) -> str:
+    """Render `· {credit_line or "from {name}"}` suffix when available.
+
+    Prefers the warm `credit_line` emitted by the review/synthesis pass
+    ("good catch from Katie"); falls back to `· from {first_name}` when
+    we have a user name via thread_user_names. Returns empty string
+    when we have nothing — we never say "anonymous" or "a user".
+    """
+    credit = _strip_mentions(str(item.get("credit_line") or "").strip())
+    if credit:
+        return f" · {_clip(credit, max_chars=140)}"
+    if not thread_user_names:
+        return ""
+    for thread in list(item.get("source_threads") or []):
+        if not isinstance(thread, dict):
+            continue
+        key = str(thread.get("thread_key") or "").strip()
+        if not key:
+            continue
+        name = str(thread_user_names.get(key) or "").strip()
+        if name:
+            return f" · from {name}"
+    return ""
+
+
+def _classify_child_entries(
+    child_results: list[dict[str, Any]] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split child results into `(shipped, in_review)` by auto_merge_status.
+
+    Shipped entries are the ones the auto-merge gate squash-merged this
+    run. Everything else with a PR number and no error lands in review.
+    Child errors (no PR, explicit error field) are dropped entirely per
+    the plan — the scorecard stays about outcomes, not misfires. ``None``
+    or non-list inputs yield two empty lists so the scorecard renderer
+    never crashes on a malformed upstream result.
+    """
+    shipped: list[dict[str, Any]] = []
+    in_review: list[dict[str, Any]] = []
+    if not isinstance(child_results, list):
+        return shipped, in_review
+    for entry in child_results:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("error") or not entry.get("pr_number") or not entry.get("pr_url"):
+            continue
+        if str(entry.get("auto_merge_status") or "") == "merged":
+            shipped.append(entry)
+        else:
+            in_review.append(entry)
+    return shipped, in_review
+
+
+def _build_scorecard_markdown(
+    *,
+    review: dict[str, Any] | None,
+    synthesis: dict[str, Any] | None,
+    child_results: list[dict[str, Any]] | None,
+    coverage: dict[str, int] | None = None,
+    thread_user_names: dict[str, str] | None = None,
+    merged_prs_24h: int | None = None,
+    polished_bodies: dict[str, str] | None = None,
+    polished_flair: str | None = None,
+) -> str:
+    """Build the nightly #ai-agent gap-analysis scorecard.
+
+    The layout is deliberately concise and coworker-voiced: a short
+    italic summary line on top, one flair line, then a few tight
+    sections. Per-bullet bodies are polished by a small LLM pass
+    upstream (`_polish_scorecard_bullets`); this function only handles
+    structure, attribution suffixes, and link formatting. When the
+    polish pass doesn't produce a body for an item, we fall back to
+    stripping mentions + a generous clip on the raw framing fields.
+
+    Flat lines are joined by "\\n" (no textwrap.dedent) to avoid the
+    indent-drift bug that produced the mangled 8-space-indented
+    scorecard posts historically.
+
+    All dict / list arguments accept ``None`` or malformed shapes and
+    degrade to an empty section rather than crashing — the nightly
+    post must go out even when an upstream step returned something
+    unexpected.
+    """
+    review = review if isinstance(review, dict) else {}
+    synthesis = synthesis if isinstance(synthesis, dict) else {}
+    polished_bodies = polished_bodies if isinstance(polished_bodies, dict) else {}
+    thread_user_names = thread_user_names if isinstance(thread_user_names, dict) else {}
+    coverage = coverage if isinstance(coverage, dict) else {}
+
+    reviewed = int(review.get("tasks_reviewed") or 0)
+    below_bar = int(review.get("below_bar_count") or 0)
+    reconstructed_threads = int(coverage.get("reconstructed_thread_count", 0) or 0)
     top_failure_modes = [
         entry
         for entry in list(review.get("top_failure_modes") or [])[:3]
         if isinstance(entry, dict)
     ]
-
-    lines: list[str] = [
-        "*Self Improve Nightly*",
-        "",
-        _scorecard_flair(review, synthesis),
-        "",
-        (
-            f"Reviewed {tasks_reviewed} tasks. Mean score: {composite:.0f}/100. "
-            f"Below-bar rate: {below_bar_rate:.0%}."
-        ),
-    ]
-
-    if coverage:
-        eligible_rows = int(coverage.get("eligible_run_count", 0) or 0)
-        eligible_threads = int(coverage.get("eligible_thread_count", 0) or 0)
-        reconstructed_tasks = int(coverage.get("reconstructed_task_count", 0) or 0)
-        reconstructed_threads = int(coverage.get("reconstructed_thread_count", 0) or 0)
-        triaged_tasks = int(coverage.get("triaged_task_count", 0) or 0)
-        lines.extend(
-            [
-                "",
-                "*Coverage*",
-                f"• Saw {eligible_rows} runs across {eligible_threads} threads in the 24-hour window.",
-                (
-                    f"• Reconstructed {reconstructed_tasks} tasks across "
-                    f"{reconstructed_threads} threads."
-                ),
-                f"• Reviewed {triaged_tasks} tasks end-to-end.",
-            ]
-        )
-
-    lines.extend(
-        [
-            "",
-            "*Gap Analysis*",
-            "• Top failure modes",
-        ]
-    )
-    if not top_failure_modes:
-        lines.append("  • none")
-    for entry in top_failure_modes:
-        lines.append(f"  • {_humanize_failure_mode(entry)}")
-
-    lines.append("• Selected fixes")
-
     gap_fixes = [
         item
-        for item in list(review.get("selected_fixes") or [])
-        if isinstance(item, dict)
-    ]
-    if not gap_fixes:
-        lines.append("  • none selected")
-    for fix in gap_fixes:
-        lines.append(
-            _scorecard_item_line(
-                _fix_headline(fix),
-                _clip(fix.get("slack_narrative")),
-                fix.get("source_threads"),
-            )
-        )
-
-    opportunities = [
-        item
-        for item in list(synthesis.get("opportunities") or [])
+        for item in list(review.get("selected_fixes") or [])[:5]
         if isinstance(item, dict)
     ]
     selected_builds = [
         item
-        for item in list(synthesis.get("selected_builds") or [])
+        for item in list(synthesis.get("selected_builds") or [])[:3]
         if isinstance(item, dict)
     ]
-
-    lines.extend(
-        [
-            "",
-            "*Growth Opportunities*",
-            "A few patterns here look less like bugs and more like things the system should just know how to do.",
-            f"• Improvements identified: {len(selected_builds) or len(opportunities)}",
-        ]
-    )
+    opportunities = [
+        item
+        for item in list(synthesis.get("opportunities") or [])[:3]
+        if isinstance(item, dict)
+    ]
     growth_items = selected_builds or opportunities
-    if not growth_items:
-        lines.append("  • none selected")
-    for build in growth_items:
-        op_type = str(build.get("opportunity_type") or "unknown")
-        title = str(build.get("title") or "Untitled").strip()
-        lines.append(
-            _scorecard_item_line(
-                f"`{op_type}` {title}",
-                _clip(build.get("slack_narrative")),
-                build.get("source_threads"),
+    shipped, in_review = _classify_child_entries(child_results)
+
+    summary_parts = [f"Reviewed {reviewed} tasks"]
+    if reconstructed_threads:
+        summary_parts[-1] += f" across {reconstructed_threads} threads"
+    summary_parts[-1] += "."
+    if below_bar:
+        summary_parts.append(f"{below_bar} below the bar.")
+    if merged_prs_24h is not None and merged_prs_24h >= 0:
+        if merged_prs_24h == 1:
+            summary_parts.append("1 self-improve PR merged in the last 24h.")
+        elif merged_prs_24h > 1:
+            summary_parts.append(
+                f"{merged_prs_24h} self-improve PRs merged in the last 24h."
             )
-        )
+    summary_line = f"_{' '.join(summary_parts)}_"
 
-    opened_pr_entries = [
-        item
-        for item in child_results
-        if isinstance(item, dict)
-        and item.get("pr_number")
-        and item.get("pr_url")
-        and not item.get("error")
-    ]
-    failed_entries = [
-        item
-        for item in child_results
-        if isinstance(item, dict)
-        and item.get("error")
-        and not (item.get("pr_number") and item.get("pr_url"))
-    ]
-
-    lines.extend(["", "*Execution*"])
-    grouped_opened_entries = [
-        (
-            "Gap-fix PRs opened",
-            [
-                item
-                for item in opened_pr_entries
-                if str(item.get("selection_origin") or "gap_analysis") == "gap_analysis"
-            ],
-        ),
-        (
-            "Codify-fix PRs opened",
-            [
-                item
-                for item in opened_pr_entries
-                if str(item.get("selection_origin") or "") == "learning_synthesis"
-            ],
-        ),
-        (
-            "Mixed / other PRs opened",
-            [
-                item
-                for item in opened_pr_entries
-                if str(item.get("selection_origin") or "")
-                not in {"", "gap_analysis", "learning_synthesis"}
-            ],
-        ),
-    ]
-    for label, entries in grouped_opened_entries:
-        lines.append(f"• {label}")
-        if not entries:
-            lines.append("  • none opened")
-            continue
-        for entry in entries:
-            link = _slack_pr_link(entry.get("pr_number", ""), str(entry.get("pr_url") or ""))
-            title = str(entry.get("title") or "").strip()
-            suffix = f" {title}" if title else ""
-            lines.append(
-                _scorecard_item_line(
-                    f"{link}{suffix}",
-                    _clip(entry.get("slack_narrative")),
-                    entry.get("source_threads"),
-                )
-            )
-
-    lines.append("• Child workflow errors")
-    if not failed_entries:
-        lines.append("  • none")
-    for entry in failed_entries:
-        label = (
-            str(entry.get("title") or entry.get("child_run_id") or "unknown child").strip()
-        )
-        error = str(entry.get("error") or "").strip()
-        lines.append(f"  • {label}: {error}" if error else f"  • {label}")
-
-    lines.extend(
-        [
-            f"• PRs merged in last 24h: {int(notifier_stats.get('merged_prs', 0) or 0)}",
-            f"• PRs deployed in last 24h: {int(notifier_stats.get('deployed_prs', 0) or 0)}",
-            (
-                "• Source threads notified in last 24h: "
-                f"{int(notifier_stats.get('source_threads_notified', 0) or 0)}"
-            ),
-        ]
+    flair_line = (
+        _strip_mentions(str(polished_flair or "").strip())
+        or _scorecard_flair(review, synthesis, shipped_count=len(shipped))
     )
 
-    return "\n".join(lines).strip()
+    lines: list[str] = [
+        "*Nightly gap analysis*",
+        summary_line,
+        "",
+        flair_line,
+    ]
+
+    # Gap analysis section — top failure modes and selected fixes.
+    if top_failure_modes or gap_fixes:
+        lines.extend(["", "*Gap analysis*"])
+    if top_failure_modes:
+        lines.append("• Top failure modes")
+        for entry in top_failure_modes:
+            lines.append(f"  • {_humanize_failure_mode(entry)}")
+    if gap_fixes:
+        lines.append("• Selected fixes")
+        for index, fix in enumerate(gap_fixes):
+            title = str(fix.get("title") or "Untitled fix").strip()
+            body = polished_bodies.get(f"gap-{index}") or _fallback_body(
+                fix, ("why_now", "what_to_change", "slack_narrative")
+            )
+            attribution = _attribution_suffix(fix, thread_user_names)
+            thread = _thread_suffix(fix.get("source_threads"))
+            segment = f"{title} — {body}" if body else title
+            lines.append(f"  • {segment}{attribution}{thread}")
+
+    # Growth opportunities — capabilities the team would benefit from.
+    if growth_items:
+        lines.extend(["", "*Growth opportunities*"])
+        for index, build in enumerate(growth_items):
+            title = str(build.get("title") or "Untitled").strip()
+            body = polished_bodies.get(f"growth-{index}") or _fallback_body(
+                build,
+                ("what_should_exist", "user_value", "implementation_sketch", "slack_narrative"),
+            )
+            attribution = _attribution_suffix(build, thread_user_names)
+            thread = _thread_suffix(build.get("source_threads"))
+            segment = f"{title} — {body}" if body else title
+            lines.append(f"• {segment}{attribution}{thread}")
+
+    # Shipped tonight — auto-merged PRs only.
+    if shipped:
+        lines.extend(["", "*Shipped tonight*"])
+        for index, entry in enumerate(shipped):
+            title = str(entry.get("title") or "Untitled").strip()
+            body = polished_bodies.get(f"shipped-{index}") or _fallback_body(
+                entry,
+                (
+                    "what_should_exist",
+                    "user_value",
+                    "why_now",
+                    "what_to_change",
+                    "slack_narrative",
+                ),
+            )
+            pr_link = _slack_pr_link(
+                entry.get("pr_number", ""), str(entry.get("pr_url") or "")
+            )
+            segment = f"{title} — {body}" if body else title
+            tail = f" {pr_link}" if pr_link else ""
+            lines.append(f"• {segment}{tail}")
+
+    # In review — remaining PRs that didn't auto-merge.
+    if in_review:
+        lines.extend(["", "*In review*"])
+        for index, entry in enumerate(in_review):
+            title = str(entry.get("title") or "Untitled").strip()
+            body = polished_bodies.get(f"in_review-{index}") or _fallback_body(
+                entry,
+                ("what_to_change", "why_now", "slack_narrative"),
+            )
+            pr_link = _slack_pr_link(
+                entry.get("pr_number", ""), str(entry.get("pr_url") or "")
+            )
+            segment = f"{title} — {body}" if body else title
+            tail = f" {pr_link}" if pr_link else ""
+            lines.append(f"• {segment}{tail}")
+
+    rendered = "\n".join(lines).strip()
+    # Final safety net: even if everything upstream slips a mention
+    # through, this regex-strip guarantees no raw `<@UXXXX>` lands in a
+    # public channel. Uses the multiline variant so bullet indentation
+    # and blank separator lines are preserved.
+    return _strip_mentions_multiline(rendered) or rendered
 
 
-SLACK_ONLY_FIX_FIELDS = ("slack_narrative",)
+SLACK_ONLY_FIX_FIELDS = ("slack_narrative", "credit_line")
 
 
 def _strip_slack_only_fields(fix: dict[str, Any]) -> dict[str, Any]:
@@ -1707,7 +2153,9 @@ def _strip_slack_only_fields(fix: dict[str, Any]) -> dict[str, Any]:
     session descriptions, because anything in its context risks leaking
     into PR titles, bodies, or commits. We keep those fields on the
     parent run output (for the internal scorecard) but physically remove
-    them before handing the packet to the child.
+    them before handing the packet to the child. `credit_line` is also
+    user-identifying prose ("good catch from Katie"), so it follows the
+    same privacy strip.
     """
     return {k: v for k, v in fix.items() if k not in SLACK_ONLY_FIX_FIELDS}
 
@@ -1830,10 +2278,26 @@ def _annotate_child_results_with_narratives(
             narrative = str(fix.get("slack_narrative") or "").strip()
             if narrative:
                 entry["slack_narrative"] = narrative
+            credit = str(fix.get("credit_line") or "").strip()
+            if credit:
+                entry["credit_line"] = credit
             source_threads = fix.get("source_threads")
             if source_threads and not entry.get("source_threads"):
                 entry["source_threads"] = source_threads
-            for key in ("dominant_failure_mode", "fix_type", "title", "selection_origin"):
+            # Copy structured framing fields forward so the scorecard can
+            # derive concise one-sentence bodies without re-rendering the
+            # verbose slack_narrative. The child workflow never sets
+            # these, so we always take the fix-packet value when present.
+            for key in (
+                "dominant_failure_mode",
+                "fix_type",
+                "title",
+                "selection_origin",
+                "why_now",
+                "what_to_change",
+                "what_should_exist",
+                "user_value",
+            ):
                 value = fix.get(key)
                 if value and not entry.get(key):
                     entry[key] = value
@@ -1917,13 +2381,21 @@ async def _run_reconcile_fixes_pass(
         `dominant_failure_mode`, `priority`, `why_now`, `evidence_quotes`,
         `source_threads`, `representative_tasks`, `slack_narrative`.
 
-        `slack_narrative` is a 2-4 sentence human note for the internal
-        `ai-v2` Slack post. It should name the user(s) who surfaced the
-        issue and describe concretely what they were trying to do, so a
-        human reading the scorecard understands why this fix was picked.
-        If merging two fixes, synthesize one narrative that references both
-        sources. If a fix lacks a narrative, write one from the evidence
-        quotes and source threads.
+        `slack_narrative` is a 2-4 sentence human note used internally for
+        archival. Always refer to the subject as "Centaur". Name the
+        user(s) who surfaced the issue using plain `source_user_name`
+        (never `source_user_mention`, never raw Slack IDs), and describe
+        concretely what they were trying to do so a human understands
+        why this fix was picked. If merging two fixes, synthesize one
+        narrative that references both sources. If a fix lacks a
+        narrative, write one from the evidence quotes and source threads.
+
+        Also carry through `credit_line` — an OPTIONAL short warm sentence
+        (≤120 chars) crediting the user for a specific good ask or
+        observation, using plain `source_user_name` only. When merging
+        two fixes, pick the stronger credit line or synthesize one if
+        both sources credibly support one. When in doubt, leave it empty
+        and the scorecard will fall back to a plain name.
 
         If a field was present in the input fix, preserve it. If you merge two
         fixes, combine their evidence and source threads. Preserve
@@ -1984,29 +2456,425 @@ async def _run_reconcile_fixes_pass(
     return [fix for fix in fixes if isinstance(fix, dict)][:max_fixes]
 
 
-async def _load_recent_notifier_stats(ctx: WorkflowContext) -> dict[str, int]:
-    since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=NOTIFIER_STATS_WINDOW_HOURS)
-    rows = await ctx._pool.fetch(
-        "SELECT output_json FROM workflow_runs "
-        "WHERE workflow_name = $1 AND status = 'completed' AND created_at >= $2",
-        "self_improve_deploy_notifier",
-        since,
-    )
-    merged_prs = 0
-    deployed_prs = 0
-    source_threads_notified = 0
-    for row in rows:
-        output_json = decode_jsonb(dict(row).get("output_json"), {})
-        if not isinstance(output_json, dict):
+CENTAUR_REPO = "paradigmxyz/centaur"
+
+# Allow-list for auto-merge: these are the only paths a self-improve PR
+# may touch for the squash-merge gate to fire. Anything outside this set
+# (platform code, services, migrations, workflows, infra) is left open
+# for human review no matter how clean the diff looks.
+_AUTO_MERGE_PATH_PREFIXES = (".agents/skills/",)
+_AUTO_MERGE_PERSONA_PREFIX = "tools/personas/"
+_AUTO_MERGE_PERSONA_SUFFIXES = ("PROMPT.md", "pyproject.toml")
+_AUTO_MERGE_SANDBOX_PREFIX = "services/sandbox/SYSTEM_PROMPT"
+
+_AUTO_MERGE_SAFE_FIX_TYPES = frozenset({"prompt_tweak", "new_skill", "new_persona"})
+
+
+def _is_auto_merge_safe_path(path: str) -> bool:
+    """Return True when *path* matches the auto-merge allow-list.
+
+    We check concrete, human-reviewable prefixes instead of a blanket
+    "any Markdown file" rule because the cost of auto-merging platform
+    code is far higher than the cost of leaving a safe PR open one more
+    minute for a human to click Approve.
+    """
+    p = str(path or "").strip()
+    if not p:
+        return False
+    if any(p.startswith(prefix) for prefix in _AUTO_MERGE_PATH_PREFIXES):
+        return True
+    if p.startswith(_AUTO_MERGE_PERSONA_PREFIX) and any(
+        p.endswith(suffix) for suffix in _AUTO_MERGE_PERSONA_SUFFIXES
+    ):
+        return True
+    if p.startswith(_AUTO_MERGE_SANDBOX_PREFIX):
+        return True
+    return False
+
+
+def _validation_has_failing_check(validation: Any) -> bool:
+    """Return True when a child's validation reports any failing check.
+
+    Accepts several shapes because the child agent produces
+    free-form JSON; we look defensively for `passed: false`, a status
+    in {fail, failed, error, false}, or success booleans flipped off.
+    When in doubt we assume the PR is NOT safe to auto-merge.
+    """
+    if not isinstance(validation, dict):
+        return False
+    checks = validation.get("checks")
+    if not isinstance(checks, list):
+        return False
+    for check in checks:
+        if not isinstance(check, dict):
             continue
-        merged_prs += int(output_json.get("merged_prs", 0) or 0)
-        deployed_prs += int(output_json.get("deployed_prs", 0) or 0)
-        source_threads_notified += int(output_json.get("source_threads_notified", 0) or 0)
-    return {
-        "merged_prs": merged_prs,
-        "deployed_prs": deployed_prs,
-        "source_threads_notified": source_threads_notified,
+        if check.get("passed") is False:
+            return True
+        status = str(check.get("status") or check.get("result") or "").strip().lower()
+        if status in {"fail", "failed", "error", "false"}:
+            return True
+        if check.get("ok") is False or check.get("success") is False:
+            return True
+    return False
+
+
+_GITHUB_API_ROOT = "https://api.github.com"
+_GITHUB_API_TIMEOUT_S = 15.0
+
+
+def _github_auth_headers() -> dict[str, str]:
+    """Return GitHub REST headers with the API server's token.
+
+    The API container sets ``GITHUB_TOKEN`` in its entrypoint (see
+    `services/api/entrypoint.sh`). When the token is missing we still
+    return the accept header and let GitHub respond with 401; every
+    caller treats non-2xx as "leave the PR open / drop the clause".
+    """
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
     }
+    token = os.getenv("GITHUB_TOKEN") or os.getenv("GH_TOKEN") or ""
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+async def _count_merged_self_improve_prs_24h(ctx: WorkflowContext) -> int:
+    """Count self-improve PRs merged in the last 24 hours, via GitHub API.
+
+    We can't use `self_improve_deploy_notifier.output_json` for this any
+    more: the notifier fires on deploy events that land AFTER the 22:00
+    PT nightly, so its 24h window is structurally empty from the
+    nightly's vantage point. Querying the GitHub search API directly
+    gives us the authoritative count. On any failure we return -1 and
+    the scorecard simply omits the clause — never zero-pads an
+    unreliable number.
+    """
+
+    async def _count() -> int:
+        since_iso = (
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=24)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        query = (
+            f"repo:{CENTAUR_REPO} is:pr is:merged label:self-improve "
+            f"merged:>={since_iso}"
+        )
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(
+                follow_redirects=True, timeout=_GITHUB_API_TIMEOUT_S
+            ) as client:
+                resp = await client.get(
+                    f"{_GITHUB_API_ROOT}/search/issues",
+                    params={"q": query, "per_page": 1},
+                    headers=_github_auth_headers(),
+                )
+        except Exception as exc:
+            ctx.log("self_improve_merged_24h_count_network_error", error=str(exc))
+            return -1
+        if resp.status_code != 200:
+            ctx.log(
+                "self_improve_merged_24h_count_failed",
+                status=resp.status_code,
+                body=resp.text[:500],
+            )
+            return -1
+        try:
+            return int(resp.json().get("total_count") or 0)
+        except (ValueError, TypeError, KeyError):
+            return -1
+
+    try:
+        return int(
+            await ctx.step(
+                "count_merged_self_improve_prs_24h", _count, step_kind="tool_call"
+            )
+        )
+    except (SuspendWorkflow, CancelledWorkflow, NonRetryableError):
+        raise
+    except Exception as exc:
+        ctx.log("self_improve_merged_24h_count_exception", error=str(exc))
+        return -1
+
+
+async def _auto_merge_safe_children(
+    ctx: WorkflowContext,
+    child_results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Annotate each child result with `auto_merge_status` and optionally merge.
+
+    Gate: a child result is merged only when ALL of these hold:
+      - `pr_number` and `pr_url` are present and there is no `error`
+      - `fix_type` is in the safe set (prompt_tweak, new_skill, new_persona)
+      - every changed file (queried from GitHub) is on the
+        prompt/skill/persona allow-list
+      - `validation.checks` contains no failing entry
+
+    Every per-PR operation is wrapped in try/except so an unexpected
+    failure never blocks the scorecard post downstream. `auto_merge_status`
+    lands in one of {"merged", "skipped_by_policy", "failed"}; the
+    scorecard uses only "merged" to populate the *Shipped tonight*
+    section. Control-flow exceptions (``SuspendWorkflow``,
+    ``CancelledWorkflow``, ``NonRetryableError``) propagate so the
+    workflow engine can suspend / cancel / fail cleanly.
+    """
+    out: list[dict[str, Any]] = []
+    for index, entry in enumerate(child_results):
+        if not isinstance(entry, dict):
+            out.append(entry)
+            continue
+        annotated = dict(entry)
+        try:
+            status, reason = await _auto_merge_one_child(ctx, entry, index)
+            annotated["auto_merge_status"] = status
+            if reason:
+                annotated["auto_merge_reason"] = reason
+        except (SuspendWorkflow, CancelledWorkflow, NonRetryableError):
+            raise
+        except Exception as exc:
+            ctx.log(
+                "self_improve_auto_merge_unexpected_error",
+                child_index=index,
+                pr_number=entry.get("pr_number"),
+                error=str(exc),
+            )
+            annotated["auto_merge_status"] = "failed"
+            annotated["auto_merge_reason"] = f"unexpected error: {exc}"
+        out.append(annotated)
+    return out
+
+
+async def _github_list_pr_files(pr_number: int | str) -> list[str]:
+    """Return the list of changed file paths for *pr_number* in centaur.
+
+    Uses the GitHub REST API (not the `gh` CLI) because the API server
+    container doesn't ship `gh`. Raises on any non-2xx response so the
+    caller can mark the PR auto_merge_failed rather than mistakenly
+    merge a PR with unknown file diff.
+    """
+    import httpx
+
+    files: list[str] = []
+    page = 1
+    async with httpx.AsyncClient(
+        follow_redirects=True, timeout=_GITHUB_API_TIMEOUT_S
+    ) as client:
+        while page <= 5:  # Cap: a safe self-improve PR should be tiny.
+            resp = await client.get(
+                f"{_GITHUB_API_ROOT}/repos/{CENTAUR_REPO}/pulls/{pr_number}/files",
+                params={"per_page": 100, "page": page},
+                headers=_github_auth_headers(),
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"GitHub PR files returned {resp.status_code}: "
+                    f"{resp.text[:200]}"
+                )
+            batch = resp.json()
+            if not isinstance(batch, list):
+                raise RuntimeError(
+                    f"GitHub PR files returned non-list body: {str(batch)[:200]}"
+                )
+            for item in batch:
+                if isinstance(item, dict):
+                    path = str(item.get("filename") or "").strip()
+                    if path:
+                        files.append(path)
+            if len(batch) < 100:
+                break
+            page += 1
+    return files
+
+
+async def _github_get_pr_metadata(pr_number: int | str) -> dict[str, Any]:
+    """Return basic PR metadata needed for auto-merge.
+
+    We need the PR node id for the GraphQL `enablePullRequestAutoMerge`
+    mutation. The REST `GET /pulls/{number}` endpoint returns it as
+    `node_id`, along with `mergeable_state` and the current head SHA for
+    safer enablement.
+    """
+    import httpx
+
+    async with httpx.AsyncClient(
+        follow_redirects=True, timeout=_GITHUB_API_TIMEOUT_S
+    ) as client:
+        resp = await client.get(
+            f"{_GITHUB_API_ROOT}/repos/{CENTAUR_REPO}/pulls/{pr_number}",
+            headers=_github_auth_headers(),
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"GitHub PR metadata returned {resp.status_code}: {resp.text[:200]}"
+        )
+    body = resp.json()
+    if not isinstance(body, dict):
+        raise RuntimeError(f"GitHub PR metadata returned non-dict body: {str(body)[:200]}")
+    node_id = str(body.get("node_id") or "").strip()
+    head_sha = str((body.get("head") or {}).get("sha") or "").strip()
+    mergeable_state = str(body.get("mergeable_state") or "").strip()
+    if not node_id:
+        raise RuntimeError("GitHub PR metadata missing node_id")
+    return {
+        "node_id": node_id,
+        "head_sha": head_sha,
+        "mergeable_state": mergeable_state,
+    }
+
+
+async def _github_enable_auto_merge(pr_number: int | str) -> dict[str, Any]:
+    """Enable squash auto-merge on *pr_number* via the GitHub GraphQL API.
+
+    This is the behavior the original plan called for:
+    `gh pr merge --squash --auto`. Unlike the immediate REST merge
+    endpoint, the GraphQL auto-merge mutation succeeds even when checks
+    are still finishing, and GitHub merges the PR once protections are
+    satisfied.
+
+    We treat successful enablement as `merged` for scorecard purposes,
+    matching the original `--auto` semantics: the safe PR is now queued
+    to land without further human action.
+    """
+    import httpx
+
+    metadata = await _github_get_pr_metadata(pr_number)
+    mutation = """
+    mutation EnableAutoMerge($pullRequestId: ID!, $expectedHeadOid: GitObjectID) {
+      enablePullRequestAutoMerge(
+        input: {
+          pullRequestId: $pullRequestId
+          mergeMethod: SQUASH
+          expectedHeadOid: $expectedHeadOid
+        }
+      ) {
+        pullRequest {
+          number
+          autoMergeRequest {
+            enabledAt
+          }
+        }
+      }
+    }
+    """
+
+    async with httpx.AsyncClient(
+        follow_redirects=True, timeout=_GITHUB_API_TIMEOUT_S
+    ) as client:
+        resp = await client.post(
+            f"{_GITHUB_API_ROOT}/graphql",
+            json={
+                "query": mutation,
+                "variables": {
+                    "pullRequestId": metadata["node_id"],
+                    "expectedHeadOid": metadata["head_sha"] or None,
+                },
+            },
+            headers=_github_auth_headers(),
+        )
+    if resp.status_code == 200:
+        body = resp.json() if resp.content else {}
+        if not isinstance(body, dict):
+            raise RuntimeError(f"GitHub auto-merge returned non-dict body: {str(body)[:200]}")
+        errors = body.get("errors")
+        if isinstance(errors, list) and errors:
+            message = "; ".join(
+                str(err.get("message") or "") for err in errors if isinstance(err, dict)
+            ).strip()
+            lowered = message.lower()
+            # Idempotent success: another replay or human may have already
+            # enabled auto-merge on this PR.
+            if "already has auto-merge enabled" in lowered:
+                return {
+                    "status": "auto_merge_enabled",
+                    "message": message,
+                    "mergeable_state": metadata["mergeable_state"],
+                }
+            raise RuntimeError(f"GitHub auto-merge errors: {message[:200]}")
+        return {
+            "status": "auto_merge_enabled",
+            "message": "auto-merge enabled",
+            "mergeable_state": metadata["mergeable_state"],
+        }
+    raise RuntimeError(
+        f"GitHub auto-merge returned {resp.status_code}: {resp.text[:200]}"
+    )
+
+
+async def _auto_merge_one_child(
+    ctx: WorkflowContext,
+    entry: dict[str, Any],
+    index: int,
+) -> tuple[str, str]:
+    """Run the auto-merge gate for one child result.
+
+    Returns ``(status, reason)`` where status is one of
+    {"merged", "skipped_by_policy", "failed"}. The caller owns putting
+    these on the child result; this function owns the gate logic.
+    Control-flow exceptions propagate up so the workflow engine can
+    suspend / cancel / fail cleanly.
+    """
+    pr_number = entry.get("pr_number")
+    pr_url = str(entry.get("pr_url") or "").strip()
+    error_text = str(entry.get("error") or "").strip()
+
+    if error_text or not pr_number or not pr_url:
+        return "skipped_by_policy", "no PR or child reported error"
+
+    fix_type = str(entry.get("fix_type") or "").strip().lower()
+    if fix_type not in _AUTO_MERGE_SAFE_FIX_TYPES:
+        return "skipped_by_policy", f"fix_type {fix_type!r} not in safe set"
+
+    if _validation_has_failing_check(entry.get("validation")):
+        return "skipped_by_policy", "validation reported a failing check"
+
+    # Fetch the list of changed files directly from GitHub so we don't
+    # trust the child agent's self-reported `changed_files`. Each call
+    # is checkpointed so replays don't re-run the network call.
+    pr_key = str(pr_number).strip() or f"index{index}"
+
+    async def _fetch_files() -> list[str]:
+        return await _github_list_pr_files(pr_number)
+
+    try:
+        files = await ctx.step(
+            f"auto_merge_files_{pr_key}", _fetch_files, step_kind="tool_call"
+        )
+    except (SuspendWorkflow, CancelledWorkflow, NonRetryableError):
+        raise
+    except Exception as exc:
+        return "failed", f"could not list changed files: {exc}"
+
+    if not files:
+        return "skipped_by_policy", "GitHub returned no changed files"
+    unsafe = [path for path in files if not _is_auto_merge_safe_path(path)]
+    if unsafe:
+        return (
+            "skipped_by_policy",
+            f"{len(unsafe)} file(s) outside the allow-list (e.g. {unsafe[0]})",
+        )
+
+    async def _merge() -> dict[str, Any]:
+        return await _github_enable_auto_merge(pr_number)
+
+    try:
+        result = await ctx.step(
+            f"auto_merge_merge_{pr_key}", _merge, step_kind="tool_call"
+        )
+    except (SuspendWorkflow, CancelledWorkflow, NonRetryableError):
+        raise
+    except Exception as exc:
+        return "failed", f"merge API raised: {exc}"
+
+    ctx.log(
+        "self_improve_auto_merge_merged",
+        pr_number=pr_number,
+        fix_type=fix_type,
+        changed_file_count=len(files),
+        sha=result.get("sha", "") if isinstance(result, dict) else "",
+    )
+    return "merged", ""
 
 
 async def _run_parent(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
@@ -2149,26 +3017,95 @@ async def _run_parent(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         selected_fixes=selected_fixes,
     )
 
-    async def _load_stats() -> dict[str, int]:
-        return await _load_recent_notifier_stats(ctx)
+    child_results = await _auto_merge_safe_children(ctx, child_results)
+    auto_merge_summary = {
+        "merged": sum(
+            1
+            for entry in child_results
+            if isinstance(entry, dict)
+            and str(entry.get("auto_merge_status") or "") == "merged"
+        ),
+        "skipped": sum(
+            1
+            for entry in child_results
+            if isinstance(entry, dict)
+            and str(entry.get("auto_merge_status") or "") == "skipped_by_policy"
+        ),
+        "failed": sum(
+            1
+            for entry in child_results
+            if isinstance(entry, dict)
+            and str(entry.get("auto_merge_status") or "") == "failed"
+        ),
+    }
+    ctx.log("self_improve_auto_merge_summary", **auto_merge_summary)
 
-    notifier_stats = await ctx.step("load_notifier_stats", _load_stats, step_kind="gather")
+    # Per-thread user name lookup used only by the scorecard renderer
+    # to attribute fixes/builds without leaking raw `<@U...>` IDs.
+    thread_user_names = {
+        str(task.get("thread_key") or "").strip(): str(task.get("source_user_name") or "").strip()
+        for task in all_tasks
+        if isinstance(task, dict)
+        and str(task.get("thread_key") or "").strip()
+        and str(task.get("source_user_name") or "").strip()
+    }
+
+    merged_prs_24h = await _count_merged_self_improve_prs_24h(ctx)
+
+    # Compact digest of tonight's threads — only used by the polish
+    # pass to anchor the flair line in a real topic or team pattern.
+    flair_digest = _build_flair_digest(all_tasks)
+
+    polish = await _polish_scorecard_bullets(
+        ctx,
+        review=review,
+        synthesis=synthesis,
+        child_results=child_results,
+        flair_digest=flair_digest,
+    )
+    polished_bodies = polish.get("bodies") if isinstance(polish, dict) else {}
+    polished_flair = polish.get("flair") if isinstance(polish, dict) else ""
+
     coverage["reviewed_task_count"] = int(review.get("tasks_reviewed") or len(evidence_packs))
     ctx.log("self_improve_coverage_summary", **coverage)
     scorecard = _build_scorecard_markdown(
         review=review,
         synthesis=synthesis,
         child_results=child_results,
-        notifier_stats=notifier_stats,
         coverage=coverage,
+        thread_user_names=thread_user_names,
+        merged_prs_24h=merged_prs_24h if merged_prs_24h >= 0 else None,
+        polished_bodies=polished_bodies if isinstance(polished_bodies, dict) else {},
+        polished_flair=str(polished_flair or ""),
     )
-    await ctx.post_to_slack("ai-v2", scorecard)
+
+    # Try the new #ai-agent channel first; if the bot isn't in it or
+    # anything else blocks the post, fall back to #ai-v2 (the prior
+    # destination we know works) so the nightly never silently
+    # disappears. `post_to_slack` is a checkpointed step, so on replay
+    # the fallback won't double-post.
+    posted_channel = "ai-agent"
+    try:
+        await ctx.post_to_slack("ai-agent", scorecard)
+    except (SuspendWorkflow, CancelledWorkflow, NonRetryableError):
+        raise
+    except Exception as exc:
+        ctx.log(
+            "self_improve_scorecard_ai_agent_post_failed",
+            error=str(exc),
+            fallback="ai-v2",
+        )
+        posted_channel = "ai-v2"
+        await ctx.post_to_slack("ai-v2", scorecard)
     ctx.log(
         "self_improve_scorecard_posted",
+        channel=posted_channel,
         tasks_reviewed=review.get("tasks_reviewed", 0),
         below_bar_count=review.get("below_bar_count", 0),
         selected_fix_count=len(selected_fixes),
         opportunities_found=synthesis.get("opportunities_found", 0),
+        merged_prs_24h=merged_prs_24h,
+        **auto_merge_summary,
     )
     return {
         "mode": "parent",
@@ -2177,9 +3114,8 @@ async def _run_parent(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         "selected_fixes": selected_fixes,
         "opened_prs": child_results,
         "coverage": coverage,
-        "merged_prs": notifier_stats.get("merged_prs", 0),
-        "deployed_prs": notifier_stats.get("deployed_prs", 0),
-        "source_threads_notified": notifier_stats.get("source_threads_notified", 0),
+        "auto_merge_summary": auto_merge_summary,
+        "merged_prs_24h": merged_prs_24h,
         "scorecard": scorecard,
     }
 

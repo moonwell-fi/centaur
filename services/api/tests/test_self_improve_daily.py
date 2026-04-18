@@ -11,15 +11,22 @@ from __future__ import annotations
 
 from workflows.self_improve_daily import (
     SLACK_ONLY_FIX_FIELDS,
-    _merge_review_batches,
-    _selection_limit,
     _annotate_child_results_with_narratives,
+    _attribution_suffix,
+    _build_flair_digest,
     _build_scorecard_markdown,
+    _classify_child_entries,
+    _is_auto_merge_safe_path,
+    _merge_review_batches,
     _message_user_display,
     _render_source_thread_links,
+    _selection_limit,
     _slack_pr_link,
     _slack_thread_archive_url,
+    _strip_mentions,
+    _strip_mentions_multiline,
     _strip_slack_only_fields,
+    _validation_has_failing_check,
 )
 
 
@@ -358,21 +365,17 @@ def _scorecard_synthesis_fixture() -> dict:
 
 
 def test_build_scorecard_markdown_has_clean_indentation() -> None:
-    # This is the regression bug from the first rendered nightly post:
-    # textwrap.dedent with multi-line f-string substitutions lost its
-    # common prefix on continuation lines, leaving an 8-space indent on
-    # the top-level lines. Every line the renderer produces must start
-    # at column 0 (top-level) or column 2 (sub-bullet).
+    # Regression guard for the first rendered nightly: textwrap.dedent
+    # with multi-line f-string substitutions lost its common prefix on
+    # continuation lines and left an 8-space indent on top-level
+    # lines. Every line must start at column 0 (top-level) or column 2
+    # (sub-bullet).
     child_results = [
         {
             "pr_number": 322,
             "pr_url": "https://github.com/paradigmxyz/centaur/pull/322",
             "title": "Tighten verification",
-            "slack_narrative": (
-                "Arjun's code-change task shipped without lint and a teammate "
-                "hit the same gap later, so code-change tasks keep bypassing "
-                "ruff."
-            ),
+            "why_now": "Code-change tasks keep bypassing ruff.",
             "fix_type": "prompt_tweak",
         },
     ]
@@ -381,7 +384,7 @@ def test_build_scorecard_markdown_has_clean_indentation() -> None:
         review=_scorecard_review_fixture(),
         synthesis=_scorecard_synthesis_fixture(),
         child_results=child_results,
-        notifier_stats={"merged_prs": 1, "deployed_prs": 1, "source_threads_notified": 2},
+        merged_prs_24h=1,
     )
 
     for line in md.splitlines():
@@ -402,9 +405,9 @@ def test_build_scorecard_markdown_uses_slack_link_format_not_markdown_link() -> 
                 "pr_number": 322,
                 "pr_url": "https://github.com/paradigmxyz/centaur/pull/322",
                 "title": "Tighten verification",
+                "why_now": "Code-change tasks were bypassing ruff.",
             }
         ],
-        notifier_stats={"merged_prs": 0, "deployed_prs": 0, "source_threads_notified": 0},
     )
 
     assert "<https://github.com/paradigmxyz/centaur/pull/322|#322>" in md
@@ -413,29 +416,107 @@ def test_build_scorecard_markdown_uses_slack_link_format_not_markdown_link() -> 
     assert "](https://github.com" not in md
 
 
-def test_build_scorecard_markdown_renders_per_fix_narratives() -> None:
+def test_build_scorecard_markdown_emits_italic_summary_at_top() -> None:
+    # Last night's post buried the reviewed/below-bar stats at the
+    # bottom; the new layout merges them into a single italic line
+    # directly under the section header.
     md = _build_scorecard_markdown(
-        review=_scorecard_review_fixture(),
-        synthesis=_scorecard_synthesis_fixture(),
-        child_results=[
-            {
-                "pr_number": 42,
-                "pr_url": "https://example.test/pr/42",
-                "title": "Add lint check",
-                "slack_narrative": "Arjun's code-change task failed CI because ruff didn't run.",
-            }
-        ],
-        notifier_stats={"merged_prs": 0, "deployed_prs": 0, "source_threads_notified": 0},
+        review={
+            "tasks_reviewed": 20,
+            "below_bar_count": 6,
+            "selected_fixes": [],
+        },
+        synthesis={"selected_builds": []},
+        child_results=[],
+        coverage={"reconstructed_thread_count": 7},
+        merged_prs_24h=3,
     )
 
-    # Narratives should land under the Gap Analysis fixes.
-    assert "Arjun's code-change task shipped without lint" in md
-    assert "A teammate asked why the morning-brief" in md
-    # ...and under Growth Opportunities.
-    assert "Arjun and another teammate both asked for crisper decision memos" in md
-    # ...and next to the opened PR.
-    assert "Arjun's code-change task failed CI because ruff" in md
-    assert "gap thread" in md
+    lines = md.splitlines()
+    assert lines[0] == "*Nightly gap analysis*"
+    assert lines[1].startswith("_") and lines[1].endswith("_"), (
+        f"summary must be italic: {lines[1]!r}"
+    )
+    assert "Reviewed 20 tasks across 7 threads" in lines[1]
+    assert "6 below the bar" in lines[1]
+    assert "3 self-improve PRs merged in the last 24h" in lines[1]
+
+
+def test_build_scorecard_markdown_uses_polished_body_over_raw_field() -> None:
+    # The polish LLM writes the final bullet body; the renderer must
+    # use that verbatim instead of the raw framing field. This is the
+    # core of the shift away from heuristic first-sentence / clip
+    # truncation that was cutting asks off mid-word.
+    md = _build_scorecard_markdown(
+        review={
+            "tasks_reviewed": 3,
+            "below_bar_count": 0,
+            "selected_fixes": [
+                {
+                    "title": "Tighten verification",
+                    "why_now": "Raw framing text that should not appear.",
+                }
+            ],
+        },
+        synthesis={"selected_builds": []},
+        child_results=[],
+        polished_bodies={
+            "gap-0": "Centaur keeps skipping ruff on code-change tasks; the prompt should require it."
+        },
+    )
+
+    assert "Centaur keeps skipping ruff on code-change tasks" in md
+    # Raw field does NOT leak into the bullet when a polished body wins.
+    assert "Raw framing text that should not appear" not in md
+
+
+def test_build_scorecard_markdown_separates_shipped_from_in_review() -> None:
+    # Auto-merged PRs land under *Shipped tonight*; the rest land under
+    # *In review*. Child errors and the old source-threads-notified /
+    # PRs-merged-last-24h bullets are gone entirely.
+    child_results = [
+        {
+            "pr_number": 333,
+            "pr_url": "https://github.com/paradigmxyz/centaur/pull/333",
+            "title": "Portfolio Market Overlay",
+            "fix_type": "new_skill",
+            "why_now": "Portfolio reviews happen daily.",
+            "auto_merge_status": "merged",
+        },
+        {
+            "pr_number": 331,
+            "pr_url": "https://github.com/paradigmxyz/centaur/pull/331",
+            "title": "Runtime control hardening",
+            "fix_type": "bug_fix",
+            "why_now": "Control plane had a race.",
+            "auto_merge_status": "skipped_by_policy",
+        },
+        {"error": "child workflow timed out", "child_run_id": "wfr_abc"},
+    ]
+
+    md = _build_scorecard_markdown(
+        review={"tasks_reviewed": 5, "below_bar_count": 1, "selected_fixes": []},
+        synthesis={"selected_builds": []},
+        child_results=child_results,
+    )
+
+    assert "*Shipped tonight*" in md
+    assert "*In review*" in md
+    shipped_section = md.split("*Shipped tonight*", 1)[1].split("*In review*", 1)[0]
+    in_review_section = md.split("*In review*", 1)[1]
+
+    assert "Portfolio Market Overlay" in shipped_section
+    assert "<https://github.com/paradigmxyz/centaur/pull/333|#333>" in shipped_section
+    assert "Portfolio Market Overlay" not in in_review_section
+    assert "Runtime control hardening" in in_review_section
+    assert "<https://github.com/paradigmxyz/centaur/pull/331|#331>" in in_review_section
+
+    # Removed bullets must stay gone.
+    assert "Child workflow errors" not in md
+    assert "child workflow timed out" not in md
+    assert "Source threads notified" not in md
+    assert "PRs merged in last 24h" not in md
+    assert "PRs deployed in last 24h" not in md
 
 
 def test_build_scorecard_markdown_handles_empty_state() -> None:
@@ -443,54 +524,32 @@ def test_build_scorecard_markdown_handles_empty_state() -> None:
         review={"tasks_reviewed": 0, "selected_fixes": []},
         synthesis={"opportunities": [], "selected_builds": []},
         child_results=[],
-        notifier_stats={"merged_prs": 0, "deployed_prs": 0, "source_threads_notified": 0},
     )
 
-    assert "*Self Improve Nightly*" in md
-    assert "• none selected" in md
-    assert "• none opened" in md
-    assert "Improvements identified: 0" in md
-    # No tracebacks, no crashes — the message remains postable.
-    assert md.startswith("*Self Improve Nightly*")
+    # Empty runs still produce a postable message — summary and flair
+    # at minimum. Sections with nothing to show are simply omitted
+    # rather than padded with "none selected" bullets.
+    assert md.startswith("*Nightly gap analysis*")
+    lines = md.splitlines()
+    assert lines[1].startswith("_") and lines[1].endswith("_")
+    assert "none selected" not in md
+    assert "none opened" not in md
 
 
 def test_build_scorecard_markdown_renders_thread_links_in_all_sections() -> None:
-    # Each section should inline a clickable `gap thread` link whenever the
-    # fix / build / PR carries source_threads.
-    child_results = [
-        {
-            "pr_number": 42,
-            "pr_url": "https://github.com/paradigmxyz/centaur/pull/42",
-            "title": "Tighten verification",
-            "slack_narrative": "Arjun's code-change task failed CI because ruff didn't run.",
-            "source_threads": [
-                {
-                    "thread_key": "C111111:1700100000.000000",
-                    "channel": "C111111",
-                    "thread_ts": "1700100000.000000",
-                }
-            ],
-        }
-    ]
-
+    # Every gap fix / growth build that carries source_threads renders
+    # a clickable `· <url|thread>` suffix. Shipped / in-review entries
+    # use the PR link instead (tested separately).
     md = _build_scorecard_markdown(
         review=_scorecard_review_fixture(),
         synthesis=_scorecard_synthesis_fixture(),
-        child_results=child_results,
-        notifier_stats={"merged_prs": 0, "deployed_prs": 0, "source_threads_notified": 0},
+        child_results=[],
     )
 
-    gap_url = "<https://slack.com/archives/C111111/p1700100000000000|gap thread>"
-    intent_miss_url = "<https://slack.com/archives/C222222/p1700200000000000|gap thread>"
-
-    assert gap_url in md
-    assert intent_miss_url in md
-    assert "(gap threads: " in md
-    assert "<https://slack.com/archives/C333333/p1700300000000000|gap thread>" in md
-    assert "<https://slack.com/archives/C444444/p1700400000000000|gap thread>" in md
-    # Execution section gets the link next to the PR too.
-    exec_section = md.split("*Execution*", 1)[1]
-    assert gap_url in exec_section
+    assert "<https://slack.com/archives/C111111/p1700100000000000|thread>" in md
+    assert "<https://slack.com/archives/C222222/p1700200000000000|thread>" in md
+    assert "<https://slack.com/archives/C333333/p1700300000000000|thread>" in md
+    assert "<https://slack.com/archives/C444444/p1700400000000000|thread>" in md
 
 
 def test_build_scorecard_markdown_never_emits_github_thread_link_syntax() -> None:
@@ -498,10 +557,404 @@ def test_build_scorecard_markdown_never_emits_github_thread_link_syntax() -> Non
         review=_scorecard_review_fixture(),
         synthesis=_scorecard_synthesis_fixture(),
         child_results=[],
-        notifier_stats={"merged_prs": 0, "deployed_prs": 0, "source_threads_notified": 0},
     )
 
     # Guard against regressing into `[thread](https://slack.com/...)` form,
     # which Slack renders as literal text.
     assert "[thread](https://slack.com" not in md
     assert "](https://slack.com" not in md
+
+
+def test_build_scorecard_markdown_never_emits_raw_slack_mentions() -> None:
+    # Safety net: even if a polished body or credit_line slips a raw
+    # `<@UXXXX>` through, the final multi-line mention strip
+    # guarantees the public post never leaks a Slack user ID.
+    md = _build_scorecard_markdown(
+        review={
+            "tasks_reviewed": 1,
+            "below_bar_count": 0,
+            "selected_fixes": [
+                {
+                    "title": "Tighten verification",
+                    "why_now": "When <@U12345> noticed the ruff gap this mattered.",
+                    "credit_line": "nice spot from <@U12345>",
+                    "source_threads": [],
+                }
+            ],
+        },
+        synthesis={"selected_builds": []},
+        child_results=[],
+        polished_bodies={
+            "gap-0": "Centaur kept skipping ruff when <@U12345> kicked off code-change tasks."
+        },
+    )
+
+    assert "<@U" not in md
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Auto-merge gate — CRITICAL correctness. A false-positive here would
+# squash-merge a platform PR without human review, which is the single
+# biggest blast-radius risk on this branch. Tests intentionally exercise
+# both the "obviously safe" cases and neighboring paths that look
+# similar but are NOT safe.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def test_is_auto_merge_safe_path_accepts_skills() -> None:
+    # Skills: anywhere under .agents/skills/** is allowed (SKILL.md,
+    # references/*, examples/*, anything the agent authored).
+    assert _is_auto_merge_safe_path(".agents/skills/portfolio-market-overlay/SKILL.md") is True
+    assert _is_auto_merge_safe_path(".agents/skills/people-landscape/references/rubric.md") is True
+    assert _is_auto_merge_safe_path(".agents/skills/deep/nested/path/file.md") is True
+
+
+def test_is_auto_merge_safe_path_accepts_persona_prompts_and_pyprojects() -> None:
+    # Personas: only PROMPT.md and pyproject.toml — NOT the persona's
+    # runner.py or other code files. This is the highest-leverage guard.
+    assert _is_auto_merge_safe_path("tools/personas/editorial/PROMPT.md") is True
+    assert _is_auto_merge_safe_path("tools/personas/editorial/pyproject.toml") is True
+    # Persona runner code is NOT safe.
+    assert _is_auto_merge_safe_path("tools/personas/editorial/runner.py") is False
+    assert _is_auto_merge_safe_path("tools/personas/editorial/__init__.py") is False
+    assert _is_auto_merge_safe_path("tools/personas/editorial/tools.py") is False
+
+
+def test_is_auto_merge_safe_path_accepts_sandbox_system_prompts_only() -> None:
+    # Sandbox prompts — SYSTEM_PROMPT*.md files are safe. Arbitrary code
+    # under services/sandbox/ is NOT safe.
+    assert _is_auto_merge_safe_path("services/sandbox/SYSTEM_PROMPT.md") is True
+    assert _is_auto_merge_safe_path("services/sandbox/SYSTEM_PROMPT_ENG.md") is True
+    # Code files under services/sandbox/ must NEVER auto-merge.
+    assert _is_auto_merge_safe_path("services/sandbox/amp-wrapper.py") is False
+    assert _is_auto_merge_safe_path("services/sandbox/Dockerfile") is False
+
+
+def test_is_auto_merge_safe_path_rejects_platform_and_infra() -> None:
+    # Explicit "never auto-merge" cases. These are the paths that, if
+    # auto-merged, could break the system end-to-end.
+    assert _is_auto_merge_safe_path("services/api/api/runtime_control.py") is False
+    assert _is_auto_merge_safe_path("services/api/api/agent.py") is False
+    assert _is_auto_merge_safe_path("tools-paradigm/gsuite/client.py") is False
+    assert _is_auto_merge_safe_path("workflows/self_improve_daily.py") is False
+    assert _is_auto_merge_safe_path("workflows/paradigm_pulse_daily.py") is False
+    assert _is_auto_merge_safe_path(".github/workflows/deploy.yml") is False
+    assert _is_auto_merge_safe_path("docker-compose.yml") is False
+    assert _is_auto_merge_safe_path("db/migrations/001_init.sql") is False
+
+
+def test_is_auto_merge_safe_path_rejects_malformed_input() -> None:
+    # Defensive: empty paths, whitespace-only, None → NOT safe. We err
+    # on the "leave the PR open" side rather than merging something we
+    # can't classify.
+    assert _is_auto_merge_safe_path("") is False
+    assert _is_auto_merge_safe_path("   ") is False
+
+
+def test_validation_has_failing_check_detects_passed_false() -> None:
+    assert _validation_has_failing_check(
+        {"checks": [{"command": "ruff", "passed": False}]}
+    )
+    assert not _validation_has_failing_check(
+        {"checks": [{"command": "ruff", "passed": True}]}
+    )
+
+
+def test_validation_has_failing_check_detects_status_shapes() -> None:
+    # The child agent's JSON is free-form so we defensively handle
+    # multiple "failed" encodings.
+    assert _validation_has_failing_check({"checks": [{"status": "fail"}]})
+    assert _validation_has_failing_check({"checks": [{"status": "failed"}]})
+    assert _validation_has_failing_check({"checks": [{"status": "error"}]})
+    assert _validation_has_failing_check({"checks": [{"result": "error"}]})
+    assert _validation_has_failing_check({"checks": [{"ok": False}]})
+    assert _validation_has_failing_check({"checks": [{"success": False}]})
+
+
+def test_validation_has_failing_check_returns_false_on_missing_or_malformed() -> None:
+    # Missing evidence ≠ evidence of failure. A well-formed "all pass"
+    # validation or missing validation both pass this gate (other gate
+    # checks still have to pass before merge).
+    assert not _validation_has_failing_check({"checks": []})
+    assert not _validation_has_failing_check({"checks": None})
+    assert not _validation_has_failing_check({})
+    assert not _validation_has_failing_check(None)
+    assert not _validation_has_failing_check(
+        {"checks": [{"passed": True}, {"status": "ok"}, {"success": True}]}
+    )
+
+
+def test_classify_child_entries_splits_by_auto_merge_status() -> None:
+    # Only entries explicitly marked "merged" land in Shipped. Everything
+    # else with a PR goes to In review. Errors are dropped entirely.
+    shipped, in_review = _classify_child_entries(
+        [
+            {
+                "pr_number": 1,
+                "pr_url": "https://x.test/1",
+                "auto_merge_status": "merged",
+            },
+            {
+                "pr_number": 2,
+                "pr_url": "https://x.test/2",
+                "auto_merge_status": "skipped_by_policy",
+            },
+            {
+                "pr_number": 3,
+                "pr_url": "https://x.test/3",
+                "auto_merge_status": "failed",
+            },
+            {
+                "pr_number": 4,
+                "pr_url": "https://x.test/4",
+                # No auto_merge_status at all (defensive) → in_review.
+            },
+            {"error": "child workflow timed out", "child_run_id": "wfr_abc"},
+            None,  # type: ignore[list-item]
+            "not-a-dict",  # type: ignore[list-item]
+        ]
+    )
+
+    assert [entry["pr_number"] for entry in shipped] == [1]
+    assert [entry["pr_number"] for entry in in_review] == [2, 3, 4]
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Mention stripping — keeps raw Slack IDs out of public posts.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def test_strip_mentions_removes_slack_id_patterns() -> None:
+    assert _strip_mentions("hello <@U12345> world") == "hello world"
+    assert _strip_mentions("<@U12345> first") == "first"
+    assert _strip_mentions("last <@U12345>") == "last"
+    assert _strip_mentions("no mentions") == "no mentions"
+    assert _strip_mentions("") == ""
+    assert _strip_mentions(None) == ""  # type: ignore[arg-type]
+
+
+def test_strip_mentions_collapses_residual_double_space_on_single_line() -> None:
+    # Mid-sentence mention leaves a "  " gap; single-line strip collapses.
+    assert _strip_mentions("good catch from <@U12345> on this") == "good catch from on this"
+
+
+def test_strip_mentions_multiline_preserves_bullet_indentation() -> None:
+    # The final scorecard pass uses the multi-line variant so sub-bullet
+    # indentation and blank separators survive. A regression here would
+    # flatten the whole scorecard to one column.
+    original = "*Title*\n• top bullet\n  • sub bullet one\n  • sub bullet two"
+    assert _strip_mentions_multiline(original) == original
+    # And still strips mentions.
+    with_mention = "• bullet with <@U12345> mention\n  • clean sub"
+    assert _strip_mentions_multiline(with_mention) == "• bullet with  mention\n  • clean sub"
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Attribution — never "anonymous", never raw IDs.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def test_attribution_suffix_prefers_credit_line() -> None:
+    suffix = _attribution_suffix(
+        {"credit_line": "good catch from Katie", "source_threads": []}, {},
+    )
+    assert suffix == " · good catch from Katie"
+
+
+def test_attribution_suffix_strips_mention_from_credit_line() -> None:
+    # Even if the LLM slipped a mention into credit_line, the suffix
+    # never leaks it into the post.
+    suffix = _attribution_suffix(
+        {"credit_line": "good catch from <@U12345>", "source_threads": []}, {},
+    )
+    assert "<@U" not in suffix
+
+
+def test_attribution_suffix_falls_back_to_plain_name() -> None:
+    suffix = _attribution_suffix(
+        {
+            "source_threads": [
+                {"thread_key": "C1:100.000", "channel": "C1", "thread_ts": "100.000"}
+            ]
+        },
+        {"C1:100.000": "Arjun"},
+    )
+    assert suffix == " · from Arjun"
+
+
+def test_attribution_suffix_returns_empty_when_name_unknown() -> None:
+    # Never "anonymous", never "a user" — attribution is simply omitted.
+    assert _attribution_suffix({"source_threads": []}, {}) == ""
+    assert (
+        _attribution_suffix(
+            {
+                "source_threads": [
+                    {"thread_key": "C1:100.000", "channel": "C1", "thread_ts": "100.000"}
+                ]
+            },
+            {},  # no name in the map
+        )
+        == ""
+    )
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Flair digest — the input the polish LLM uses to anchor the opener.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def test_build_flair_digest_dedupes_by_thread_and_caps_items() -> None:
+    # One entry per unique thread so a chatty single thread can't
+    # dominate the signal. Cap at limit so the prompt stays small.
+    digest = _build_flair_digest(
+        [
+            {
+                "thread_key": "C1:100.000",
+                "source_user_name": "Katie",
+                "ask_text": "First ask in thread A",
+                "status": "completed",
+            },
+            {
+                "thread_key": "C1:100.000",  # same thread → deduped
+                "source_user_name": "Katie",
+                "ask_text": "Follow-up in thread A",
+                "status": "completed",
+            },
+            {
+                "thread_key": "C2:200.000",
+                "source_user_name": "Matt",
+                "ask_text": "Thread B",
+                "status": "failed",
+            },
+            {
+                "thread_key": "",  # no thread_key → kept (can't dedupe)
+                "source_user_name": "Arjun",
+                "ask_text": "Thread C",
+                "status": "completed",
+            },
+            {
+                # Malformed / missing ask → skipped.
+                "thread_key": "C3:300.000",
+                "source_user_name": "Georgios",
+                "ask_text": "",
+                "status": "completed",
+            },
+        ],
+        limit=10,
+    )
+
+    assert [item["user"] for item in digest] == ["Katie", "Matt", "Arjun"]
+    assert [item["outcome"] for item in digest] == ["completed", "failed", "completed"]
+
+
+def test_build_flair_digest_clips_long_asks_and_strips_mentions() -> None:
+    long_ask = "Long ask " * 50  # ~500 chars
+    digest = _build_flair_digest(
+        [
+            {
+                "thread_key": "C1:100.000",
+                "source_user_name": "Katie",
+                "ask_text": long_ask,
+                "status": "completed",
+            },
+            {
+                "thread_key": "C2:200.000",
+                "source_user_name": "Matt",
+                "ask_text": "hey <@U12345> can you help here",
+                "status": "completed",
+            },
+        ]
+    )
+
+    assert len(digest[0]["ask"]) <= 160
+    assert "<@U" not in digest[1]["ask"]
+
+
+def test_build_flair_digest_handles_empty_input() -> None:
+    assert _build_flair_digest([]) == []
+    # Also handles non-dict entries defensively.
+    assert _build_flair_digest([None, "not-a-dict", 42]) == []  # type: ignore[list-item]
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Defensive: scorecard must never crash on malformed upstream data —
+# the nightly post MUST go out even when an earlier step returned
+# something weird. Regression guard for the six failure shapes we hit
+# during the stress-test pass on this branch.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def test_build_scorecard_markdown_survives_none_arguments() -> None:
+    md = _build_scorecard_markdown(
+        review=None,  # type: ignore[arg-type]
+        synthesis=None,  # type: ignore[arg-type]
+        child_results=None,  # type: ignore[arg-type]
+    )
+    assert md.startswith("*Nightly gap analysis*")
+
+
+def test_build_scorecard_markdown_survives_wrong_types() -> None:
+    md = _build_scorecard_markdown(
+        review=[],  # type: ignore[arg-type]
+        synthesis=42,  # type: ignore[arg-type]
+        child_results="nope",  # type: ignore[arg-type]
+        coverage="bad",  # type: ignore[arg-type]
+        thread_user_names=42,  # type: ignore[arg-type]
+        polished_bodies=None,
+    )
+    assert md.startswith("*Nightly gap analysis*")
+
+
+def test_build_scorecard_markdown_survives_non_dict_list_items() -> None:
+    # If the LLM returns selected_fixes with non-dict entries mixed in,
+    # we skip them rather than crash.
+    md = _build_scorecard_markdown(
+        review={
+            "tasks_reviewed": 3,
+            "selected_fixes": [
+                "not-a-dict",  # type: ignore[list-item]
+                None,  # type: ignore[list-item]
+                {"title": "real one", "why_now": "because"},
+            ],
+        },
+        synthesis={"selected_builds": [42, None]},  # type: ignore[list-item]
+        child_results=[
+            None,  # type: ignore[list-item]
+            "nope",  # type: ignore[list-item]
+            {"pr_number": 1, "pr_url": "https://x.test", "title": "ok"},
+        ],
+    )
+    assert "real one" in md
+    assert "https://x.test" in md
+
+
+def test_build_scorecard_markdown_survives_null_source_threads() -> None:
+    # A fix where source_threads is None (not just missing) used to
+    # blow up the render path; confirm it degrades cleanly.
+    md = _build_scorecard_markdown(
+        review={
+            "tasks_reviewed": 1,
+            "selected_fixes": [{"title": "x", "source_threads": None}],
+        },
+        synthesis={"selected_builds": []},
+        child_results=[],
+    )
+    assert "*Nightly gap analysis*" in md
+
+
+def test_build_scorecard_markdown_survives_garbage_polished_bodies() -> None:
+    # If upstream polish returned a non-dict in the bodies field, we
+    # silently fall back to raw-field-derived bodies rather than
+    # crashing.
+    md = _build_scorecard_markdown(
+        review={
+            "tasks_reviewed": 5,
+            "selected_fixes": [{"title": "t", "why_now": "w"}],
+        },
+        synthesis={"selected_builds": []},
+        child_results=[],
+        polished_bodies="not-a-dict",  # type: ignore[arg-type]
+    )
+    assert "*Nightly gap analysis*" in md
+    # Raw why_now should appear via fallback.
+    assert "w" in md
