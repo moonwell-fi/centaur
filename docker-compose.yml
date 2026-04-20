@@ -147,6 +147,8 @@ services:
       WORKFLOW_WORKER_CONCURRENCY: "8"
       DOCKER_HOST: tcp://docker-socket-proxy:2375
       HTTPS_PROXY: http://firewall:8080
+      CENTAUR_ENABLE_GCLOUD_BOOTSTRAP: ${CENTAUR_ENABLE_GCLOUD_BOOTSTRAP:-0}
+      GCLOUD_PROJECT: ${GCLOUD_PROJECT:-}
       BROWSER_USE_PROFILE_ID: ${BROWSER_USE_PROFILE_ID:-}
       REQUESTS_CA_BUNDLE: /firewall-certs/ca-cert.pem
       SSL_CERT_FILE: /firewall-certs/ca-cert.pem
