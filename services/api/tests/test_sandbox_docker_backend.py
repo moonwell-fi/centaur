@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from api.sandbox.docker import DockerSandboxBackend, _repo_host_dir, _resolve_host_bind_path
+from api.sandbox.docker import (
+    DockerSandboxBackend,
+    _inject_amp_api_key,
+    _repo_host_dir,
+    _resolve_host_bind_path,
+)
 
 
 class FakeContainer:
@@ -75,6 +80,32 @@ def test_repo_host_dir_defaults_to_repo_root(monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.asyncio
+async def test_inject_amp_api_key_replaces_only_amp_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENT_LOCAL_DEV", raising=False)
+
+    async def fake_fetch_control_secret(key: str) -> str | None:
+        assert key == "AMP_API_KEY"
+        return "real-amp-key"
+
+    monkeypatch.setattr(
+        "api.sandbox.docker.fetch_control_secret",
+        fake_fetch_control_secret,
+    )
+
+    env = await _inject_amp_api_key([
+        "AMP_API_KEY=AMP_API_KEY",
+        "OPENAI_API_KEY=OPENAI_API_KEY",
+    ])
+
+    assert env == [
+        "AMP_API_KEY=real-amp-key",
+        "OPENAI_API_KEY=OPENAI_API_KEY",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_create_connects_dind_and_sandbox_to_egress(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_client = FakeDockerClient()
     backend = DockerSandboxBackend()
@@ -82,6 +113,7 @@ async def test_create_connects_dind_and_sandbox_to_egress(monkeypatch: pytest.Mo
 
     monkeypatch.setenv("AGENT_NETWORK", "centaur_agent_net")
     monkeypatch.setenv("AGENT_EGRESS_NETWORK", "centaur_agent_egress")
+    monkeypatch.setenv("SANDBOX_DIND_ENABLED", "1")
     monkeypatch.setattr("api.sandbox.docker.mint_sandbox_token", lambda *_args, **_kwargs: "sandbox-token")
 
     async def fake_wait_ready(*_args, **_kwargs) -> float:
@@ -95,6 +127,24 @@ async def test_create_connects_dind_and_sandbox_to_egress(monkeypatch: pytest.Mo
     connected_ids = {call["Container"] for call in egress.connections}
     assert session.sandbox_id in connected_ids
     assert any(container_id.startswith("centaur-dind-") for container_id in connected_ids)
+
+
+@pytest.mark.asyncio
+async def test_create_skips_dind_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_client = FakeDockerClient()
+    backend = DockerSandboxBackend()
+    backend._client = fake_client
+
+    monkeypatch.setattr("api.sandbox.docker.mint_sandbox_token", lambda *_args, **_kwargs: "sandbox-token")
+
+    async def fake_wait_ready(*_args, **_kwargs) -> float:
+        return 0.01
+
+    monkeypatch.setattr("api.sandbox.docker._wait_ready", fake_wait_ready)
+
+    await backend.create("C123:1.2", "amp", "amp")
+
+    assert not any(name.startswith("centaur-dind-") for name in fake_client.containers.by_name)
 
 
 @pytest.mark.asyncio
@@ -129,6 +179,31 @@ async def test_create_mounts_centaur_skills_when_present(
     )
     binds = sandbox.config["HostConfig"]["Binds"]
     assert f"{skills_dir}:/home/agent/centaur-skills:ro" in binds
+
+
+@pytest.mark.asyncio
+async def test_create_hardens_sandbox_container(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_client = FakeDockerClient()
+    backend = DockerSandboxBackend()
+    backend._client = fake_client
+
+    monkeypatch.setattr("api.sandbox.docker.mint_sandbox_token", lambda *_args, **_kwargs: "sandbox-token")
+
+    async def fake_wait_ready(*_args, **_kwargs) -> float:
+        return 0.01
+
+    monkeypatch.setattr("api.sandbox.docker._wait_ready", fake_wait_ready)
+
+    await backend.create("C123:1.2", "amp", "amp")
+
+    sandbox = next(
+        container
+        for name, container in fake_client.containers.by_name.items()
+        if name.startswith("centaur-sandbox-")
+    )
+    assert sandbox.config["User"] == "1001:1001"
+    assert sandbox.config["HostConfig"]["CapDrop"] == ["ALL"]
+    assert sandbox.config["HostConfig"]["SecurityOpt"] == ["no-new-privileges"]
 
 
 def test_resolve_host_bind_path_prefers_overlay_root(

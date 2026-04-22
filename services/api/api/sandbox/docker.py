@@ -16,6 +16,7 @@ import aiodocker
 import structlog
 
 from api.deps import mint_sandbox_token
+from api.firewall import fetch_control_secret
 from api.sandbox.base import SandboxBackend, SandboxSession
 
 log = structlog.get_logger()
@@ -92,7 +93,27 @@ def _egress_network() -> str | None:
     return value or None
 
 
+def _dind_enabled() -> bool:
+    return os.getenv("SANDBOX_DIND_ENABLED", "0").strip().lower() in {"1", "true", "yes"}
+
+
 _HARNESS_STUB_KEYS = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "AMP_API_KEY", "GITHUB_TOKEN")
+_AGENT_USER = "1001:1001"
+
+
+async def _inject_amp_api_key(env: list[str]) -> list[str]:
+    if os.getenv("AGENT_LOCAL_DEV", "").lower() in ("1", "true"):
+        return env
+    try:
+        amp_api_key = await fetch_control_secret("AMP_API_KEY")
+    except Exception:
+        return env
+    if not amp_api_key:
+        return env
+    return [
+        f"AMP_API_KEY={amp_api_key}" if item == "AMP_API_KEY=AMP_API_KEY" else item
+        for item in env
+    ]
 
 
 def _build_harness_cmd(engine: str, model: str | None = None) -> list[str]:
@@ -248,6 +269,7 @@ class DockerSandboxBackend(SandboxBackend):
             container_name,
             resume_thread_id=resume_thread_id,
         )
+        env = await _inject_amp_api_key(env)
         if persona:
             env.append(f"AGENT_PERSONA={persona}")
         if repo:
@@ -260,42 +282,43 @@ class DockerSandboxBackend(SandboxBackend):
                 stale = await client.containers.get(stale_name)
                 await stale.delete(force=True)
 
-        # Spawn Docker-in-Docker sidecar (docker:dind)
+        # Spawn Docker-in-Docker sidecar only when explicitly enabled.
         network = os.getenv("AGENT_NETWORK", "centaur_agent_net")
         egress_network = _egress_network()
-        dind_container = await client.containers.create_or_replace(
-            name=dind_name,
-            config={
-                "Image": _dind_image(),
-                "Env": ["DOCKER_TLS_CERTDIR="],  # disable TLS (internal network only)
-                "Labels": {
-                    "centaur-agent": "true",
-                    "ai2.dind": "true",
-                    "ai2.thread": thread_key,
+        if _dind_enabled():
+            dind_container = await client.containers.create_or_replace(
+                name=dind_name,
+                config={
+                    "Image": _dind_image(),
+                    "Env": ["DOCKER_TLS_CERTDIR="],  # disable TLS (internal network only)
+                    "Labels": {
+                        "centaur-agent": "true",
+                        "ai2.dind": "true",
+                        "ai2.thread": thread_key,
+                    },
+                    "HostConfig": {
+                        "Privileged": False,
+                        "CapAdd": ["SYS_ADMIN", "NET_ADMIN"],
+                        "SecurityOpt": ["apparmor=unconfined"],
+                        "NetworkMode": network,
+                        "StorageOpt": {"size": "20G"},
+                    },
                 },
-                "HostConfig": {
-                    "Privileged": os.getenv("DIND_PRIVILEGED", "").lower() in ("1", "true"),
-                    "CapAdd": ["SYS_ADMIN", "NET_ADMIN"],
-                    "SecurityOpt": ["apparmor=unconfined"],
-                    "NetworkMode": network,
-                    "StorageOpt": {"size": "20G"},
-                },
-            },
-        )
-        await dind_container.start()
-        if egress_network and egress_network != network:
-            # DinD needs the same egress path as the sandbox so `docker pull`
-            # and `docker compose up` inside the sandbox can resolve and reach registries.
-            egress = await client.networks.get(egress_network)
-            await egress.connect({"Container": dind_container.id})
+            )
+            await dind_container.start()
+            if egress_network and egress_network != network:
+                # DinD needs the same egress path as the sandbox so `docker pull`
+                # and `docker compose up` inside the sandbox can resolve and reach registries.
+                egress = await client.networks.get(egress_network)
+                await egress.connect({"Container": dind_container.id})
 
-        # Point sandbox Docker CLI at the sidecar
-        env.append(f"DOCKER_HOST=tcp://{dind_name}:2375")
+            # Point sandbox Docker CLI at the sidecar
+            env.append(f"DOCKER_HOST=tcp://{dind_name}:2375")
 
-        # Ensure Docker CLI traffic to the DinD sidecar bypasses the HTTP proxy
-        for i, v in enumerate(env):
-            if v.startswith(("NO_PROXY=", "no_proxy=")):
-                env[i] = v + f",{dind_name}"
+            # Ensure Docker CLI traffic to the DinD sidecar bypasses the HTTP proxy
+            for i, v in enumerate(env):
+                if v.startswith(("NO_PROXY=", "no_proxy=")):
+                    env[i] = v + f",{dind_name}"
 
         labels = {
             "centaur-agent": "true",
@@ -355,13 +378,16 @@ class DockerSandboxBackend(SandboxBackend):
             "AttachStdout": True,
             "AttachStderr": True,
             "Env": env,
+            "User": _AGENT_USER,
             "WorkingDir": "/home/agent",
             "Labels": labels,
             "HostConfig": {
                 "Binds": binds,
+                "CapDrop": ["ALL"],
                 "Memory": 4 * 1024**3,
                 "NanoCpus": int(2 * 1e9),
                 "NetworkMode": network,
+                "SecurityOpt": ["no-new-privileges"],
             },
         }
 

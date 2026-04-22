@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.api_keys import bootstrap_service_api_keys
 from api.config import settings
 from api.db import close_pool, create_pool
+from api.firewall import control_headers, control_url
 from api.logging_config import configure_structlog
 from api.vm_metrics import (
     HTTP_REQUESTS_IN_PROGRESS,
@@ -83,16 +84,14 @@ async def _push_injection_map() -> None:
     guaranteed to be up.  This eliminates the race condition where the
     firewall polls the API for the map before the API is ready.
     """
-    firewall_url = os.environ.get("FIREWALL_HEALTH_URL", "http://firewall:8081")
-    control_token = os.environ.get("FIREWALL_CONTROL_TOKEN", "").strip()
-    headers = {"Authorization": f"Bearer {control_token}"} if control_token else {}
+    firewall_url = control_url()
     injection_map = tool_manager.build_injection_map()
     try:
         async with httpx.AsyncClient() as client:
             resp = await client.post(
                 f"{firewall_url}/injection-map",
                 json=injection_map,
-                headers=headers,
+                headers=control_headers(),
                 timeout=5,
             )
             resp.raise_for_status()

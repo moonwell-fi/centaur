@@ -17,7 +17,7 @@ class _FakeResponse:
 class _FakeClient:
     def __init__(self, responses: dict[str, _FakeResponse]):
         self._responses = responses
-        self.last_headers: dict[str, str] | None = None
+        self.calls: list[tuple[str, dict[str, str] | None]] = []
 
     async def __aenter__(self):
         return self
@@ -26,7 +26,7 @@ class _FakeClient:
         return False
 
     async def get(self, url: str, headers: dict[str, str] | None = None):
-        self.last_headers = headers
+        self.calls.append((url, headers))
         return self._responses[url]
 
 
@@ -54,11 +54,13 @@ async def test_check_runtime_credentials_ok_when_key_present() -> None:
 
     base = "http://firewall:8081"
     url = f"{base}/secrets/AMP_API_KEY"
+    fake_client = _FakeClient({url: _FakeResponse(200, {"value": "abc123"})})
 
     with (
         patch.dict(
             "os.environ",
             {
+                "FIREWALL_CONTROL_TOKEN": "control-token",
                 "RUNTIME_CREDENTIAL_GUARD_ENABLED": "1",
                 "REQUIRED_RUNTIME_SECRET_KEYS": "AMP_API_KEY",
                 "FIREWALL_HEALTH_URL": base,
@@ -67,7 +69,7 @@ async def test_check_runtime_credentials_ok_when_key_present() -> None:
         ),
         patch(
             "api.runtime_guardrails.httpx.AsyncClient",
-            return_value=_FakeClient({url: _FakeResponse(200, {"value": "abc123"})}),
+            return_value=fake_client,
         ),
     ):
         report = await check_runtime_credentials()
@@ -75,6 +77,7 @@ async def test_check_runtime_credentials_ok_when_key_present() -> None:
     assert report["enabled"] is True
     assert report["status"] == "ok"
     assert report["key_lengths"] == {"AMP_API_KEY": 6}
+    assert fake_client.calls == [(url, {"Authorization": "Bearer control-token"})]
 
 
 @pytest.mark.asyncio
@@ -104,7 +107,7 @@ async def test_check_runtime_credentials_sends_bearer_when_token_set() -> None:
     ):
         await check_runtime_credentials()
 
-    assert fake.last_headers == {"Authorization": "Bearer test-token-xyz"}
+    assert fake.calls == [(url, {"Authorization": "Bearer test-token-xyz"})]
 
 
 @pytest.mark.asyncio

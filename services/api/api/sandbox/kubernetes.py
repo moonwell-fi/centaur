@@ -25,6 +25,7 @@ from kubernetes_asyncio.stream.ws_client import (
 )
 import structlog
 
+from api.firewall import fetch_control_secret
 from api.sandbox.base import SandboxBackend, SandboxSession
 from api.sandbox.docker import _build_harness_cmd, _container_env, _image
 
@@ -33,6 +34,22 @@ log = structlog.get_logger()
 _READY_TIMEOUT_S = int(os.getenv("KUBERNETES_SANDBOX_READY_TIMEOUT_S", "60"))
 _ATTACH_LOG_TAIL_LINES = int(os.getenv("KUBERNETES_ATTACH_LOG_TAIL_LINES", "200"))
 _CONTAINER_NAME = "sandbox"
+_AGENT_UID = 1001
+
+
+async def _inject_amp_api_key(env: list[str]) -> list[str]:
+    if _local_dev_mode():
+        return env
+    try:
+        amp_api_key = await fetch_control_secret("AMP_API_KEY")
+    except Exception:
+        return env
+    if not amp_api_key:
+        return env
+    return [
+        f"AMP_API_KEY={amp_api_key}" if item == "AMP_API_KEY=AMP_API_KEY" else item
+        for item in env
+    ]
 
 
 def _get_rt(session: SandboxSession):
@@ -347,6 +364,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         pod_name = _resource_name("centaur-sandbox", thread_key)
         secret_name = _prompt_secret_name(pod_name)
         env = _container_env(thread_key, pod_name, resume_thread_id=resume_thread_id)
+        env = await _inject_amp_api_key(env)
         if persona:
             env.append(f"AGENT_PERSONA={persona}")
         if repo:
@@ -424,6 +442,14 @@ class KubernetesExecutorBackend(SandboxBackend):
                         "imagePullPolicy": _image_pull_policy(),
                         "args": cmd,
                         "stdin": True,
+                        "securityContext": {
+                            "allowPrivilegeEscalation": False,
+                            "capabilities": {"drop": ["ALL"]},
+                            "runAsGroup": _AGENT_UID,
+                            "runAsNonRoot": True,
+                            "runAsUser": _AGENT_UID,
+                            "seccompProfile": {"type": "RuntimeDefault"},
+                        },
                         "tty": False,
                         "workingDir": "/home/agent",
                         "env": [

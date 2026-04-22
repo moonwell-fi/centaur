@@ -72,6 +72,7 @@ services:
       context: .
       dockerfile: services/firewall/Dockerfile
     environment:
+      FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?set FIREWALL_CONTROL_TOKEN}
       SECRET_MANAGER_URL: http://secrets:8100
       FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?FIREWALL_CONTROL_TOKEN must be set — generate with `openssl rand -hex 32` and store in the deployer env or GitHub Actions secrets}
 
@@ -100,6 +101,7 @@ services:
       context: .
       dockerfile: services/pgbouncer/Dockerfile
     environment:
+      FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?set FIREWALL_CONTROL_TOKEN}
       SECRET_MANAGER_URL: http://firewall:8081
       FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?FIREWALL_CONTROL_TOKEN must be set — generate with `openssl rand -hex 32` and store in the deployer env or GitHub Actions secrets}
       AUTH_TYPE: scram-sha-256
@@ -128,6 +130,7 @@ services:
       context: .
       dockerfile: services/api/Dockerfile
     environment:
+      FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?set FIREWALL_CONTROL_TOKEN}
       SECRET_MANAGER_URL: http://firewall:8081
       FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?FIREWALL_CONTROL_TOKEN must be set — generate with `openssl rand -hex 32` and store in the deployer env or GitHub Actions secrets}
       SLACKBOT_URL: http://slackbot:3001
@@ -216,6 +219,7 @@ services:
       context: .
       dockerfile: services/slackbot/Dockerfile
     environment:
+      FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?set FIREWALL_CONTROL_TOKEN}
       CENTAUR_API_URL: http://api:8000
       SECRET_MANAGER_URL: http://firewall:8081
       FIREWALL_CONTROL_TOKEN: ${FIREWALL_CONTROL_TOKEN:?FIREWALL_CONTROL_TOKEN must be set — generate with `openssl rand -hex 32` and store in the deployer env or GitHub Actions secrets}

@@ -7,7 +7,11 @@ from aiohttp import WSMsgType
 
 from api.sandbox.base import SandboxSession
 from api.sandbox.docker import _container_env as docker_container_env
-from api.sandbox.kubernetes import KubernetesExecutorBackend, STDOUT_CHANNEL
+from api.sandbox.kubernetes import (
+    KubernetesExecutorBackend,
+    STDOUT_CHANNEL,
+    _inject_amp_api_key,
+)
 from api.sandbox.registry import auto_configure
 
 
@@ -103,6 +107,32 @@ def test_container_env_includes_firewall_host_for_secret_bootstrap(
     assert "AMP_API_KEY=AMP_API_KEY" in env
     assert env_map["NO_PROXY"] == "localhost,127.0.0.1,firewall.internal,api.internal"
     assert env_map["no_proxy"] == env_map["NO_PROXY"]
+
+
+@pytest.mark.asyncio
+async def test_inject_amp_api_key_replaces_only_amp_placeholder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AGENT_LOCAL_DEV", raising=False)
+
+    async def fake_fetch_control_secret(key: str) -> str | None:
+        assert key == "AMP_API_KEY"
+        return "real-amp-key"
+
+    monkeypatch.setattr(
+        "api.sandbox.kubernetes.fetch_control_secret",
+        fake_fetch_control_secret,
+    )
+
+    env = await _inject_amp_api_key([
+        "AMP_API_KEY=AMP_API_KEY",
+        "OPENAI_API_KEY=OPENAI_API_KEY",
+    ])
+
+    assert env == [
+        "AMP_API_KEY=real-amp-key",
+        "OPENAI_API_KEY=OPENAI_API_KEY",
+    ]
 
 
 @pytest.mark.asyncio
@@ -231,6 +261,14 @@ async def test_create_builds_pod_and_prompt_secret(monkeypatch: pytest.MonkeyPat
     assert container["image"] == "centaur-agent:test"
     assert "command" not in container
     assert container["args"] == ["amp-wrapper"]
+    assert container["securityContext"] == {
+        "allowPrivilegeEscalation": False,
+        "capabilities": {"drop": ["ALL"]},
+        "runAsGroup": 1001,
+        "runAsNonRoot": True,
+        "runAsUser": 1001,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
     assert container["stdin"] is True
     assert container["tty"] is False
     assert env["CENTAUR_API_URL"] == "http://api.internal:8000"

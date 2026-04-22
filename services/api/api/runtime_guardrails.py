@@ -5,6 +5,8 @@ from urllib.parse import quote
 
 import httpx
 
+from api.firewall import control_headers, control_url
+
 
 def runtime_credential_guard_enabled() -> bool:
     return os.getenv("RUNTIME_CREDENTIAL_GUARD_ENABLED", "0").strip().lower() in {
@@ -33,12 +35,11 @@ async def check_runtime_credentials() -> dict[str, object]:
             "key_lengths": {},
         }
 
-    firewall_url = os.getenv("FIREWALL_HEALTH_URL", "http://firewall:8081").rstrip("/")
-    control_token = os.environ.get("FIREWALL_CONTROL_TOKEN", "").strip()
-    headers = {"Authorization": f"Bearer {control_token}"} if control_token else {}
+    firewall_url = control_url()
     missing_keys: list[str] = []
     errors: list[str] = []
     key_lengths: dict[str, int] = {}
+    headers = control_headers()
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:

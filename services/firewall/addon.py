@@ -261,7 +261,6 @@ class CredentialInjector:
                 "value (e.g. `openssl rand -hex 32`) on the firewall and on "
                 "every service that calls the firewall control plane."
             )
-
         self._cache: dict[str, tuple[str | None, float]] = {}
         self._lock = threading.Lock()
         self._known_keys: set[str] = set()
@@ -462,19 +461,17 @@ class CredentialInjector:
         """Return True when a host matches any configured exact or wildcard pattern."""
         return any(self._host_matches_pattern(host, pattern) for pattern in patterns)
 
-    def _get_allowed_keys_for_host(self, host: str) -> set[str] | None:
-        """Look up allowed keys for a host. Returns None if host is not in the map."""
+    def _get_allowed_keys_for_host(self, host: str) -> frozenset[str]:
+        """Look up allowed keys for a host. Unmatched hosts receive no secrets."""
         with self._injection_map_lock:
             injection_map = self._injection_map.copy()
         if not injection_map:
             return frozenset()  # No map loaded — deny all (fail-closed)
         allowed: set[str] = set()
-        matched = False
         for pattern, keys in injection_map.items():
             if self._host_matches_pattern(host, pattern):
                 allowed.update(keys)
-                matched = True
-        return allowed if matched else None
+        return frozenset(allowed)
 
     def _refresh_keys(self) -> None:
         try:
@@ -537,14 +534,13 @@ class CredentialInjector:
         self,
         value: str,
         host: str,
-        allowed_keys: set[str] | None,
+        allowed_keys: frozenset[str],
         source_ip: str,
     ) -> str:
         """Replace key names with real secrets, respecting the injection map.
 
-        If allowed_keys is None (no map loaded), falls back to unrestricted
-        replacement. If allowed_keys is an empty set, the host is not in the
-        map — log exfil_attempt and strip placeholders.
+        Hosts that are not explicitly allowed receive an empty allowed_keys set,
+        so placeholders are stripped instead of being expanded.
         """
         with self._keys_lock:
             keys = self._known_keys
@@ -563,22 +559,19 @@ class CredentialInjector:
             if key_name not in value:
                 continue
 
-            # If injection map is loaded, enforce it
-            if allowed_keys is not None:
-                if key_name not in allowed_keys:
-                    # Key not allowed for this host — strip it
-                    log.warning(
-                        "injection_map_violation",
-                        extra={
-                            "event": "injection_map_violation",
-                            "key_name": key_name,
-                            "host": host,
-                            "allowed_keys": sorted(allowed_keys),
-                            "container_ip": source_ip,
-                        },
-                    )
-                    value = value.replace(key_name, "")
-                    continue
+            if key_name not in allowed_keys:
+                log.warning(
+                    "injection_map_violation",
+                    extra={
+                        "event": "injection_map_violation",
+                        "key_name": key_name,
+                        "host": host,
+                        "allowed_keys": sorted(allowed_keys),
+                        "container_ip": source_ip,
+                    },
+                )
+                value = value.replace(key_name, "")
+                continue
 
             secret = self._get_secret(key_name)
             if secret is not None:
@@ -823,7 +816,7 @@ class CredentialInjector:
             return
         host = flow.request.pretty_host.lower().rstrip(".")
         # Scan responses from injection hosts and any host in the injection map
-        if not self._host_in_patterns(host, SECRET_INJECTION_HOSTS) and self._get_allowed_keys_for_host(host) is None:
+        if not self._host_in_patterns(host, SECRET_INJECTION_HOSTS) and not self._get_allowed_keys_for_host(host):
             return
         content_type = flow.response.headers.get("content-type", "").split(";")[0].strip()
         if content_type not in self._SCANNABLE_CONTENT_TYPES:
@@ -956,7 +949,7 @@ class CredentialInjector:
         #    trusted internal services, and essential services are unrestricted.
         #    Skip if we just rewrote the request (it's now targeting an LLM host).
         #    Also allow hosts in the injection map (they're tool API hosts).
-        host_in_injection_map = self._get_allowed_keys_for_host(host) is not None
+        host_in_injection_map = bool(self._get_allowed_keys_for_host(host))
         host_is_injection = self._host_in_patterns(host, SECRET_INJECTION_HOSTS)
         host_is_unrestricted = self._host_in_patterns(host, UNRESTRICTED_METHOD_HOSTS)
         host_is_trusted = self._host_in_patterns(host, TRUSTED_INTERNAL_HOSTS)
@@ -971,11 +964,8 @@ class CredentialInjector:
                 log.warning("method_blocked: %s not allowed for %s", method, host)
                 return
 
-        # 6. Secret injection: replace known key placeholders in ALL outbound
-        #    requests.  Security is enforced by method filtering (step 5) and
-        #    SSRF protection (step 3), not by restricting which hosts receive
-        #    real credentials.  This avoids maintaining a static host allowlist
-        #    that breaks whenever a new provider or tool API is added.
+        # 6. Secret injection: replace known key placeholders only for hosts
+        #    that are explicitly allowed by the injection map.
         self._replace_in_headers(flow)
         self._replace_in_url(flow)
 

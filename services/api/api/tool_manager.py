@@ -28,13 +28,13 @@ from fastapi.responses import PlainTextResponse
 from toon_format import encode as toon_encode
 
 from api.api_keys import check_scope
+from api.firewall import control_headers, control_url
 from api.vm_metrics import record_tool_call
 from api.deps import get_key_info, get_sandbox_claims, verify_api_key
 from centaur_sdk import ToolContext, reset_tool_context, set_tool_context
 
 log = structlog.get_logger()
 
-_FIREWALL_URL = os.environ.get("FIREWALL_HEALTH_URL", "http://firewall:8081")
 _secret_cache: dict[str, tuple[str, float]] = {}
 _SECRET_CACHE_TTL = 60
 
@@ -52,12 +52,12 @@ async def _resolve_secrets(keys: list[str]) -> dict[str, str]:
             missing.append(k)
     if not missing:
         return result
-    control_token = os.environ.get("FIREWALL_CONTROL_TOKEN", "").strip()
-    headers = {"Authorization": f"Bearer {control_token}"} if control_token else {}
+    firewall_url = control_url()
+    headers = control_headers()
     async with httpx.AsyncClient(timeout=5) as client:
         for k in missing:
             try:
-                resp = await client.get(f"{_FIREWALL_URL}/secrets/{k}", headers=headers)
+                resp = await client.get(f"{firewall_url}/secrets/{k}", headers=headers)
                 if resp.status_code == 200:
                     val = resp.json().get("value", "")
                     if val:
@@ -992,5 +992,3 @@ class ToolManager:
             return {"tool": tool_name, "method": method_name, "result": result}
 
         return router
-
-

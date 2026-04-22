@@ -12,19 +12,6 @@ cat > "$HOME_DIR/.config/amp/settings.json" <<EOF
 }
 EOF
 
-# Resolve placeholder secret names like AMP_API_KEY=AMP_API_KEY via the firewall.
-for KEY in AMP_API_KEY ANTHROPIC_API_KEY OPENAI_API_KEY GITHUB_TOKEN; do
-    VALUE="${!KEY:-}"
-    if [ -n "$VALUE" ] && [ "$VALUE" = "$KEY" ]; then
-        SECRET_VALUE="$({
-            curl -fsS "http://${FIREWALL_HOSTNAME}:8081/secrets/${KEY}" | jq -r '.value // empty'
-        } 2>/dev/null || true)"
-        if [ -n "$SECRET_VALUE" ]; then
-            export "${KEY}=${SECRET_VALUE}"
-        fi
-    fi
-done
-
 # ── Pi-mono settings ─────────────────────────────────────────────────────────
 mkdir -p "$HOME_DIR/.pi/agent/extensions"
 cat > "$HOME_DIR/.pi/agent/settings.json" <<EOF

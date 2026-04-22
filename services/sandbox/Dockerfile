@@ -96,6 +96,7 @@ RUN mkdir -p ~/.amp/bin ~/.config/amp ~/.codex ~/.pi/agent ~/github ~/workspace 
 FROM toolchain AS sandbox
 
 USER root
+RUN rm -f /etc/sudoers.d/agent
 COPY --link --chmod=755 services/sandbox/call.sh /usr/local/bin/call
 COPY --link --chmod=755 services/sandbox/slack-upload.sh /usr/local/bin/slack-upload
 COPY --link --chmod=755 services/sandbox/md2docx.py /usr/local/bin/md2docx

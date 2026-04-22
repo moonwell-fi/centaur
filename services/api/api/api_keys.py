@@ -13,6 +13,8 @@ import asyncpg
 import httpx
 import structlog
 
+from api.firewall import control_headers
+
 log = structlog.get_logger()
 
 _KEY_BYTES = 32  # 256-bit random keys
@@ -227,12 +229,10 @@ async def ensure_static_key(
 
 async def _fetch_secret_value(secret_manager_url: str, key: str) -> str | None:
     """Fetch a secret value from the local secret manager."""
-    control_token = os.environ.get("FIREWALL_CONTROL_TOKEN", "").strip()
-    headers = {"Authorization": f"Bearer {control_token}"} if control_token else {}
     async with httpx.AsyncClient(timeout=5.0) as client:
         response = await client.get(
             f"{secret_manager_url.rstrip('/')}/secrets/{key}",
-            headers=headers,
+            headers=control_headers(),
         )
         if response.status_code == 404:
             return None
