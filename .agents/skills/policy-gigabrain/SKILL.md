@@ -400,11 +400,15 @@ Answer any question about a Member of Congress — their staff, donors, voting r
 
 ### 2c. Hill Staff Map
 
-Maintain a standing map of current staff across the Senate Banking Committee and House Financial Services Committee (HFSC), covering both Republican and Democratic sides. Pulls from LegiStorm, joins against existing Gigabrain touchpoints and notes, and generates three purpose-built views from a single underlying dataset. Runs a silent weekly refresh with targeted Slack pings for roster changes.
+Maintain a standing map of current staff across the Senate Banking Committee and House Financial Services Committee (HFSC). The map is built once and stored in a Google Sheet — queries always read from that sheet, not from LegiStorm directly. LegiStorm is only called during the initial build or the weekly refresh.
 
 **LegiStorm office IDs (hardcoded — do not re-discover):**
 - Senate Banking, Housing and Urban Affairs Committee: `office_id = 676`
 - House Financial Services Committee: `office_id = 1200`
+
+**Stored sheet name:** `Hill Staff Map` (created automatically on first build)
+
+---
 
 **Trigger Phrases:**
 - "Hill staff map" / "Banking Committee staff" / "HFSC bench"
@@ -414,103 +418,135 @@ Maintain a standing map of current staff across the Senate Banking Committee and
 - "Talent view of Banking Committee staff"
 - "Any new hires on Senate Banking?" / "on HFSC?"
 - "Policy view / briefing view of Senate Banking / HFSC staff"
+- "Rebuild the Hill staff map" / "Refresh the Hill staff map"
+
+---
+
+#### Build / Refresh the Map
+
+Run this when first setting up or when explicitly asked to refresh. Do not run this on every query — the sheet persists between sessions.
+
+**Step B1. Check if the sheet already exists:**
+```bash
+call gsuite drive_search '{"query":"Hill Staff Map","max_results":5}'
+```
+If a sheet named "Hill Staff Map" exists, note its `spreadsheet_id`. If not, create it:
+```bash
+call gsuite sheets_create '{"title":"Hill Staff Map","content":[["name","office","member_or_committee","committee","side","title","hill_years","earliest_start","staff_id","member_id","known_to_paradigm","last_touchpoint","notes"]]}'
+```
+
+**Step B2. Pull committee professional staff:**
+```bash
+call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","office_id":676,"limit":100}'
+call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","office_id":1200,"limit":100}'
+```
+For each record, extract: `staff.preferred_first_name` + `staff.preferred_last_name`, `positions[is_current=true].position_title`, `staff.bio_details.party_name`, `staff.bio_details.maj_min`, earliest `positions[].start_date` (for Hill years). Mark `member_or_committee = "committee"`.
+
+**Step B3. Pull current committee membership pages:**
+```bash
+read_web_page https://www.banking.senate.gov/about/members
+read_web_page https://financialservices.house.gov/about/members.htm
+```
+Extract the list of member names and states.
+
+**Step B4. Resolve members to LegiStorm IDs:**
+```bash
+call legistorm get_members '{"updated_from":"2025-01-01","updated_to":"2026-12-31","limit":100}'
+```
+Match each committee member by name and state to get their `member_id`.
+
+**Step B5. Pull personal office policy staff for each committee member:**
+```bash
+# Repeat for each member_id
+call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","member_id":[member_id],"limit":50}'
+```
+Filter to policy-relevant titles only: `Legislative Assistant`, `Senior Legislative Assistant`, `Legislative Correspondent`, `Legislative Director`, `Policy Advisor`, `Counsel`, `Professional Staff Member`, `Staff Director`. Skip schedulers, communications, and casework staff. Mark `member_or_committee = "[member name]"`.
+
+**Step B6. Write the full roster to the sheet:**
+```bash
+call gsuite sheets_update '{"spreadsheet_id":"[sheet_id]","range_notation":"A2:M[N]","values":[[...rows...]]}'
+```
+One row per staffer. Compute `hill_years` as years from earliest `positions[].start_date` to today.
+
+**Step B7. Share the sheet** with the requesting user (once, on creation):
+```bash
+call gsuite drive_share '{"file_id":"[sheet_id]","email":"[requester_email]","role":"writer","send_notification":false}'
+```
+
+---
+
+#### Query the Map
+
+Run this on every query. Reads from the stored sheet — no LegiStorm calls.
+
+**Step Q1. Read the stored roster:**
+```bash
+call gsuite drive_search '{"query":"Hill Staff Map","max_results":5}'
+call gsuite sheets_read '{"spreadsheet_id":"[sheet_id]","range_notation":"A:M"}'
+```
+
+**Step Q2. Join against Gigabrain touchpoints and notes** to populate `known_to_paradigm` and `last_touchpoint` for any rows not yet flagged:
+```bash
+call slack search_messages '{"query":"in:#gigabrain-feed [staffer_name]"}'
+call slack search_messages '{"query":"in:#gigabrain-feed #touchpoint [office_name]"}'
+call paradigmdb notes_search '{"query":"[staffer_name]"}'
+call gsuite sheets_read '{"spreadsheet_id":"[touchpoint_sheet_id]","range_notation":"A:C"}'
+```
+
+**Step Q3. Render the requested view** (default: Policy View — see formats below).
+
+**Step Q4. Relationship prompt.** Append to the response for any staffers with `known_to_paradigm = No`:
+> "I don't have a relationship record for these people — do you know any of them?"
+
+If the user replies inline, log as a retroactive touchpoint via the `#touchpoint` capture pattern from **1a** and update the `known_to_paradigm` field in the sheet.
+
+---
 
 **Ranking Logic**
 
-Rank by two fields — not title, since titles are inconsistent across offices:
-1. **Committee role depth** — staff with `office_id` 676 or 1200 in their current position (committee staff) rank above personal office staff
-2. **Total years of Hill experience** — use the earliest `start_date` across all entries in `positions[]` to compute years on the Hill to present
+Apply to all views — not title, since titles are inconsistent across offices:
+1. **Committee role depth** — `member_or_committee = "committee"` rows first
+2. **Total years of Hill experience** — `hill_years` descending within each tier
 
-All title variants are descriptive metadata only. Record the value from `positions[].position_title` as-is; do not use for ranking. Accepted variants include: `Legislative Assistant`, `Senior Legislative Assistant`, `Legislative Correspondent`, `Legislative Director`, `Policy Advisor`, `Counsel`, `Professional Staff Member`, `Staff Director`.
+All title variants are descriptive metadata only. Record as-is; do not use for ranking.
 
-**Data fields to use from LegiStorm staff records:**
-- Name: `staff.preferred_first_name` + `staff.preferred_last_name`
-- Title (metadata): `positions[is_current=true].position_title`
-- Party/side: `staff.bio_details.party_name` (Republican / Democrat) and `staff.bio_details.maj_min` (majority / minority)
-- Hill experience: earliest `positions[].start_date` across all positions → compute years to today
-- Committee staff flag: check if any `positions[].office_id` matches 676 or 1200
-
-**Steps — On-Demand Query:**
-
-1. **Pull committee staff directly using hardcoded office IDs:**
-   ```bash
-   call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","office_id":676,"limit":100}'
-   call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","office_id":1200,"limit":100}'
-   ```
-
-2. **Get committee member lists for personal office staff:**
-   ```bash
-   read_web_page https://www.banking.senate.gov/about/members
-   read_web_page https://financialservices.house.gov/about/members.htm
-   ```
-
-3. **Resolve committee members to LegiStorm member IDs, then pull personal office staff:**
-   ```bash
-   # Match members by name/state from the membership pages
-   call legistorm get_members '{"updated_from":"2025-01-01","updated_to":"2026-12-31","limit":100}'
-   # Then for each matching member_id:
-   call legistorm get_staff '{"updated_from":"2025-01-01","updated_to":"2026-12-31","member_id":[member_id],"limit":50}'
-   ```
-
-4. **Filter personal office staff** to policy-relevant titles only (see accepted variants above). Skip schedulers, communications staff, and caseworkers.
-
-5. **Rank the combined roster:**
-   - Committee staff (office_id 676 or 1200) first
-   - Within each tier, sort by total years of Hill experience ascending from earliest `positions[].start_date`
-
-6. **Join against Gigabrain touchpoints and notes for relationship context:**
-   ```bash
-   call slack search_messages '{"query":"in:#gigabrain-feed [staffer_name]"}'
-   call slack search_messages '{"query":"in:#gigabrain-feed #touchpoint [office_name]"}'
-   call paradigmdb notes_search '{"query":"[staffer_name]"}'
-   call gsuite drive_search '{"query":"Policy Touchpoint Log","max_results":10}'
-   call gsuite sheets_read '{"spreadsheet_id":"[touchpoint_sheet_id]","range_notation":"A:C"}'
-   ```
-
-7. **Flag relationship status.** Mark each staffer `Known to Paradigm: Yes` if any touchpoint, note, or Slack mention surfaces in Step 6; otherwise `No`.
-
-8. **Relationship prompt.** When surfacing any staffers with `Known to Paradigm: No`, append to the response:
-   > "I don't have a relationship record for these people — do you know any of them?"
-
-   If the user replies inline, log the reply as a retroactive touchpoint using the same `#touchpoint` capture pattern from **1a**: post to `#gigabrain-feed` and silently append to the Google Sheet touchpoint log.
+---
 
 **Three Views — Same Underlying Data**
 
-Generate whichever view is requested. Default to Policy View.
+**Policy View** — outreach and issue tracking (default)
 
-**Policy View** — outreach and issue tracking
+| Name | Office / Member | Title (metadata) | Cmt Staff? | Hill Yrs | Side | Known to Paradigm | Last Touchpoint |
+|------|----------------|-----------------|------------|----------|------|-------------------|-----------------|
 
-| Name | Office | Title (metadata) | Cmt Staff? | Hill Yrs | Side | Known to Paradigm | Last Touchpoint |
-|------|--------|-----------------|------------|----------|------|-------------------|-----------------|
-
-Sort: committee staff first, then Hill years descending. Open relationships (Known: No) surfaced last within each tier.
+Sort: committee staff first, then Hill years descending.
 
 **Talent View** — portfolio company hiring
 
 | Name | Current Office | Title (metadata) | Hill Yrs | Crypto/Fintech Coverage | Known to Paradigm |
 |------|---------------|-----------------|----------|------------------------|-------------------|
 
-Sort: Hill years descending. Filter to policy staff with crypto, fintech, or financial regulation coverage. Notes must be positive, observational, concrete, and professional — limited to what you would say directly to the person. Candidate filtering and ranking happen through structured data, not written notes.
+Notes must be positive, observational, concrete, and professional — limited to what you would say directly to the person. Candidate filtering happens through structured data, not written notes.
 
 **Briefing View** — quick pre-meeting reference
 
 | Name | Office | Committee | Side | Title (metadata) | Hill Yrs | Known |
 |------|--------|-----------|------|-----------------|----------|-------|
 
-Condensed, no issue-area detail. One glance before a meeting or hearing.
+---
 
 **Weekly Refresh**
 
-Silently refresh the canonical LegiStorm data in the background — no notification unless:
+Silently re-pull from LegiStorm using the same Build steps above. Diff the new roster against the stored sheet:
 
-- **New staffer** enters the Senate Banking or HFSC universe: post to the policy team Slack channel:
+- **New staffer** (name not in current sheet): update the sheet, then post:
   > "New staffer added to your bench — do you know them?" [name, office, title, committee side]
-- **Staffer departure**: a staffer previously in the map no longer appears: post a brief departure ping with name and office.
+- **Departed staffer** (name no longer in LegiStorm pull): mark as inactive in the sheet, then post a brief departure ping.
 
 Do not ping for title changes, intra-office transfers, or data corrections.
 
 ```bash
-# Refresh pattern — use office_id directly, no discovery step needed
+# Weekly refresh uses same build pattern with a narrower date window
 call legistorm get_staff '{"updated_from":"[last_refresh_date]","updated_to":"[today]","office_id":676,"limit":100}'
 call legistorm get_staff '{"updated_from":"[last_refresh_date]","updated_to":"[today]","office_id":1200,"limit":100}'
 ```
