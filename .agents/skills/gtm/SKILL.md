@@ -163,7 +163,7 @@ call coingecko get_market_chart '{"coin_id": "<coingecko_id>", "vs_currency": "u
 call chart line_chart '{"data": <price_history_as_date_price_list>, "title": "<TOKEN> 30d"}'
 ```
 3. Support timeframes: 1d, 7d, 30d, 90d, 365d
-4. For candlestick charts, use `call mpp get_ohlc` + `call chart candlestick_chart`
+4. For candlestick charts, use `call coingecko get_market_chart` with the same params, then group the price points into daily buckets to derive open/high/low/close per day. Pass the resulting [{date, open, high, low, close}, ...] list to `call chart candlestick_chart`.
 
 When the user asks to **compare** tokens (e.g. "ETH vs SOL"):
 1. Get price history for both tokens via coingecko get_market_chart
