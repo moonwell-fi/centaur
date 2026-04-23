@@ -54,7 +54,7 @@ const TEAM_COLS = [
 
 const SKILL_COLS = [
   { key: "rank",     label: "#",        num: true,  noSort: true, w: "3.5%" },
-  { key: "skill",    label: "Skill",    num: false, w: "16%",     cls: "tool-name" },
+  { key: "skill",    label: "Skill",    num: false, w: "16%",     cls: "tool-name", hasSkillEmoji: true },
   { key: "calls",    label: "Calls",    num: true,  w: "7%" },
   { key: "threads",  label: "Threads",  num: true,  w: "7%" },
   { key: "users",    label: "Users",    num: true,  w: "6%" },
@@ -174,6 +174,7 @@ function renderBody() {
 
   const html = rows.map((r, i) => {
     const tds = cols.map((c) => {
+      if (c.hasSkillEmoji) return `<td class="tool-name"><span class="tool-identity"><span class="team-emoji">${r.emoji || ""}</span>${escapeHtml(r.skill)}</span></td>`;
       if (c.hasIcon && state.view === "tools") return renderToolCell(r);
       if (c.hasPfp && state.view === "users") return renderUserCell(r);
       if (c.hasEmoji) return renderTeamCell(r);
