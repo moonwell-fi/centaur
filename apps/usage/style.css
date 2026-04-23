@@ -202,6 +202,20 @@ tbody td.tool-name {
   font-weight: 500;
 }
 
+.tool-identity {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tool-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
 tbody td.user-name {
   font-weight: 500;
 }

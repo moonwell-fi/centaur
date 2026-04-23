@@ -2,7 +2,7 @@
 
 Interactive dashboard showing Centaur agent tool usage and user activity stats. Deployed on Centaur infrastructure.
 
-**Live:** https://svc-ai.dayno.xyz/apps/tool-dashboard/
+**Live:** https://svc-ai.dayno.xyz/apps/usage/
 
 ## Data
 
@@ -25,8 +25,8 @@ First deploy:
 ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -sS -X POST http://localhost:8000/apps \
   -H 'Content-Type: application/json' \
   -d '{
-    \"name\": \"tool-dashboard\",
-    \"repo_url\": \"https://github.com/paradigmxyz/centaur-tool-dashboard\",
+    \"name\": \"usage\",
+    \"repo_url\": \"https://github.com/paradigmxyz/centaur-usage\",
     \"port\": 3000,
     \"build_cmd\": \"true\",
     \"start_cmd\": \"python3 serve.py\"
@@ -37,13 +37,13 @@ Redeploy after pushing changes:
 
 ```bash
 # Delete and recreate (pulls latest from GitHub)
-ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -sS -X DELETE http://localhost:8000/apps/tool-dashboard -H 'Content-Type: application/json' -d '{}'"
+ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -sS -X DELETE http://localhost:8000/apps/usage -H 'Content-Type: application/json' -d '{}'"
 
 ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -sS -X POST http://localhost:8000/apps \
   -H 'Content-Type: application/json' \
   -d '{
-    \"name\": \"tool-dashboard\",
-    \"repo_url\": \"https://github.com/paradigmxyz/centaur-tool-dashboard\",
+    \"name\": \"usage\",
+    \"repo_url\": \"https://github.com/paradigmxyz/centaur-usage\",
     \"port\": 3000,
     \"build_cmd\": \"true\",
     \"start_cmd\": \"python3 serve.py\"
@@ -53,11 +53,11 @@ ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -sS -X POST http://loc
 Or restart without rebuilding:
 
 ```bash
-ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -sS -X POST http://localhost:8000/apps/tool-dashboard/restart -H 'Content-Type: application/json' -d '{}'"
+ssh ubuntu@206.223.235.69 "docker exec centaur-api-1 curl -sS -X POST http://localhost:8000/apps/usage/restart -H 'Content-Type: application/json' -d '{}'"
 ```
 
 ## Stack
 
 - Static HTML/CSS/JS (no build step, no framework)
-- Python `http.server` for serving (strips `/apps/tool-dashboard/` prefix for the Centaur proxy)
+- Python `http.server` for serving (strips `/apps/usage/` prefix for the Centaur proxy)
 - Dark theme with CSS variables, following the `ai_ppl` project conventions

@@ -2,7 +2,7 @@ import http.server
 import os
 
 PORT = int(os.environ.get("PORT", 3000))
-PREFIX = "/apps/tool-dashboard"
+PREFIX = "/apps/usage"
 
 class Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):

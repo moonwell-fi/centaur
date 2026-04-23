@@ -15,7 +15,7 @@ let state = {
 
 const TOOL_COLS = [
   { key: "rank",     label: "#",        num: true,  noSort: true, w: "3.5%",  cls: "" },
-  { key: "tool",     label: "Tool",     num: false, w: "10%",     cls: "tool-name" },
+  { key: "tool",     label: "Tool",     num: false, w: "10%",     cls: "tool-name", hasIcon: true },
   { key: "calls",    label: "Calls",    num: true,  w: "7%" },
   { key: "threads",  label: "Threads",  num: true,  w: "7%" },
   { key: "users",    label: "Users",    num: true,  w: "6%" },
@@ -126,6 +126,13 @@ function renderHead() {
   $("#thead").innerHTML = `<tr>${ths}</tr>`;
 }
 
+function renderToolCell(r) {
+  const icon = r.icon
+    ? `<img class="tool-icon" src="${escapeHtml(r.icon)}" loading="lazy" alt="" onerror="this.style.display='none'">`
+    : "";
+  return `<td class="tool-name"><span class="tool-identity">${icon}${escapeHtml(r.tool)}</span></td>`;
+}
+
 function renderUserCell(r) {
   const pfp = r.pfp
     ? `<img class="pfp" src="${escapeHtml(r.pfp)}" loading="lazy" alt="">`
@@ -141,6 +148,7 @@ function renderBody() {
 
   const html = rows.map((r, i) => {
     const tds = cols.map((c) => {
+      if (c.hasIcon && state.view === "tools") return renderToolCell(r);
       if (c.hasPfp && state.view === "users") return renderUserCell(r);
       const cls = [c.num ? "num" : "", c.cls || ""].filter(Boolean).join(" ");
       let val;
