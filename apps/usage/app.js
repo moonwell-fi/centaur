@@ -17,11 +17,11 @@ const TOOL_COLS = [
   { key: "users",    label: "Users",      num: true,  w: "6%" },
   { key: "methods_count", label: "Methods", num: true, w: "6%", cls: "col-methods" },
   { key: "calls_per_thread", label: "C/T", num: true, w: "5%", cls: "col-cpt" },
-  { key: "method1",  label: "#1 Method",  num: false, w: "14%", noSort: true, cls: "method" },
-  { key: "method2",  label: "#2 Method",  num: false, w: "14%", noSort: true, cls: "method col-method2" },
-  { key: "method3",  label: "#3 Method",  num: false, w: "11.5%", noSort: true, cls: "method col-method3" },
-  { key: "first_seen", label: "First",    num: false, w: "7.5%",  cls: "col-first" },
-  { key: "last_seen",  label: "Last",     num: false, w: "7.5%",  cls: "col-last" },
+  { key: "method1",  label: "#1 Method",  num: false, w: "12%", noSort: true, cls: "method" },
+  { key: "method2",  label: "#2 Method",  num: false, w: "12%", noSort: true, cls: "method col-method2" },
+  { key: "method3",  label: "#3 Method",  num: false, w: "10.5%", noSort: true, cls: "method col-method3" },
+  { key: "first_seen", label: "First",    num: false, w: "10%",  cls: "col-first" },
+  { key: "last_seen",  label: "Last",     num: false, w: "10%",  cls: "col-last" },
 ];
 
 const USER_COLS = [
@@ -55,11 +55,11 @@ const SKILL_COLS = [
   { key: "threads",  label: "Threads",  num: true,  w: "6%" },
   { key: "users",    label: "Users",    num: true,  w: "6%" },
   { key: "calls_per_thread", label: "C/T", num: true, w: "5%", cls: "col-cpt" },
-  { key: "user1",    label: "#1 User",  num: false, w: "13%", noSort: true, cls: "method" },
-  { key: "user2",    label: "#2 User",  num: false, w: "13%", noSort: true, cls: "method col-method2" },
-  { key: "user3",    label: "#3 User",  num: false, w: "13.5%", noSort: true, cls: "method col-method3" },
-  { key: "first_seen", label: "First",  num: false, w: "7.5%",  cls: "col-first" },
-  { key: "last_seen",  label: "Last",   num: false, w: "7.5%",  cls: "col-last" },
+  { key: "user1",    label: "#1 User",  num: false, w: "11%", noSort: true, cls: "method" },
+  { key: "user2",    label: "#2 User",  num: false, w: "11%", noSort: true, cls: "method col-method2" },
+  { key: "user3",    label: "#3 User",  num: false, w: "11.5%", noSort: true, cls: "method col-method3" },
+  { key: "first_seen", label: "First",  num: false, w: "10.5%",  cls: "col-first" },
+  { key: "last_seen",  label: "Last",   num: false, w: "10.5%",  cls: "col-last" },
 ];
 
 const WORKFLOW_COLS = [
