@@ -18,6 +18,10 @@ from api.deps import verify_api_key
 log = structlog.get_logger()
 
 # ── Management router (requires API key) ─────────────────────────────────────
+#
+# Uses /_manage prefix so management endpoints (GET/DELETE/POST by name) don't
+# shadow the proxy catch-all at /apps/{name}.  The top-level collection routes
+# (POST /apps, GET /apps) stay at the /apps root.
 
 router = APIRouter(
     prefix="/apps",
@@ -99,7 +103,7 @@ async def list_apps(request: Request):
     }
 
 
-@router.get("/{name}")
+@router.get("/_manage/{name}")
 async def get_app(request: Request, name: str):
     """Get app details."""
     pool = request.app.state.db_pool
@@ -135,7 +139,7 @@ async def get_app(request: Request, name: str):
     }
 
 
-@router.delete("/{name}")
+@router.delete("/_manage/{name}")
 async def delete_app(request: Request, name: str):
     """Stop and remove an app."""
     pool = request.app.state.db_pool
@@ -146,7 +150,7 @@ async def delete_app(request: Request, name: str):
     return {"ok": True, "name": name}
 
 
-@router.post("/{name}/restart")
+@router.post("/_manage/{name}/restart")
 async def restart_app(request: Request, name: str):
     """Restart an app (full rebuild)."""
     pool = request.app.state.db_pool
@@ -157,7 +161,7 @@ async def restart_app(request: Request, name: str):
     return result
 
 
-@router.get("/{name}/logs")
+@router.get("/_manage/{name}/logs")
 async def get_app_logs(request: Request, name: str, tail: int = 200):
     """Get app build and runtime logs."""
     pool = request.app.state.db_pool
