@@ -124,53 +124,28 @@ The script outputs the path to the generated `.docx` file.
 
 ### Step 4: Upload the .docx to Slack
 
-You MUST upload the generated `.docx` file directly to the Slack channel/thread so the user can download it. Do not just report that a file was generated — the user needs the actual document.
+⚠️ **CRITICAL — Do not skip this step.** The user must receive the actual .docx file in Slack. Do NOT just print the file path.
 
-**Step 4a: Discover the Slack upload method**
+**Step 4a: Get the Slack channel**
 
-```bash
-curl -s http://api:8000/tools/slack -H "X-Api-Key: $CENTAUR_API_KEY"
-```
+The channel name or ID comes from the thread metadata (the `metadata` field in the user message, e.g. `metadata.channel`). If you don't have it, check the environment or ask the user. Common channel names: `deals`, `legal`, or the DM channel.
 
-Look for any method with "upload" or "file" in the name (e.g., `upload_file`, `send_file`, `files_upload`).
-
-**Step 4b: Upload the file**
-
-Call the discovered method. Example (adjust method name and parameters based on discovery):
+**Step 4b: Upload the file using the slack tool**
 
 ```bash
 curl -s -X POST http://api:8000/tools/slack/upload_file \
   -H "Content-Type: application/json" \
   -H "X-Api-Key: $CENTAUR_API_KEY" \
   -d '{
-    "file_path": "<path to generated .docx>",
+    "channel": "<channel_name_or_id>",
+    "file_path": "<absolute path to generated .docx>",
     "filename": "Term Sheet - <Company> Series <X>.docx",
-    "channel": "<channel from thread metadata>",
     "title": "Term Sheet - <Company> Series <X>",
-    "initial_comment": "Here is the generated term sheet."
+    "comment": "Here is the generated term sheet."
   }'
 ```
 
-**Step 4c: Fallback — if no Slack upload method exists**
-
-If the slack tool has no file upload method, use the Slack API directly with the bot token:
-
-```bash
-curl -s -X POST https://slack.com/api/files.uploadV2 \
-  -H "Authorization: Bearer $SLACK_BOT_TOKEN" \
-  -F "channel_id=<channel_id>" \
-  -F "filename=Term Sheet - <Company> Series <X>.docx" \
-  -F "file=@<path to generated .docx>" \
-  -F "title=Term Sheet - <Company> Series <X>" \
-  -F "initial_comment=Here is the generated term sheet."
-```
-
-If `$SLACK_BOT_TOKEN` is not set, try reading it from secrets:
-```bash
-curl -s http://api:8000/tools/slack/get_bot_token -H "X-Api-Key: $CENTAUR_API_KEY"
-```
-
-⚠️ **Do not skip this step.** The user must receive the actual .docx file in Slack.
+If the request came from a Slack thread, include `"thread_ts": "<thread_ts>"` to upload in the thread.
 
 ### Step 5: Deliver
 
