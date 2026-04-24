@@ -2,7 +2,7 @@
 # git-branch — create a writable working copy from a read-only mounted repo.
 #
 # Usage:  git-branch <org/repo>
-# Example: git-branch paradigmxyz/centaur
+# Example: git-branch owner/centaur
 #
 # Creates ~/branches/<org>/<repo> as a --shared clone from ~/github/<org>/<repo>
 # with a unique agent branch checked out. The resulting directory is fully writable

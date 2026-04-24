@@ -4,11 +4,41 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
+import re
 import subprocess
+from pathlib import Path
 from typing import Any, Callable
 
 PR_METADATA_START = "<!-- self_improve_metadata_v1:start -->"
 PR_METADATA_END = "<!-- self_improve_metadata_v1:end -->"
+_GITHUB_REPO_RE = re.compile(r"github\.com[:/](?P<repo>[^/]+/[^/.]+?)(?:\.git)?$")
+
+
+def _normalize_github_repo(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    match = _GITHUB_REPO_RE.search(raw)
+    if match:
+        return match.group("repo")
+    return raw.strip("/")
+
+
+def _default_repo() -> str:
+    for key in ("SELF_IMPROVE_REPO", "GITHUB_REPOSITORY"):
+        repo = _normalize_github_repo(os.getenv(key))
+        if repo:
+            return repo
+    try:
+        origin = subprocess.check_output(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=Path(__file__).resolve().parent.parent,
+            text=True,
+        ).strip()
+    except Exception:
+        return ""
+    return _normalize_github_repo(origin)
 
 
 def _safe_int(value: Any) -> int:
@@ -198,7 +228,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--before-sha", default="")
     parser.add_argument("--after-sha", required=True)
-    parser.add_argument("--repo", default="paradigmxyz/centaur")
+    parser.add_argument("--repo", default=_default_repo())
     parser.add_argument("--deployed-at", required=True)
     parser.add_argument("--limit", type=int, default=200)
     args = parser.parse_args()

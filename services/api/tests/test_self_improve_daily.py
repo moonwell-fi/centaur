@@ -36,8 +36,8 @@ def test_slack_pr_link_uses_angle_bracket_format() -> None:
     # Slack renders `<url|text>` as a link; GitHub-style `[text](url)` is
     # surfaced as literal characters, which is the bug we saw in the
     # first rendered nightly scorecard post.
-    link = _slack_pr_link(322, "https://github.com/paradigmxyz/centaur/pull/322")
-    assert link == "<https://github.com/paradigmxyz/centaur/pull/322|#322>"
+    link = _slack_pr_link(322, "https://github.com/example/centaur/pull/322")
+    assert link == "<https://github.com/example/centaur/pull/322|#322>"
 
 
 def test_slack_pr_link_handles_missing_pieces() -> None:
@@ -426,7 +426,7 @@ def test_build_scorecard_markdown_has_clean_indentation() -> None:
     child_results = [
         {
             "pr_number": 322,
-            "pr_url": "https://github.com/paradigmxyz/centaur/pull/322",
+            "pr_url": "https://github.com/example/centaur/pull/322",
             "title": "Tighten verification",
             "why_now": "Code-change tasks keep bypassing ruff.",
             "fix_type": "prompt_tweak",
@@ -456,14 +456,14 @@ def test_build_scorecard_markdown_uses_slack_link_format_not_markdown_link() -> 
         child_results=[
             {
                 "pr_number": 322,
-                "pr_url": "https://github.com/paradigmxyz/centaur/pull/322",
+                "pr_url": "https://github.com/example/centaur/pull/322",
                 "title": "Tighten verification",
                 "why_now": "Code-change tasks were bypassing ruff.",
             }
         ],
     )
 
-    assert "<https://github.com/paradigmxyz/centaur/pull/322|#322>" in md
+    assert "<https://github.com/example/centaur/pull/322|#322>" in md
     # GitHub-style markdown would be the bug. Make sure it is truly gone.
     assert "[#322]" not in md
     assert "](https://github.com" not in md
@@ -530,15 +530,15 @@ def test_build_scorecard_markdown_separates_shipped_from_in_review() -> None:
     child_results = [
         {
             "pr_number": 333,
-            "pr_url": "https://github.com/paradigmxyz/centaur/pull/333",
-            "title": "Portfolio Market Overlay",
+            "pr_url": "https://github.com/example/centaur/pull/333",
+            "title": "Market Exposure Screen",
             "fix_type": "new_skill",
             "why_now": "Portfolio reviews happen daily.",
             "auto_merge_status": "merged",
         },
         {
             "pr_number": 331,
-            "pr_url": "https://github.com/paradigmxyz/centaur/pull/331",
+            "pr_url": "https://github.com/example/centaur/pull/331",
             "title": "Runtime control hardening",
             "fix_type": "bug_fix",
             "why_now": "Control plane had a race.",
@@ -558,11 +558,11 @@ def test_build_scorecard_markdown_separates_shipped_from_in_review() -> None:
     shipped_section = md.split("*Shipped tonight*", 1)[1].split("*In review*", 1)[0]
     in_review_section = md.split("*In review*", 1)[1]
 
-    assert "Portfolio Market Overlay" in shipped_section
-    assert "<https://github.com/paradigmxyz/centaur/pull/333|#333>" in shipped_section
-    assert "Portfolio Market Overlay" not in in_review_section
+    assert "Market Exposure Screen" in shipped_section
+    assert "<https://github.com/example/centaur/pull/333|#333>" in shipped_section
+    assert "Market Exposure Screen" not in in_review_section
     assert "Runtime control hardening" in in_review_section
-    assert "<https://github.com/paradigmxyz/centaur/pull/331|#331>" in in_review_section
+    assert "<https://github.com/example/centaur/pull/331|#331>" in in_review_section
 
     # Removed bullets must stay gone.
     assert "Child workflow errors" not in md
@@ -665,12 +665,12 @@ def test_is_auto_merge_safe_path_accepts_skills() -> None:
 def test_is_auto_merge_safe_path_accepts_persona_prompts_and_pyprojects() -> None:
     # Personas: only PROMPT.md and pyproject.toml — NOT the persona's
     # runner.py or other code files. This is the highest-leverage guard.
-    assert _is_auto_merge_safe_path("tools/personas/editorial/PROMPT.md") is True
-    assert _is_auto_merge_safe_path("tools/personas/editorial/pyproject.toml") is True
+    assert _is_auto_merge_safe_path("tools/personas/eng/PROMPT.md") is True
+    assert _is_auto_merge_safe_path("tools/personas/eng/pyproject.toml") is True
     # Persona runner code is NOT safe.
-    assert _is_auto_merge_safe_path("tools/personas/editorial/runner.py") is False
-    assert _is_auto_merge_safe_path("tools/personas/editorial/__init__.py") is False
-    assert _is_auto_merge_safe_path("tools/personas/editorial/tools.py") is False
+    assert _is_auto_merge_safe_path("tools/personas/eng/runner.py") is False
+    assert _is_auto_merge_safe_path("tools/personas/eng/__init__.py") is False
+    assert _is_auto_merge_safe_path("tools/personas/eng/tools.py") is False
 
 
 def test_is_auto_merge_safe_path_accepts_sandbox_system_prompts_only() -> None:
@@ -688,9 +688,9 @@ def test_is_auto_merge_safe_path_rejects_platform_and_infra() -> None:
     # auto-merged, could break the system end-to-end.
     assert _is_auto_merge_safe_path("services/api/api/runtime_control.py") is False
     assert _is_auto_merge_safe_path("services/api/api/agent.py") is False
-    assert _is_auto_merge_safe_path("tools-paradigm/gsuite/client.py") is False
+    assert _is_auto_merge_safe_path("tools/crypto/alchemy/client.py") is False
     assert _is_auto_merge_safe_path("workflows/self_improve_daily.py") is False
-    assert _is_auto_merge_safe_path("workflows/paradigm_pulse_daily.py") is False
+    assert _is_auto_merge_safe_path("workflows/agent_loop.py") is False
     assert _is_auto_merge_safe_path(".github/workflows/deploy.yml") is False
     assert _is_auto_merge_safe_path("docker-compose.yml") is False
     assert _is_auto_merge_safe_path("db/migrations/001_init.sql") is False

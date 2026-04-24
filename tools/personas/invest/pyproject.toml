@@ -1,9 +1,0 @@
-[project]
-name = "invest"
-description = "Investment persona — diligence, thesis development, portfolio analysis"
-version = "0.1.0"
-
-[tool.ai-v2]
-type = "persona"
-engine = "amp"
-prompt = "PROMPT.md"

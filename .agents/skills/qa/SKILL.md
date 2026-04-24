@@ -45,7 +45,7 @@ Use the **Task** tool to run layers 2, 3a, and 3b as parallel subagents once lay
 |-----------|---------|-----------------|
 | **API Key** | Fetch from secrets service (see below) | |
 | **Output directory** | `./tool-qa-output/` | `Output directory: /tmp/qa` |
-| **Tool scope** | Sample (~10 tools) | `Full tools` or `Focus on slack, paradigmdb` |
+| **Tool scope** | Sample (~10 tools) | `Full tools` or `Focus on slack, linear` |
 | **Layer scope** | All three layers | `Just layer 1` or `Layers 1 and 2` |
 
 **Getting the API key:** `API_SECRET_KEY` is NOT in `.env` — it's in the secrets manager. Fetch it:

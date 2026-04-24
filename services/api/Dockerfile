@@ -1,16 +1,12 @@
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git curl gnupg openssh-client \
+    git curl openssh-client \
     ripgrep fd-find jq yq tree gettext-base \
     && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
     && ARCH=$(dpkg --print-architecture) \
     && curl -fsSL -o /usr/local/bin/dbmate "https://github.com/amacneil/dbmate/releases/download/v2.32.0/dbmate-linux-${ARCH}" \
     && chmod +x /usr/local/bin/dbmate \
-    && curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
-       > /etc/apt/sources.list.d/google-cloud-sdk.list \
-    && apt-get update && apt-get install -y --no-install-recommends google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.7@sha256:629240833dd25d03949509fc01ceff56ae74f5e5f0fd264da634dd2f70e9cc70 /uv /uvx /usr/local/bin/
@@ -30,12 +26,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # 2. Install tool deps from tools/**/pyproject.toml (changes rarely — cached layer)
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=tools,target=/tmp/tools \
-    --mount=type=bind,source=tools-paradigm,target=/tmp/tools-paradigm \
     python -c "\
 import tomllib, pathlib; \
 deps = set(); \
 [deps.update(tomllib.load(open(p,'rb')).get('project',{}).get('dependencies',[])) \
- for root in ('/tmp/tools','/tmp/tools-paradigm') \
+ for root in ('/tmp/tools',) \
  for p in pathlib.Path(root).glob('**/pyproject.toml')]; \
 open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" \
     && uv pip install -r /tmp/pd.txt --quiet \
@@ -45,7 +40,6 @@ open('/tmp/pd.txt','w').write('\n'.join(sorted(deps)))" \
 COPY services/api/api/ api/
 COPY services/api/db/ db/
 COPY tools/ tools/
-COPY tools-paradigm/ tools-paradigm/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --inexact
 

@@ -1,9 +1,0 @@
-[project]
-name = "events"
-description = "Events persona — event planning, venues, guest lists, scheduling"
-version = "0.1.0"
-
-[tool.ai-v2]
-type = "persona"
-engine = "amp"
-prompt = "PROMPT.md"

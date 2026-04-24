@@ -2,5 +2,4 @@
 # Later directories override earlier ones on name collision.
 plugin_dirs = [
     "./tools",
-    "./tools-paradigm",
 ]

@@ -154,15 +154,18 @@ fi
                 "sh", "-c",
                 '''
 MOUNTED_CENTAUR_SKILLS="/home/agent/centaur-skills"
-CENTAUR_SKILLS="/home/agent/github/paradigmxyz/centaur/.agents/skills"
-WS_SKILLS="/home/agent/workspace/.agents/skills"
-if [ -d "$MOUNTED_CENTAUR_SKILLS" ] && [ ! -d "$WS_SKILLS" ]; then
-    mkdir -p "$WS_SKILLS"
-    cp -r "$MOUNTED_CENTAUR_SKILLS"/. "$WS_SKILLS"/
-elif [ -d "$CENTAUR_SKILLS" ] && [ ! -d "$WS_SKILLS" ]; then
-    mkdir -p "$WS_SKILLS"
-    cp -r "$CENTAUR_SKILLS"/. "$WS_SKILLS"/
+MOUNTED_ORG_SKILLS="/home/agent/centaur-overlay-skills"
+CENTAUR_SKILLS=""
+if [ -d /home/agent/github ]; then
+    CENTAUR_SKILLS="$(find /home/agent/github -path '*/centaur/.agents/skills' -type d -print -quit 2>/dev/null || true)"
 fi
+WS_SKILLS="/home/agent/workspace/.agents/skills"
+for SKILLS_SRC in "$MOUNTED_CENTAUR_SKILLS" "$CENTAUR_SKILLS" "$MOUNTED_ORG_SKILLS"; do
+    if [ -d "$SKILLS_SRC" ]; then
+        mkdir -p "$WS_SKILLS"
+        cp -r "$SKILLS_SRC"/. "$WS_SKILLS"/
+    fi
+done
 ''',
             ],
             user="agent",
@@ -178,6 +181,10 @@ if [ -f /home/agent/AGENTS_BASE.md ]; then
 elif [ -f /home/agent/AGENTS.md ]; then
     cp /home/agent/AGENTS.md /home/agent/workspace/AGENTS.md
 fi
+if [ -f /home/agent/AGENTS_OVERLAY.md ] && [ -f /home/agent/workspace/AGENTS.md ]; then
+    printf '\n\n---\n\n' >> /home/agent/workspace/AGENTS.md
+    cat /home/agent/AGENTS_OVERLAY.md >> /home/agent/workspace/AGENTS.md
+fi
 ''',
             ],
             user="agent",
@@ -192,12 +199,12 @@ fi
             prompt_path = persona_info.tool_dir / "PROMPT.md"
             if prompt_path.is_file():
                 prompt_content = prompt_path.read_text()
-                # Replace generic identity so the persona overlay wins
+                # Replace the base identity line so the persona overlay wins.
                 await backend.exec_run(
                     sandbox_id,
                     [
                         "sed", "-i",
-                        f's/^|You are Paradigm\'s AI assistant ("centaur")/|You are running the **{persona}** persona. See the persona overlay below for your identity and behavior./',
+                        f's/^|You are .*assistant.*$/|You are running the **{persona}** persona. See the persona overlay below for your identity and behavior./',
                         "/home/agent/workspace/AGENTS.md",
                     ],
                     user="agent",

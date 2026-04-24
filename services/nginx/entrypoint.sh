@@ -65,6 +65,7 @@ if is_enabled slackbot; then
 fi
 
 if is_enabled api; then
+  append_proxy_location "^~" "/api/" "${CENTAUR_NGINX_API_UPSTREAM:-http://api:8000}"
   # Proxy /agent/, /tools/, /workflows/ directly to the API (no prefix rewrite needed)
   append_proxy_location "^~" "/agent/" "${CENTAUR_NGINX_API_UPSTREAM:-http://api:8000}"
   append_proxy_location "^~" "/tools/" "${CENTAUR_NGINX_API_UPSTREAM:-http://api:8000}"

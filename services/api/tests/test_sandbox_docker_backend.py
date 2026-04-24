@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from api.sandbox.docker import DockerSandboxBackend
+from api.sandbox.docker import DockerSandboxBackend, _repo_host_dir, _resolve_host_bind_path
 
 
 class FakeContainer:
@@ -66,6 +68,12 @@ class FakeDockerClient:
         self.networks = FakeNetworks()
 
 
+def test_repo_host_dir_defaults_to_repo_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("REPO_HOST_DIR", raising=False)
+
+    assert _repo_host_dir() == str(Path(__file__).resolve().parents[3])
+
+
 @pytest.mark.asyncio
 async def test_create_connects_dind_and_sandbox_to_egress(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_client = FakeDockerClient()
@@ -121,3 +129,63 @@ async def test_create_mounts_centaur_skills_when_present(
     )
     binds = sandbox.config["HostConfig"]["Binds"]
     assert f"{skills_dir}:/home/agent/centaur-skills:ro" in binds
+
+
+def test_resolve_host_bind_path_prefers_overlay_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    repo_root = tmp_path / "centaur"
+    overlay_root = tmp_path / "centaur-overlay"
+
+    monkeypatch.setenv("REPO_HOST_DIR", str(repo_root))
+    monkeypatch.setenv("CENTAUR_OVERLAY_DIR", "/app/overlay/org")
+    monkeypatch.setenv("CENTAUR_OVERLAY_HOST_DIR", str(overlay_root))
+
+    resolved = _resolve_host_bind_path(Path("/app/overlay/org/tools/personas/legal"))
+
+    assert resolved == str(overlay_root / "tools" / "personas" / "legal")
+
+
+@pytest.mark.asyncio
+async def test_create_mounts_overlay_skills_and_prompt_when_present(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    fake_client = FakeDockerClient()
+    backend = DockerSandboxBackend()
+    backend._client = fake_client
+
+    repo_root = tmp_path / "centaur"
+    skills_dir = repo_root / ".agents" / "skills"
+    skills_dir.mkdir(parents=True)
+    (repo_root / "services" / "sandbox").mkdir(parents=True)
+    (repo_root / "services" / "sandbox" / "SYSTEM_PROMPT.md").write_text("prompt")
+
+    overlay_root = tmp_path / "centaur-overlay"
+    overlay_skills_dir = overlay_root / ".agents" / "skills"
+    overlay_skills_dir.mkdir(parents=True)
+    overlay_prompt = overlay_root / "services" / "sandbox" / "SYSTEM_PROMPT.md"
+    overlay_prompt.parent.mkdir(parents=True)
+    overlay_prompt.write_text("overlay prompt")
+
+    monkeypatch.setenv("REPO_HOST_DIR", str(repo_root))
+    monkeypatch.setenv("CENTAUR_OVERLAY_HOST_DIR", str(overlay_root))
+    monkeypatch.setenv("CENTAUR_OVERLAY_DIR", "/app/overlay/org")
+    monkeypatch.setattr("api.sandbox.docker.mint_sandbox_token", lambda *_args, **_kwargs: "sandbox-token")
+
+    async def fake_wait_ready(*_args, **_kwargs) -> float:
+        return 0.01
+
+    monkeypatch.setattr("api.sandbox.docker._wait_ready", fake_wait_ready)
+
+    await backend.create("C123:1.2", "amp", "amp")
+
+    sandbox = next(
+        container
+        for name, container in fake_client.containers.by_name.items()
+        if name.startswith("centaur-sandbox-")
+    )
+    binds = sandbox.config["HostConfig"]["Binds"]
+    assert f"{overlay_skills_dir}:/home/agent/centaur-overlay-skills:ro" in binds
+    assert f"{overlay_prompt}:/home/agent/AGENTS_OVERLAY.md:ro" in binds

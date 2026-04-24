@@ -4,13 +4,7 @@
 
 <h4 align="center">
     Self-hosted AI agent platform: give your team a shared agent that can use your tools, run durable workflows, and never see your secrets.
-    <br>Built by <a href="https://paradigm.xyz">Paradigm</a>.
 </h4>
-
-<p align="center">
-  <a href="https://github.com/paradigmxyz/centaur/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/paradigmxyz/centaur/ci.yml?style=flat&labelColor=1C2C2E&label=ci&color=BEC5C9&logo=GitHub%20Actions&logoColor=BEC5C9" alt="CI"></a>
-  <a href="https://github.com/paradigmxyz/centaur/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-Apache_2.0-d1d1f6.svg?style=flat&labelColor=1C2C2E&color=BEC5C9&logo=googledocs&label=license&logoColor=BEC5C9" alt="License"></a>
-</p>
 
 <p align="center">
   <a href="#whats-centaur">What's Centaur?</a> •
@@ -54,7 +48,13 @@ Centaur's entire security-critical core is **~5,400 lines of Python**: the [API]
                       events / webhooks
                              v
         ┌───────────────────────────────────────────────┐
-        │ slackbot (Next.js, :3001, host :8000)         │
+        │ nginx (:80, host :8000 by default)            │
+        │ public edge; routes enabled via env           │
+        └───────────────────────┬───────────────────────┘
+                                │ default: slackbot only
+                                v
+        ┌───────────────────────────────────────────────┐
+        │ slackbot (Next.js, :3001)                     │
         │ health endpoint + Slack webhook surface       │
         └───────────────────────┬───────────────────────┘
                                 │ spawn / message / execute
@@ -154,7 +154,7 @@ Centaur's security is defense in depth — no single layer is a silver bullet, b
 
 - **Per-host injection maps**: Built from tool manifests, pushed to the firewall on startup and on every hot-reload. Wildcard host patterns (`*.domain.com`) are supported. Catch-all domains and raw IPs are rejected.
 
-- **8 isolated Docker networks**: `default` (host-facing slackbot plus internal app traffic), `secrets_net` (firewall→secrets only), `secrets_egress` (secrets→1Password), `agent_net` (sandbox↔firewall↔API), `agent_egress` (sandbox direct egress for Amp DTW), `backend_net` (postgres/slackbot/api backplane), `control_net` (api↔pgbouncer↔firewall), and `obs_net` (monitoring).
+- **8 isolated Docker networks**: `default` (host-facing nginx plus internal app traffic), `secrets_net` (firewall→secrets only), `secrets_egress` (secrets→1Password), `agent_net` (sandbox↔firewall↔API), `agent_egress` (sandbox direct egress for Amp DTW), `backend_net` (postgres/slackbot/api backplane), `control_net` (api↔pgbouncer↔firewall), and `obs_net` (monitoring).
 
 - **Warm pool**: Pre-spawned containers eliminate ~15s cold-start latency. The pool auto-replenishes, recovers on API restart, and mints fresh scoped tokens on claim.
 
@@ -165,7 +165,7 @@ Centaur's security is defense in depth — no single layer is a silver bullet, b
 See the [Developer Guide](./AGENTS.md) for full setup instructions, architecture details, and API reference. The short version:
 
 ```sh
-git clone https://github.com/paradigmxyz/centaur
+git clone <repo-url>
 cd centaur
 cp .env.example .env          # configure secrets
 docker compose up -d           # start the stack
@@ -189,6 +189,4 @@ Centaur builds on excellent open-source infrastructure:
 
 ## Links
 
-- [Blog Post: Introducing Centaur](https://paradigm.xyz/2026/03/centaur)
-- [Paradigm](https://paradigm.xyz)
 - [Amp](https://ampcode.com)

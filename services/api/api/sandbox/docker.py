@@ -49,7 +49,41 @@ def _repos_host_dir() -> str:
 
 def _repo_host_dir() -> str:
     """Host-side path to the centaur repo root (for bind-mounting prompts/personas)."""
-    return os.getenv("REPO_HOST_DIR", os.path.join(_repos_host_dir(), "paradigmxyz", "centaur"))
+    value = (os.getenv("REPO_HOST_DIR") or "").strip()
+    if value:
+        return os.path.abspath(os.path.expanduser(value))
+    return str(Path(__file__).resolve().parents[4])
+
+
+def _overlay_container_dir() -> str | None:
+    value = (os.getenv("CENTAUR_OVERLAY_DIR") or "").strip()
+    return value or None
+
+
+def _overlay_host_dir() -> str | None:
+    value = (os.getenv("CENTAUR_OVERLAY_HOST_DIR") or "").strip()
+    if not value:
+        return None
+    return os.path.abspath(os.path.expanduser(value))
+
+
+def _resolve_host_bind_path(container_path: Path) -> str | None:
+    """Map a container-visible plugin path back to its host bind source."""
+    roots: list[tuple[Path, Path]] = []
+    overlay_container_dir = _overlay_container_dir()
+    overlay_host_dir = _overlay_host_dir()
+    if overlay_container_dir and overlay_host_dir:
+        roots.append((Path(overlay_container_dir), Path(overlay_host_dir)))
+    roots.append((Path("/app"), Path(_repo_host_dir())))
+    roots.sort(key=lambda item: len(item[0].parts), reverse=True)
+
+    for container_root, host_root in roots:
+        try:
+            rel = container_path.relative_to(container_root)
+        except ValueError:
+            continue
+        return str(host_root / rel)
+    return None
 
 
 def _egress_network() -> str | None:
@@ -198,6 +232,7 @@ class DockerSandboxBackend(SandboxBackend):
         client = self._get_client()
         repos_dir = os.path.abspath(_repos_host_dir())
         repo_host = _repo_host_dir()
+        overlay_host = _overlay_host_dir()
 
         container_name = f"centaur-sandbox-{thread_key.replace(':', '-').replace('.', '-')[:40]}"
         env = _container_env(
@@ -270,12 +305,20 @@ class DockerSandboxBackend(SandboxBackend):
         ]
         skills_host = os.path.join(repo_host, ".agents", "skills")
         binds.append(f"{skills_host}:/home/agent/centaur-skills:ro")
+        if overlay_host:
+            overlay_skills_host = os.path.join(overlay_host, ".agents", "skills")
+            if os.path.isdir(overlay_skills_host):
+                binds.append(f"{overlay_skills_host}:/home/agent/centaur-overlay-skills:ro")
         vol = os.getenv("FIREWALL_CERTS_VOLUME", "firewall-certs")
         binds.append(f"{vol}:/firewall-certs:ro")
 
         # Bind-mount base system prompt
         base_prompt_host = os.path.join(repo_host, "services", "sandbox", "SYSTEM_PROMPT.md")
         binds.append(f"{base_prompt_host}:/home/agent/AGENTS_BASE.md:ro")
+        if overlay_host:
+            overlay_prompt_host = os.path.join(overlay_host, "services", "sandbox", "SYSTEM_PROMPT.md")
+            if os.path.isfile(overlay_prompt_host):
+                binds.append(f"{overlay_prompt_host}:/home/agent/AGENTS_OVERLAY.md:ro")
 
         # Bind-mount persona directory if selected
         if persona:
@@ -283,9 +326,15 @@ class DockerSandboxBackend(SandboxBackend):
 
             persona_info = get_tool_manager().get_persona(persona)
             if persona_info and persona_info.tool_dir.is_dir():
-                rel = persona_info.tool_dir.relative_to(Path("/app"))
-                persona_host = os.path.join(repo_host, str(rel))
-                binds.append(f"{persona_host}:/home/agent/tools/personas/{persona}:ro")
+                persona_host = _resolve_host_bind_path(persona_info.tool_dir)
+                if persona_host and os.path.isdir(persona_host):
+                    binds.append(f"{persona_host}:/home/agent/tools/personas/{persona}:ro")
+                else:
+                    log.warning(
+                        "persona_bind_path_unresolved",
+                        persona=persona,
+                        tool_dir=str(persona_info.tool_dir),
+                    )
 
         cmd = _build_harness_cmd(engine, model)
 

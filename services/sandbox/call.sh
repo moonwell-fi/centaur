@@ -159,11 +159,11 @@ agent_execute() {
 
 case "$tool" in
   search)
-    printf '%s\n' '{"error":"deprecated_command","command":"call search","replacement":"Use direct tool calls such as `call websearch search '\''{\"query\":\"...\"}'\''` or `call slack search_messages '\''{\"query\":\"...\"}'\''`."}'
+    printf '%s\n' '{"error":"deprecated_command","command":"call search","replacement":"Use direct tool calls after `call tools` / `call discover <tool>` — for example `call websearch search '\''{\"query\":\"...\"}'\''` or another deployment-specific search method."}'
     exit 1
     ;;
   sql)
-    printf '%s\n' '{"error":"deprecated_command","command":"call sql","replacement":"Use a tool-specific query method such as `call paradigmdb db_query '\''{\"query\":\"SELECT ...\"}'\''` or `call paradigmdb bq_query ...`."}'
+    printf '%s\n' '{"error":"deprecated_command","command":"call sql","replacement":"Use a tool-specific query method exposed by your deployment after `call discover <tool>` (for example a database or analytics tool that supports SQL)."}'
     exit 1
     ;;
   tools)

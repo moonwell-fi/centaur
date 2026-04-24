@@ -11,8 +11,10 @@ import datetime as dt
 import json
 import os
 import re
+import subprocess
 import textwrap
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from api.runtime_control import ControlPlaneError, decode_jsonb
@@ -44,6 +46,33 @@ TRIAGE_PREFERRED_KEYS = ("selected_task_ids", "task_assessments")
 TRIAGE_REQUIRED_KEYS = ("selected_task_ids",)
 RECONCILE_PREFERRED_KEYS = ("reconciled_fixes",)
 RECONCILE_REQUIRED_KEYS = ("reconciled_fixes",)
+_GITHUB_REPO_RE = re.compile(r"github\.com[:/](?P<repo>[^/]+/[^/.]+?)(?:\.git)?$")
+
+
+def _normalize_github_repo(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    match = _GITHUB_REPO_RE.search(raw)
+    if match:
+        return match.group("repo")
+    return raw.strip("/")
+
+
+def _resolve_current_repo() -> str:
+    for key in ("SELF_IMPROVE_REPO", "GITHUB_REPOSITORY"):
+        repo = _normalize_github_repo(os.getenv(key))
+        if repo:
+            return repo
+    try:
+        origin = subprocess.check_output(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=Path(__file__).resolve().parents[1],
+            text=True,
+        ).strip()
+    except Exception:
+        return ""
+    return _normalize_github_repo(origin)
 
 
 def _env_positive_int(name: str, default: int) -> int:
@@ -2512,7 +2541,7 @@ async def _run_reconcile_fixes_pass(
     return [fix for fix in fixes if isinstance(fix, dict)][:max_fixes]
 
 
-CENTAUR_REPO = "paradigmxyz/centaur"
+CENTAUR_REPO = _resolve_current_repo()
 
 # Allow-list for auto-merge: these are the only paths a self-improve PR
 # may touch for the squash-merge gate to fire. Anything outside this set
@@ -2607,6 +2636,10 @@ async def _count_merged_self_improve_prs_24h(ctx: WorkflowContext) -> int:
     the scorecard simply omits the clause — never zero-pads an
     unreliable number.
     """
+
+    if not CENTAUR_REPO:
+        ctx.log("self_improve_repo_unset_for_merge_count")
+        return -1
 
     async def _count() -> int:
         since_iso = (
@@ -2712,6 +2745,9 @@ async def _github_list_pr_files(pr_number: int | str) -> list[str]:
     """
     import httpx
 
+    if not CENTAUR_REPO:
+        raise RuntimeError("GitHub repo is not configured")
+
     files: list[str] = []
     page = 1
     async with httpx.AsyncClient(
@@ -2753,6 +2789,9 @@ async def _github_get_pr_metadata(pr_number: int | str) -> dict[str, Any]:
     safer enablement.
     """
     import httpx
+
+    if not CENTAUR_REPO:
+        raise RuntimeError("GitHub repo is not configured")
 
     async with httpx.AsyncClient(
         follow_redirects=True, timeout=_GITHUB_API_TIMEOUT_S
@@ -3258,6 +3297,11 @@ async def _run_fix_child(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
 
     fix_packet["source_threads"] = _normalize_source_threads(fix_packet.get("source_threads"))
     fix_type = fix_packet.get("fix_type", "unknown")
+    git_branch_instruction = (
+        f"Use `git-branch {CENTAUR_REPO}` at the start because the mounted repo is read-only."
+        if CENTAUR_REPO
+        else "Before editing, resolve the current repository slug with `git remote get-url origin`, then run `git-branch <owner/repo>` because the mounted repo is read-only."
+    )
 
     # Run research → plan → implement → validate → open_pr as one agent turn.
     # This is a single conversation on one sandbox, so git branches, edits, and
@@ -3276,8 +3320,7 @@ async def _run_fix_child(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         4. validate — run the smallest relevant checks
         5. open PR — commit, push, and open the PR
 
-        Use `git-branch paradigmxyz/centaur` at the start because the mounted
-        repo is read-only. Keep the change tightly scoped to one focused PR.
+        {git_branch_instruction} Keep the change tightly scoped to one focused PR.
 
         If the fix type is `new_skill` or `new_persona`, include an explicit
         justification for why this is a missing-capability problem rather than

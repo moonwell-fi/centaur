@@ -44,19 +44,12 @@ class GranolaClient:
         created_before: str | None = None,
         created_after: str | None = None,
         updated_after: str | None = None,
-        *,
-        limit: int | None = None,  # LLM-facing alias for page_size
     ) -> dict[str, Any]:
         """List meeting notes across the workspace.
 
         Returns {notes: [...], hasMore: bool, cursor: str|None}.
         Use cursor for pagination. Dates in ISO 8601 format.
-
-        Accepts `limit` as an alias for `page_size` — LLM callers commonly
-        use `limit`. The Granola API caps page_size at 30.
         """
-        if limit is not None:
-            page_size = limit
         params: dict[str, Any] = {"page_size": min(page_size, 30)}
         if cursor:
             params["cursor"] = cursor

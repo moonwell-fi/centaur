@@ -47,14 +47,14 @@ services:
   # ⚠️  NEVER manually recreate this container — it requires OP_SERVICE_ACCOUNT_TOKEN
   # which is only injected by CI (GitHub Actions).  Manual `docker compose up -d secrets`
   # will start it without the token, breaking all secret resolution.
-  # To redeploy: gh workflow run deploy.yml --repo paradigmxyz/centaur
+  # To redeploy: gh workflow run deploy.yml --repo <owner/repo>
   secrets:
     build:
       context: .
       dockerfile: services/secrets/Dockerfile
     environment:
       OP_SERVICE_ACCOUNT_TOKEN: ${OP_SERVICE_ACCOUNT_TOKEN:-}
-      OP_VAULT: Paradigm AI Secrets & API Keys
+      OP_VAULT: ${OP_VAULT:-}
     networks:
       - secrets_net
       - secrets_egress
@@ -133,8 +133,10 @@ services:
       SLACKBOT_URL: http://slackbot:3001
       CENTAUR_LOG_LEVEL: info
       LOCAL_DEV_API_KEY: ${LOCAL_DEV_API_KEY:-}
-      TOOL_DIRS: /app/tools:/app/tools-paradigm
-      WORKFLOW_DIRS: /app/workflows
+      CENTAUR_OVERLAY_HOST_DIR: ${CENTAUR_OVERLAY_HOST_DIR:-${HOME}/centaur-overlay}
+      CENTAUR_OVERLAY_DIR: /app/overlay/org
+      TOOL_DIRS: /app/tools:/app/overlay/org/tools
+      WORKFLOW_DIRS: /app/workflows:/app/overlay/org/workflows
       REPOS_HOST_DIR: ${HOME}/github
       REPO_HOST_DIR: ${PWD}
       FIREWALL_HOST: firewall
@@ -157,8 +159,8 @@ services:
       - control_net
     volumes:
       - ./tools:/app/tools
-      - ./tools-paradigm:/app/tools-paradigm
       - ./workflows:/app/workflows
+      - ${CENTAUR_OVERLAY_HOST_DIR:-${HOME}/centaur-overlay}:/app/overlay/org
       - firewall-certs:/firewall-certs:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health/ready"]
@@ -255,7 +257,7 @@ services:
   grafana:
     image: grafana/grafana:latest@sha256:70d9599b186ce287be0d2c5ba9a78acb2e86c1a68c9c41449454d0fc3eeb84e8
     environment:
-      GF_SERVER_ROOT_URL: https://svc-ai.paradigm.xyz/grafana
+      GF_SERVER_ROOT_URL: ${GF_SERVER_ROOT_URL:-}
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_AUTH_DISABLE_LOGIN_FORM: "true"

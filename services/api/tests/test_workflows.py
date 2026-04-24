@@ -575,43 +575,54 @@ async def test_sync_registered_workflow_schedules_disables_removed_rows(
     from api.workflow_engine import sync_registered_workflow_schedules
 
     for key in list(os.environ):
-        if key.startswith("PARADIGM_PULSE_"):
+        if key.startswith("PRIVATE_OVERLAY_DIGEST_"):
             monkeypatch.delenv(key, raising=False)
 
     await db_pool.execute(
         "INSERT INTO workflow_schedules ("
         "schedule_id, workflow_name, schedule_kind, schedule_expr, "
         "timezone, catchup_policy, input_json, enabled, next_run_at"
-        ") VALUES ($1, 'paradigm_pulse_daily', 'cron', '45 7 * * *', "
+        ") VALUES ($1, 'removed_private_digest', 'cron', '45 7 * * *', "
         "'America/Los_Angeles', 'skip', '{}'::jsonb, TRUE, NOW())",
-        "paradigm_pulse_daily",
+        "removed_private_digest",
     )
 
     await sync_registered_workflow_schedules(db_pool)
 
     enabled = await db_pool.fetchval(
         "SELECT enabled FROM workflow_schedules WHERE schedule_id = $1",
-        "paradigm_pulse_daily",
+        "removed_private_digest",
     )
     assert enabled is False
 
 
 @pytest.mark.asyncio
-async def test_handler_discovery(db_pool):
+async def test_handler_discovery(db_pool, monkeypatch, tmp_path):
     from api.workflow_engine import (
         discover_workflow_handlers,
         get_workflow_handler,
     )
 
+    overlay_workflow = tmp_path / "sample_overlay_digest.py"
+    overlay_workflow.write_text(
+        "WORKFLOW_NAME = 'sample_overlay_digest'\n"
+        "PROMPT = 'Generate the sample overlay digest.'\n"
+    )
+    monkeypatch.setenv("WORKFLOW_DIRS", str(tmp_path))
+
     discovered = discover_workflow_handlers()
     assert "agent_turn" in discovered
     assert "slack_thread_turn" in discovered
-    assert "paradigm_pulse_daily" in discovered
+    assert "sample_overlay_digest" in discovered
 
     registered = get_workflow_handler("slack_thread_turn")
     assert registered is not None
     assert callable(registered.handler)
     assert registered.input_cls is not None
+
+    overlay_registered = get_workflow_handler("sample_overlay_digest")
+    assert overlay_registered is not None
+    assert callable(overlay_registered.handler)
 
     unknown = get_workflow_handler("nonexistent_workflow")
     assert unknown is None

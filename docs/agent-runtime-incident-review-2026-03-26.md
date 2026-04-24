@@ -97,9 +97,9 @@ From `chat_messages` user text and tool-call telemetry:
 Top tool-call pairs:
 
 1. `twitter.get_timeline`: 571 calls.
-2. `paradigmdb.db_query`: 402 calls.
+2. `private_db.db_query`: 402 calls.
 3. `slack.search_messages`: 206 calls.
-4. `paradigmdb.bq_query`: 204 calls.
+4. `private_db.bq_query`: 204 calls.
 5. `websearch.search`: 187 calls.
 
 ## Most Common Feature Request Signals

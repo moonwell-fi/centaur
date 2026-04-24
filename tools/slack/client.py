@@ -457,17 +457,8 @@ class SlackClient:
         return scored_results[:max_results]
 
 
-    def get_channel_history(
-        self,
-        channel: str | None = None,
-        limit: int = 50,
-        *,
-        channel_id: str | None = None,  # LLM-facing alias
-    ) -> list[dict]:
+    def get_channel_history(self, channel: str, limit: int = 50) -> list[dict]:
         """Get recent messages from a channel.
-
-        Accepts `channel_id` as an alias for `channel` — LLM callers sometimes
-        use the longer name from get_thread_replies.
 
         Args:
             channel: Channel name (without #) or channel ID
@@ -476,14 +467,11 @@ class SlackClient:
         Returns:
             List of message dicts
         """
-        resolved_channel = channel or channel_id
-        if not resolved_channel:
-            raise TypeError("get_channel_history() requires channel (or 'channel_id') argument")
         user_cache = self._get_user_cache()
-        resolved_channel_id = self._resolve_channel(resolved_channel)
+        channel_id = self._resolve_channel(channel)
 
         try:
-            response = self._client.conversations_history(channel=resolved_channel_id, limit=limit)
+            response = self._client.conversations_history(channel=channel_id, limit=limit)
         except SlackApiError as e:
             raise RuntimeError(f"Slack API error: {e.response['error']}")
 
@@ -498,8 +486,8 @@ class SlackClient:
                     "user": user_cache.get(user_id, user_id),
                     "text": text,
                     "timestamp": ts,
-                    "permalink": f"https://slack.com/archives/{resolved_channel_id}/p{ts.replace('.', '')}",
-                    "channel_id": resolved_channel_id,
+                    "permalink": f"https://slack.com/archives/{channel_id}/p{ts.replace('.', '')}",
+                    "channel_id": channel_id,
                     "thread_ts": msg.get("thread_ts"),
                     "reply_count": msg.get("reply_count", 0),
                 }
@@ -508,22 +496,8 @@ class SlackClient:
         return messages
 
 
-    def get_thread_replies(
-        self,
-        channel_id: str | None = None,
-        thread_ts: str = "",
-        limit: int = 100,
-        *,
-        channel: str | None = None,  # LLM-facing alias for channel_id
-    ) -> list[dict]:
-        """Get all replies in a thread.
-
-        Accepts `channel` as an alias for `channel_id` — LLM callers commonly
-        use `channel` because that's what Slack's own API uses.
-        """
-        channel_id = channel_id or channel
-        if not channel_id:
-            raise TypeError("get_thread_replies() requires channel_id (or 'channel') argument")
+    def get_thread_replies(self, channel_id: str, thread_ts: str, limit: int = 100) -> list[dict]:
+        """Get all replies in a thread."""
         user_cache = self._get_user_cache()
 
         try:

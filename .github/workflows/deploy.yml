@@ -20,7 +20,7 @@ jobs:
       SLACK_DEPLOY_CHANNEL: ${{ secrets.SLACK_DEPLOY_CHANNEL }}
     defaults:
       run:
-        working-directory: /home/ubuntu/github/paradigmxyz/centaur
+        working-directory: ${{ format('/home/ubuntu/github/{0}', github.repository) }}
 
     steps:
       - name: Sync repo

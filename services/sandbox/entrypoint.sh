@@ -49,19 +49,22 @@ mkdir -p "$HOME_DIR/uploads"
 
 # ── Copy project skills into workspace (so `skill` tool discovers them) ──────
 MOUNTED_CENTAUR_SKILLS="$HOME_DIR/centaur-skills"
-CENTAUR_SKILLS="$HOME_DIR/github/paradigmxyz/centaur/.agents/skills"
-WS_SKILLS="$WORKSPACE_DIR/.agents/skills"
-if [ -d "$MOUNTED_CENTAUR_SKILLS" ] && [ ! -d "$WS_SKILLS" ]; then
-    mkdir -p "$WS_SKILLS"
-    cp -r "$MOUNTED_CENTAUR_SKILLS"/. "$WS_SKILLS"/
-elif [ -d "$CENTAUR_SKILLS" ] && [ ! -d "$WS_SKILLS" ]; then
-    mkdir -p "$WS_SKILLS"
-    cp -r "$CENTAUR_SKILLS"/. "$WS_SKILLS"/
+MOUNTED_ORG_SKILLS="$HOME_DIR/centaur-overlay-skills"
+CENTAUR_SKILLS=""
+if [ -d "$HOME_DIR/github" ]; then
+    CENTAUR_SKILLS="$(find "$HOME_DIR/github" -path '*/centaur/.agents/skills' -type d -print -quit 2>/dev/null || true)"
 fi
+WS_SKILLS="$WORKSPACE_DIR/.agents/skills"
+for SKILLS_SRC in "$MOUNTED_CENTAUR_SKILLS" "$CENTAUR_SKILLS" "$MOUNTED_ORG_SKILLS"; do
+    if [ -d "$SKILLS_SRC" ]; then
+        mkdir -p "$WS_SKILLS"
+        cp -r "$SKILLS_SRC"/. "$WS_SKILLS"/
+    fi
+done
 
 # ── Assemble system prompt from bind mounts ──────────────────────────────────
 # Base prompt: bind-mounted by docker.py as AGENTS_BASE.md, fallback to baked-in AGENTS.md
-# Persona overlay: bind-mounted persona dir at ~/tools/personas/<name>/PROMPT.md
+# Org/persona overlays are bind-mounted alongside the base prompt when present.
 TARGET_PROMPT="$HOME_DIR/workspace/AGENTS.md"
 if [ -f "$HOME_DIR/AGENTS_BASE.md" ]; then
     cp "$HOME_DIR/AGENTS_BASE.md" "$TARGET_PROMPT"
@@ -69,12 +72,17 @@ elif [ -f "$HOME_DIR/AGENTS.md" ]; then
     cp "$HOME_DIR/AGENTS.md" "$TARGET_PROMPT"
 fi
 
+if [ -f "$HOME_DIR/AGENTS_OVERLAY.md" ] && [ -f "$TARGET_PROMPT" ]; then
+    printf '\n\n---\n\n' >> "$TARGET_PROMPT"
+    cat "$HOME_DIR/AGENTS_OVERLAY.md" >> "$TARGET_PROMPT"
+fi
+
 PERSONA="${AGENT_PERSONA:-}"
 if [ -n "$PERSONA" ] && [ -f "$TARGET_PROMPT" ]; then
     OVERLAY="$HOME_DIR/tools/personas/$PERSONA/PROMPT.md"
     if [ -f "$OVERLAY" ]; then
-        # Replace generic identity with persona-aware identity so the overlay wins
-        sed -i 's/^|You are Paradigm'\''s AI assistant ("centaur")/|You are running the **'"$PERSONA"'** persona. See the persona overlay below for your identity and behavior./' "$TARGET_PROMPT"
+        # Replace the base identity line so the persona overlay wins.
+        sed -i 's/^|You are .*assistant.*$/|You are running the **'"$PERSONA"'** persona. See the persona overlay below for your identity and behavior./' "$TARGET_PROMPT"
         printf '\n\n---\n\n' >> "$TARGET_PROMPT"
         cat "$OVERLAY" >> "$TARGET_PROMPT"
     fi

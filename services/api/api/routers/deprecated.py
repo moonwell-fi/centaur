@@ -42,7 +42,7 @@ async def deprecated_search():
 async def deprecated_search_sql():
     return _gone(
         "/api/search/sql",
-        "Use a tool-specific query method such as paradigmdb.db_query or paradigmdb.bq_query.",
+        "Use a tool-specific query method exposed by your deployment after checking /tools or /tools/<tool>.",
     )
 
 

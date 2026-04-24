@@ -2,9 +2,9 @@
 
 Default test inputs to use when QA'ing tools. Use these as starting points — adjust based on what the tool's method schema requires.
 
-## Database / Portfolio Tools
+## Database / Structured-Data Tools
 
-Tools: `paradigmdb`
+Tools: database or warehouse-backed tools
 
 | Method pattern | Test input |
 |---------------|------------|
@@ -13,7 +13,7 @@ Tools: `paradigmdb`
 | `*_query` | `{"query": "SELECT 1", "limit": 1}` |
 | `*_by_symbol` | `{"symbol": "ETH"}` or `{"symbol": "BTC"}` |
 | `*_search` | `{"query": "bitcoin", "limit": 3}` |
-| `*_organizations` | `{"search": "paradigm", "limit": 3}` |
+| `*_organizations` | `{"search": "bitcoin", "limit": 3}` |
 | `*_people` | `{"search": "fred", "limit": 3}` |
 | `*_positions` | `{"limit": 3}` |
 | `*_balances` | `{"limit": 3}` |
@@ -73,8 +73,8 @@ Tools: `similarweb`, `sensortower`, `harmonic`, `standard-metrics`, `posthog`
 
 | Method pattern | Test input |
 |---------------|------------|
-| Company lookup | `{"domain": "paradigm.xyz"}` |
-| Search | `{"query": "paradigm", "limit": 3}` |
+| Company lookup | `{"domain": "example.com"}` |
+| Search | `{"query": "bitcoin", "limit": 3}` |
 
 ## Government / Regulatory Tools
 
@@ -102,13 +102,13 @@ Tools: `gsuite`
 | Method pattern | Test input |
 |---------------|------------|
 | Calendar | `{"limit": 3}` |
-| Contacts | `{"query": "paradigm", "limit": 3}` |
+| Contacts | `{"query": "alex", "limit": 3}` |
 | Gmail | `{"query": "from:me", "limit": 3}` |
 
 ## General Rules
 
 1. **Always use `limit: 2` or `3`** to keep responses small
 2. **Use well-known addresses** for blockchain lookups (vitalik.eth, WETH contract)
-3. **Use broad search terms** that are likely to return results ("bitcoin", "ethereum", "paradigm")
+3. **Use broad search terms** that are likely to return results ("bitcoin", "ethereum", "open source")
 4. **Never use real credentials** as test inputs
 5. **Prefer read-only methods** — skip anything that creates, updates, or deletes

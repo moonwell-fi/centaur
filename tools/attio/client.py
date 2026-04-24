@@ -52,24 +52,13 @@ class AttioClient:
 
     def query_records(
         self,
-        object_slug: str | None = None,
+        object_slug: str,
         filter_obj: dict | None = None,
         sorts: list[dict] | None = None,
         limit: int = 25,
         offset: int = 0,
-        *,
-        object: str | None = None,  # noqa: A002 — LLM-facing alias for object_slug
-        filter: dict | None = None,  # noqa: A002 — alias for filter_obj
     ) -> list[dict]:
-        """Query records for an object with optional filtering.
-
-        Accepts `object` as an alias for `object_slug` and `filter` as an alias
-        for `filter_obj` — LLM callers commonly use these shorter names.
-        """
-        object_slug = object_slug or object
-        if not object_slug:
-            raise TypeError("query_records() requires object_slug (or 'object') argument")
-        filter_obj = filter_obj or filter
+        """Query records for an object with optional filtering."""
         body: dict[str, Any] = {"limit": limit, "offset": offset}
         if filter_obj:
             body["filter"] = filter_obj

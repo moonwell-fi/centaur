@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import os
 import json
 import textwrap
 from dataclasses import dataclass, field
@@ -22,7 +23,7 @@ class Input:
     before_sha: str = ""
     after_sha: str = ""
     baseline_sha: str = ""
-    repo: str = "paradigmxyz/centaur"
+    repo: str = field(default_factory=lambda: os.getenv("SELF_IMPROVE_REPO") or os.getenv("GITHUB_REPOSITORY") or "")
     status: str = "success"
     deployed_at: str = ""
     merged_prs: list[dict[str, Any]] = field(default_factory=list)

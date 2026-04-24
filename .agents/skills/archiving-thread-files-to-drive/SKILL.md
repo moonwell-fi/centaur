@@ -32,7 +32,7 @@ Provide one of these destination modes:
 - New subfolder under a parent: `--parent-folder-id <parent_id> --folder-name "<new folder name>"`
 
 Thread input:
-- Preferred: `--thread-url https://paradigm-ops.slack.com/archives/C.../p...`
+- Preferred: `--thread-url https://your-workspace.slack.com/archives/C.../p...`
 - Optional direct inputs: `--channel-id C... --thread-ts 1774886843.605449`
 
 ## Primary Command
@@ -41,9 +41,9 @@ Run:
 
 ```bash
 python3 .agents/skills/archiving-thread-files-to-drive/scripts/archive_thread_files_to_drive.py \
-  --thread-url "https://paradigm-ops.slack.com/archives/C043LNPTMS8/p1774886843605449" \
+  --thread-url "https://your-workspace.slack.com/archives/C043LNPTMS8/p1774886843605449" \
   --parent-folder-id "1KNgF74dK6RT8z409haJYyeMttGrs0jQz" \
-  --folder-name "True Anomaly - Series D Financing"
+  --folder-name "Closing Documents"
 ```
 
 Use `--dry-run` first if you want to inspect the file manifest before uploading.

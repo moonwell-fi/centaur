@@ -194,8 +194,8 @@ NAME_API_KEY=your-api-key-here
 ### 6. Add to 1Password (if needed)
 
 If this is a credentialed tool, add the secret to 1Password:
-- Vault: `Paradigm AI Secrets & API Keys` (ID: `7ycqwxmheirj5zoyqmd27fmbca`)
-- Account: `paradigmoperationslp`
+- Vault: use the vault configured for your deployment
+- Account: use the 1Password account configured for your deployment
 - Item title: use the exact `ENV_VAR` name (e.g., `COINGECKO_API_KEY`)
 
 ### 7. Update `tools/README.md`

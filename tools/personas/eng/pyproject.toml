@@ -6,5 +6,4 @@ version = "0.1.0"
 [tool.ai-v2]
 type = "persona"
 engine = "amp"
-default_repo = "paradigmxyz/centaur"
 prompt = "PROMPT.md"

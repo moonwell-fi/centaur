@@ -24,7 +24,7 @@ Keep the work narrow. One selected backlog item should become one focused PR.
 ## Working Rules
 
 - Start from the structured fix packet, not from a blank slate.
-- Use `git-branch paradigmxyz/centaur` before editing because the mounted repo is read-only.
+- Before editing, resolve the current repo slug and run `git-branch <owner/repo>` because the mounted repo is read-only.
 - Match the change size to the root cause. Small fixes are great when the root cause is small; do not force a structural problem into a one-line prompt tweak just to keep the diff tiny.
 - Prefer the fix that materially improves user outcomes. A focused 200-line workflow fix is better than a three-line prompt tweak that will not actually prevent the failure.
 - Do not broaden scope into adjacent cleanup.

@@ -767,7 +767,7 @@ class WorkflowContext:
     ) -> dict[str, Any]:
         """Post a message to a Slack channel via the slack tool.
 
-        Accepts channel name (e.g. ``"paradigm-pulse"``) or ID.
+        Accepts channel name (e.g. ``"team-updates"``) or ID.
         Uses a checkpointed step so the message is sent exactly once,
         even if the workflow replays.
         """
@@ -1353,7 +1353,7 @@ def _registered_schedule_specs() -> list[ScheduleSpec]:
     - ``timezone`` — default ``"UTC"``
     - ``enabled`` — default ``True``
     - ``thread_key`` — Slack thread to post to; auto-derives delivery
-    - ``slack_channel`` — channel name (e.g. ``"paradigm-pulse"``);
+    - ``slack_channel`` — channel name (e.g. ``"team-updates"``);
       used as delivery channel when no thread_key
     - ``input`` — extra fields merged into the handler Input
     - ``catchup_policy`` — ``"skip"`` (default) or ``"catch_up"``

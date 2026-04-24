@@ -1,15 +1,15 @@
 # Centaur SDK
 
-Lightweight toolkit for building [Centaur](https://github.com/paradigmxyz/centaur)-compatible tools.
+Lightweight toolkit for building Centaur-compatible tools.
 
 ## Install
 
 ```bash
 # From git
-pip install "centaur-sdk @ git+https://github.com/paradigmxyz/centaur.git#subdirectory=centaur_sdk"
+pip install "centaur-sdk @ git+https://github.com/<owner>/<repo>.git#subdirectory=centaur_sdk"
 
 # With HTTP backend support
-pip install "centaur-sdk[http] @ git+https://github.com/paradigmxyz/centaur.git#subdirectory=centaur_sdk"
+pip install "centaur-sdk[http] @ git+https://github.com/<owner>/<repo>.git#subdirectory=centaur_sdk"
 ```
 
 ## Usage

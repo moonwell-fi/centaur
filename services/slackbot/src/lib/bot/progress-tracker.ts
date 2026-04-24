@@ -377,7 +377,7 @@ const TOOL_FRIENDLY_NAMES: Record<string, string> = {
   crunchbase: "Crunchbase",
 };
 
-/** Turn tool args into a readable one-liner: "paradigm office email SF NYC" */
+/** Turn tool args into a readable one-liner: "office email SF NYC" */
 function humanizeToolArgs(tool: string, _method: string, args: Record<string, unknown>): string | undefined {
   // Pull out the most meaningful string value from the args
   const meaningful = args.query ?? args.search ?? args.prompt ?? args.message ?? args.q;

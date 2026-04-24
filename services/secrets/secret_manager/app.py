@@ -124,7 +124,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 "OP_SERVICE_ACCOUNT_TOKEN is not set. "
                 "The secrets container MUST be started via CI (GitHub Actions) "
                 "which injects this token. NEVER manually recreate this container. "
-                "Run: gh workflow run deploy.yml --repo paradigmxyz/centaur"
+                "Run: gh workflow run deploy.yml --repo <owner/repo>"
             )
             raise SystemExit(1)
 

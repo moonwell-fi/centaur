@@ -5,7 +5,7 @@
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/paradigmxyz/centaur
+git clone <repo-url>
 cd centaur
 cp .env.example .env
 ```
@@ -254,7 +254,6 @@ centaur/
 │   └── …                 # 60+ tool plugins (crypto, research, productivity, infra, …)
 ├── workflows/            # External workflow definitions (auto-discovered)
 │   ├── agent_loop.py     # Recurring agent polling/monitoring loop
-│   ├── paradigm_pulse_daily.py  # Scheduled daily digest
 │   └── multi_step_demo.py       # Demo: branching, loops, conditionals
 ├── scripts/              # Operational scripts
 └── docker-compose.yml    # Full stack
@@ -364,22 +363,19 @@ Workflows live in directories listed in the `WORKFLOW_DIRS` env var (colon-separ
 
 Built-in workflows ship in `services/api/api/workflows/`. External workflows (like those in the top-level `workflows/` directory) are loaded identically — just point `WORKFLOW_DIRS` at them.
 
-### Private overlay
+### Ordered Overlays
 
-Organizations can extend Centaur with private tools and workflows without forking. Use the submodule + docker-compose override pattern:
+Centaur supports a first-class ordered overlay model, so organizations can extend the base repo without forking or relying on filesystem overlayfs. A common deployment keeps the base repo and an external overlay checkout side by side:
 
 ```
-your-org-internal/
-├── centaur/                         # git submodule → paradigmxyz/centaur
-├── tools-private/                   # Your proprietary tools
-├── workflows-private/               # Your proprietary workflows
-├── docker-compose.override.yml      # Adds your services + plugin mounts
-└── tools.toml                       # plugin_dirs = ["./centaur/tools", "./tools-private"]
+your-deployment/
+├── centaur/              # This repo
+└── centaur-overlay/      # Org-specific tools, workflows, skills, personas, prompt overlay
 ```
 
-```bash
-docker compose -f centaur/docker-compose.yml -f docker-compose.override.yml up -d
-```
+By default, the stock `docker-compose.yml` looks for an optional overlay at `~/centaur-overlay`, mounts it at `/app/overlay/org`, and includes its `tools/`, `workflows/`, `.agents/skills/`, persona prompts, and `services/sandbox/SYSTEM_PROMPT.md` after the base repo content.
+
+Later overlay entries win cleanly when names collide, so the base repo stays generic while deployments can layer in org-specific behavior from outside the checkout.
 
 ## Durable Workflows
 
@@ -452,7 +448,6 @@ Runs go through: `queued → running → sleeping/waiting → running → … �
 | `agent_turn` | Single durable agent turn: spawn → message → execute → wait for terminal result. |
 | `slack_thread_turn` | Same as `agent_turn` but requires a Slack `thread_key`. Used by the slackbot. |
 | `agent_loop` | Recurring agent loop: runs an agent turn every N seconds until the agent signals `{"done": true}`, max iterations, or deadline. |
-| `paradigm_pulse_daily` | Scheduled daily digest via a single agent turn. |
 
 ### Durable state
 
@@ -485,11 +480,11 @@ The `call` helper (`services/sandbox/call.sh`) handles routing:
 - `call <tool> <method> [json]` → `POST /tools/<tool>/<method>`
 - `call discover <tool>` → `GET /tools/<tool>`
 
-Legacy `call search` / `call sql` shorthands were removed. Sandbox agents should call the concrete tool directly, for example `call websearch search '{"query":"..."}'` or `call paradigmdb db_query '{"query":"SELECT ..."}'`.
+Legacy `call search` / `call sql` shorthands were removed. Sandbox agents should call the concrete tool directly, for example `call websearch search '{"query":"..."}'` or another deployment-specific query method discovered via `call discover <tool>`.
 
 ### Persona System
 
-The entrypoint supports persona variants via `AGENT_PERSONA` env var. If set to e.g. `legal`, it looks for `~/AGENTS_LEGAL.md` and uses that instead of the base prompt. This allows different system prompts for different use cases without rebuilding the image.
+The entrypoint supports persona overlays via `AGENT_PERSONA`. Persona prompts are discovered from the loaded tool directories (including overlays such as `~/centaur-overlay`) and appended after the base + org overlay system prompts at container startup.
 
 ### Container Config
 
@@ -525,7 +520,7 @@ Sandbox containers never see real API keys. The firewall (`services/firewall/add
 - **API auth**: All callers authenticate with DB-backed API keys (`aiv2_*` prefix, stored in `api_keys` table). Docker bridge IPs (localhost) bypass auth for container→API calls.
 - **Sandbox auth**: Sandbox containers get auto-issued HMAC-signed tokens (`sbx1.*` prefix) minted by the API. These are short-lived (2h TTL) and scoped to `agent` + `tools:*`.
 - **Slack**: HMAC-SHA256 signature verification on all webhooks
-- **Public edge**: The default deployment exposes only `slackbot` on `127.0.0.1:8000`
+- **Public edge**: The default deployment exposes only `slackbot` on `127.0.0.1:8000` via the `nginx` edge service. Additional public routes are opt-in via `CENTAUR_NGINX_ENABLED_SERVICES`.
 - **Sandbox isolation**: Containers get stub keys only; real keys injected by firewall proxy in-flight
 - **Filesystem**: Host repos mounted read-only by default; only working repo is read-write
 - **Docker socket**: Proxied via `tecnativa/docker-socket-proxy` — only container/network/exec ops allowed
@@ -642,7 +637,7 @@ The deploy box (self-hosted GitHub Actions runner) is accessible via SSH:
 ssh ubuntu@206.223.235.69
 ```
 
-The canonical checkout lives at `/home/ubuntu/github/paradigmxyz/centaur` on the box.
+The canonical checkout lives at `/home/ubuntu/github/<owner>/<repo>` on the box.
 
 All deploys happen automatically via GitHub Actions on merge to `main`.
 

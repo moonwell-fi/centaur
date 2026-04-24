@@ -760,7 +760,7 @@ async def record_fetch(
 
 async def fetch_feed(source: SourceConfig, *, limit: int) -> list[dict[str, Any]]:
     headers = {
-        "User-Agent": "CentaurPolicyNewsMonitor/1.0 (+https://github.com/paradigmxyz/centaur)",
+        "User-Agent": "CentaurPolicyNewsMonitor/1.0",
         "Accept": "application/rss+xml, application/xml, text/xml;q=0.9, */*;q=0.8",
     }
     async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
