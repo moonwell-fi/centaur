@@ -68,19 +68,6 @@ If the company is primarily non-English (e.g., a Korean protocol, a Brazilian ex
 - Translate findings into English for the brief.
 - Do NOT fabricate or guess at details that aren't clearly stated in the source material. If a translation is uncertain, note it.
 
-## Cache Check (BEFORE any research)
-
-Before running any research, check the cache for a recent result:
-```
-call research_cache get '{"company": "<company or domain>", "cache_type": "tldr", "max_age_hours": 24}'
-```
-
-If the cache returns `"found": true`:
-- Return the cached content directly as the response. Prepend a note: "(cached <N>h ago — reply 'refresh' to re-run)"
-- Do NOT run any research steps.
-
-If the cache returns `"found": false`, proceed with the full research below.
-
 ## Research Steps
 
 Execute ALL steps. Steps are organized into parallel batches — run all calls within a batch concurrently, then move to the next batch. Do not skip steps even if early results seem sufficient.
@@ -411,15 +398,6 @@ STRATEGIC QUESTIONS
 SOURCES
 <up to 3 most-used domains or publications, one per line, no duplicates>
 ```
-
-## Cache Store (AFTER generating output)
-
-After generating and sending the brief, store it in the cache for future use:
-```
-call research_cache put '{"company": "<company or domain>", "content": "<the full code block output>", "cache_type": "tldr", "metadata": {"sector": "<sector>", "is_portfolio": <true/false>}}'
-```
-
-If the user says "refresh" or "re-run" in response to a cached result, skip the cache check and run the full research. Store the new result in the cache afterward.
 
 ## Output Rules
 
