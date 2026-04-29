@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { registerPolicyTouchpointTrigger } from "../src/lib/bot/setup";
+import { getSlackBootstrapState, registerPolicyTouchpointTrigger } from "../src/lib/bot/setup";
 
 function createThread(id: string) {
   return {
@@ -56,5 +56,28 @@ describe("registerPolicyTouchpointTrigger", () => {
     await handler?.(createThread("COTHER:1700000000.000100"), { text: "#touchpoint met with Sen. Example today" });
 
     expect(bot.onNewMention).not.toHaveBeenCalled();
+  });
+});
+
+describe("getSlackBootstrapState", () => {
+  const originalToken = process.env.SLACK_BOT_TOKEN;
+  const originalSigningSecret = process.env.SLACK_SIGNING_SECRET;
+
+  afterEach(() => {
+    if (originalToken === undefined) delete process.env.SLACK_BOT_TOKEN;
+    else process.env.SLACK_BOT_TOKEN = originalToken;
+    if (originalSigningSecret === undefined) delete process.env.SLACK_SIGNING_SECRET;
+    else process.env.SLACK_SIGNING_SECRET = originalSigningSecret;
+  });
+
+  it("treats local placeholder Slack tokens as not ready", () => {
+    process.env.SLACK_BOT_TOKEN = "x" + "oxb-local-placeholder";
+    process.env.SLACK_SIGNING_SECRET = "local-signing-secret";
+
+    expect(getSlackBootstrapState()).toEqual({
+      ready: false,
+      missingEnvKeys: [],
+      invalidEnvKeys: ["SLACK_BOT_TOKEN"],
+    });
   });
 });

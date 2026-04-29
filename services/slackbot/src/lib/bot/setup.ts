@@ -53,5 +53,14 @@ export async function ensureBotReady() {
 export function getSlackBootstrapState() {
   const required = ["SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"] as const;
   const missing = required.filter((k) => !process.env[k]?.trim());
-  return { ready: missing.length === 0, missingEnvKeys: [...missing] };
+  const slackBotToken = process.env.SLACK_BOT_TOKEN?.trim() || "";
+  const hasUsableSlackBotToken = slackBotToken.startsWith("xoxb-") && slackBotToken.length >= 40;
+  const invalid = missing.includes("SLACK_BOT_TOKEN") || hasUsableSlackBotToken
+    ? []
+    : ["SLACK_BOT_TOKEN"];
+  return {
+    ready: missing.length === 0 && invalid.length === 0,
+    missingEnvKeys: [...missing],
+    invalidEnvKeys: invalid,
+  };
 }

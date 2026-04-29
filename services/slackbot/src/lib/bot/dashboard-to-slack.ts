@@ -231,7 +231,7 @@ function componentToSlackMarkdown(component: DashboardComponent): string {
       const { columns, data, title, defaultSort } = component;
       if (!data.length) return title ? `*${title}*\n_No data_` : "_No data_";
 
-      let rows = [...data];
+      const rows = [...data];
       if (defaultSort) {
         rows.sort((a, b) => {
           const av = a[defaultSort.key], bv = b[defaultSort.key];

@@ -22,9 +22,14 @@ export async function POST(request: NextRequest) {
       request_id: requestId,
       retry_num: retryNum,
       missing_env_keys: bootstrap.missingEnvKeys,
+      invalid_env_keys: bootstrap.invalidEnvKeys,
     });
     return NextResponse.json(
-      { error: "slack webhook unavailable", missing_env_keys: bootstrap.missingEnvKeys },
+      {
+        error: "slack webhook unavailable",
+        missing_env_keys: bootstrap.missingEnvKeys,
+        invalid_env_keys: bootstrap.invalidEnvKeys,
+      },
       { status: 503 },
     );
   }

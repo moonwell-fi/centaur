@@ -396,9 +396,14 @@ export class BoltSlackApp {
 
   async init(): Promise<void> {
     if (!this.ready) {
-      this.ready = this.adapter.init().then(() => {
-        this.bot.startFinalDeliveryWorker();
-      });
+      this.ready = this.adapter.init()
+        .then(() => {
+          this.bot.startFinalDeliveryWorker();
+        })
+        .catch((error) => {
+          this.ready = null;
+          throw error;
+        });
     }
     await this.ready;
   }
