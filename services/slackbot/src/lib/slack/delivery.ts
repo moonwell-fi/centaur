@@ -1,4 +1,6 @@
-const SLACK_MSG_MAX_CHARS = 3900; // Slack's hard limit is 4000; leave margin.
+import { SLACK_PLAIN_TEXT_MESSAGE_CHARS } from "./markdown";
+
+const SLACK_MSG_MAX_CHARS = SLACK_PLAIN_TEXT_MESSAGE_CHARS;
 
 const CANCELLED_EXECUTION_MESSAGE = "Request cancelled. Send another message when you want to retry.";
 const SILENCE_DEADLINE_MESSAGE = "Agent stopped after making no visible progress. Please retry.";

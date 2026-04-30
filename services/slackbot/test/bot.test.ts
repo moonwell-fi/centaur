@@ -722,6 +722,39 @@ describe("consumeWire reconnects on graceful EOF without turn.done", () => {
       ],
     });
   });
+
+  it("streams long plain text in one Slack message before using overflow posts", async () => {
+    const result = "a".repeat(13_000);
+    const mockClient = {
+      streamEvents: () => (async function* () {
+        yield {
+          eventId: 1,
+          eventKind: "amp_raw_event",
+          data: { type: "turn.done", turn_id: 1, result },
+        };
+      })(),
+      markFinalDelivered: async () => ({ ok: true }),
+    };
+    const { SlackBot } = await import("../src/lib/bot/bot");
+    const bot = new SlackBot(mockClient as any);
+    const tracker = new ProgressTracker();
+
+    const chunks: any[] = [];
+    for await (const chunk of (bot as any).streamExecution(
+      "test:long-plain-text",
+      "exe-long-plain-text",
+      tracker,
+      Date.now() - 1200,
+      new AbortController().signal,
+    )) {
+      chunks.push(chunk);
+    }
+
+    const markdownChunks = chunks.filter((chunk) => chunk.type === "markdown_text");
+    expect(markdownChunks).toHaveLength(2);
+    expect(markdownChunks.map((chunk) => chunk.text).join("")).toBe(result);
+    expect(tracker.overflowChunks).toEqual([]);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -901,10 +934,10 @@ describe("splitSlackMessage", () => {
     }
   });
 
-  it("uses default limit of 3900", () => {
-    const text = "a".repeat(3900);
+  it("uses Slack's 40k plain text message limit by default", () => {
+    const text = "a".repeat(40_000);
     expect(splitSlackMessage(text)).toEqual([text]);
-    const longText = "a".repeat(3901);
+    const longText = "a".repeat(40_001);
     expect(splitSlackMessage(longText).length).toBeGreaterThanOrEqual(2);
   });
 });

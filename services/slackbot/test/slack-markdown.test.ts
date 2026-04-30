@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { renderMarkdownForSlack } from "../src/lib/slack/markdown";
+import {
+  renderMarkdownForSlack,
+  splitMarkdownForSlackMessages,
+} from "../src/lib/slack/markdown";
 
 describe("Slack markdown rendering", () => {
   it("omits fenced code language labels from Slack mrkdwn", () => {
@@ -66,5 +69,21 @@ describe("Slack markdown rendering", () => {
       { type: "section", text: { type: "mrkdwn", text: "Second paragraph." } },
       { type: "section", text: { type: "mrkdwn", text: "Third paragraph." } },
     ]);
+  });
+
+  it("packs Slack markdown messages up to the block budget", () => {
+    const markdown = Array.from({ length: 55 }, (_, i) => `Paragraph ${i}.`).join("\n\n");
+
+    const chunks = splitMarkdownForSlackMessages(markdown, { firstMaxBlocks: 49 });
+
+    expect(chunks).toHaveLength(2);
+    expect(renderMarkdownForSlack(chunks[0]).blocks).toHaveLength(49);
+    expect(renderMarkdownForSlack(chunks[1]).blocks).toHaveLength(6);
+  });
+
+  it("keeps plain text messages together up to Slack's 40k text limit", () => {
+    const text = "a".repeat(39_999);
+
+    expect(splitMarkdownForSlackMessages(text)).toEqual([text]);
   });
 });

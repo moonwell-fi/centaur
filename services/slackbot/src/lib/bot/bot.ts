@@ -7,6 +7,8 @@ import { log } from "@/lib/logger";
 import {
   stringifyMarkdown,
   renderMarkdownForSlack,
+  splitMarkdownForSlackMessages,
+  SLACK_BLOCKS_PER_MESSAGE,
   type Root,
 } from "@/lib/slack/markdown";
 import { classifySlackError } from "@/lib/slack/errors";
@@ -25,6 +27,8 @@ import { convertDashboardBlocks } from "./dashboard-to-slack";
 const KEEPALIVE_MS = 120_000; // 2 min — Slack expires streaming state after ~5 min
 const STREAM_EXPIRED_POLL_INTERVAL_MS = 3_000;
 const STREAM_EXPIRED_POLL_MAX_MS = 5 * 60_000;
+const SLACK_STREAM_MARKDOWN_CHUNK_CHARS = 12_000;
+const SLACK_CONTENT_BLOCKS_WITH_CONTEXT = SLACK_BLOCKS_PER_MESSAGE - 1;
 const RECONNECT_MAX_RETRIES = 3;
 const RECONNECT_BASE_DELAY_MS = 2_000;
 const FINAL_DELIVERY_BATCH_SIZE = 5;
@@ -261,11 +265,7 @@ function slackLink(url: string, label: string): string {
 type SlackBlocks = Extract<StreamChunk, { type: "blocks" }>["blocks"];
 
 function splitSlackBlocks(blocks: SlackBlocks): SlackBlocks[] {
-  const chunks: SlackBlocks[] = [];
-  for (let i = 0; i < blocks.length; i += 50) {
-    chunks.push(blocks.slice(i, i + 50));
-  }
-  return chunks;
+  return blocks.length ? [blocks] : [];
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -674,7 +674,7 @@ export class SlackBot {
           }
 
           if (fallback) {
-            for (const chunk of splitSlackMessage(fallback)) {
+            for (const chunk of splitMarkdownForSlackMessages(fallback)) {
               await thread.post({ markdown: chunk });
             }
             deliveredToSlack = true;
@@ -822,16 +822,20 @@ export class SlackBot {
         }],
       };
 
-      const rendered = renderMarkdownForSlack(fullMd);
+      const [firstMessageMarkdown, ...overflowMarkdown] = splitMarkdownForSlackMessages(fullMd, {
+        firstMaxBlocks: SLACK_CONTENT_BLOCKS_WITH_CONTEXT,
+      });
+      const rendered = renderMarkdownForSlack(firstMessageMarkdown || fullMd);
       if (rendered.blocks) {
         for (const blocks of splitSlackBlocks(rendered.blocks)) {
           yield { type: "blocks", blocks };
         }
-        tracker.overflowChunks = [];
+        tracker.overflowChunks = overflowMarkdown;
       } else {
-        const chunks = splitSlackMessage(fullMd);
-        yield { type: "markdown_text", text: chunks[0] };
-        tracker.overflowChunks = chunks.slice(1);
+        for (const chunk of splitSlackMessage(firstMessageMarkdown || fullMd, SLACK_STREAM_MARKDOWN_CHUNK_CHARS)) {
+          yield { type: "markdown_text", text: chunk };
+        }
+        tracker.overflowChunks = overflowMarkdown;
       }
     } else {
       yield { type: "markdown_text", text: "Agent completed with no output." };
@@ -1243,7 +1247,7 @@ export class SlackBot {
   ): Promise<void> {
     const targetThreadId = slackDeliveryThreadId(threadKey, delivery);
     await this.withSlackDeliveryContext(delivery, async () => {
-      for (const chunk of splitSlackMessage(markdown)) {
+      for (const chunk of splitMarkdownForSlackMessages(markdown)) {
         await this.slack!.postMessage(targetThreadId, { markdown: chunk });
       }
     });
