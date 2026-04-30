@@ -65,6 +65,7 @@ function createImmediateStreamClient(): any {
     message: vi.fn(async () => ({ ok: true, attachment_ids: [] })),
     startWorkflowRun: vi.fn(async () => ({ execution_id: "exe-new", status: "waiting" })),
     execute: vi.fn(async () => ({ execution_id: "exe-new" })),
+    releaseThread: vi.fn(async () => ({ ok: true, released: true })),
     streamEvents: vi.fn(() => (async function* () {
       yield {
         eventId: 1,
@@ -121,6 +122,23 @@ describe("SlackBot runtime control", () => {
     expect(client.startWorkflowRun.mock.calls[0][0].triggerKey).toBe(
       `slack-thread-turn:${normalizedThreadKey}:slack:1700000000.000002`,
     );
+  });
+
+  it("releases the active assignment before an explicit persona switch", async () => {
+    const client = createImmediateStreamClient();
+    const bot = new SlackBot(client as any, "", createSlackAdapter());
+    const { thread } = createThread();
+
+    await bot.onSubscribedMessage(thread, userMessage("<@bot> dont u have --invest", {
+      id: "1700000000.000300",
+      isMention: true,
+    }));
+
+    expect(client.releaseThread).toHaveBeenCalledWith(normalizedThreadKey, {
+      releaseId: "prompt-switch:slack:1700000000.000300",
+      cancelInflight: true,
+    });
+    expect(client.startWorkflowRun.mock.calls[0][0].input.prompt_selector).toBe("invest");
   });
 
   it("cancels the previous execution before starting a new mention turn", async () => {

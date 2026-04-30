@@ -416,6 +416,9 @@ export class SlackBot {
     const threadKey = normalizeThreadKey(thread.id);
     await this.cancelInflightExecution(threadKey);
     const promptSelector = promptSelectorOverride ?? parsePromptSelectorFlag(text);
+    if (promptSelector) {
+      await this.releaseForPromptSwitch(threadKey, delivery.messageId);
+    }
     const { channel, threadTs } = splitThreadKey(thread.id);
     const accepted = await this.client.startWorkflowRun({
       workflowName: "slack_thread_turn",
@@ -447,6 +450,27 @@ export class SlackBot {
       userId: delivery.userId,
       teamId: delivery.teamId,
     });
+  }
+
+  private async releaseForPromptSwitch(threadKey: string, messageId?: string): Promise<void> {
+    try {
+      const releaseId = messageId
+        ? `prompt-switch:${messageId}`
+        : `prompt-switch:${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+      await this.client.releaseThread(threadKey, {
+        releaseId,
+        cancelInflight: true,
+      });
+      log.info("prompt_switch_released_assignment", {
+        thread_key: threadKey,
+        release_id: releaseId,
+      });
+    } catch (err) {
+      log.warn("prompt_switch_release_failed", {
+        thread_key: threadKey,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private async execute(thread: BotThread, threadKey: string, opts: { assignmentGeneration?: number; executionId?: string; userId?: string; teamId?: string }) {
