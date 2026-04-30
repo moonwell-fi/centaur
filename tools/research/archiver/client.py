@@ -43,7 +43,7 @@ class ArchiverClient:
         )
         manifest_path = output_dir / "manifest.json"
         manifest_path.write_text(dump_json(payload))
-        return payload
+        return {**payload, "manifest_path": str(manifest_path)}
 
     def _manifest_with_context(
         self, manifest_path: Path, context: dict | None
@@ -155,16 +155,18 @@ class ArchiverClient:
         if download_payload.get("status") != "ok":
             return {
                 "status": "error",
-                "error": "Download stage failed",
+                "error": download_payload.get("error") or "Download stage failed",
                 "source": source_url,
+                "manifest_path": download_payload.get("manifest_path"),
                 "download": download_payload,
-                "files": [],
+                "files": download_payload.get("files") or [],
             }
         if not download_payload.get("files"):
             return {
                 "status": "error",
                 "error": "Download stage produced no files",
                 "source": source_url,
+                "manifest_path": download_payload.get("manifest_path"),
                 "download": download_payload,
                 "files": [],
             }

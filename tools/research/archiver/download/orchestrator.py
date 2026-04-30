@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import importlib.util
 import os
 import zipfile
 from pathlib import Path
@@ -29,6 +31,23 @@ MANUAL_DOWNLOAD_SUGGESTION = (
     "If this source keeps failing, please download the file or ZIP manually and share it with us."
 )
 
+_DOCSEND_BLOCKER_INPUTS = {
+    "passcode_required": "password",
+    "email_required": "email",
+    "verification_link_required": "verification_link",
+}
+
+_DOCSEND_FALLBACK_ERROR_HINTS = (
+    "browser_use_api_key",
+    "router returned no results",
+    "cloudfront",
+    "blocked",
+    "waf",
+    "http_403",
+    "http_429",
+    "http_503",
+)
+
 
 def _with_manual_download_suggestion(error: str | None) -> str | None:
     if not error:
@@ -38,6 +57,177 @@ def _with_manual_download_suggestion(error: str | None) -> str | None:
     if error.endswith((".", "!", "?")):
         return f"{error} {MANUAL_DOWNLOAD_SUGGESTION}"
     return f"{error}. {MANUAL_DOWNLOAD_SUGGESTION}"
+
+
+def _normalize_docsend_status(status: str | None) -> str | None:
+    if not status:
+        return status
+    if status == "password_required":
+        return "passcode_required"
+    if status == "link_expired":
+        return "expired"
+    return status
+
+
+def _docsend_blocker(status: str | None, error: str | None) -> dict[str, str] | None:
+    normalized = _normalize_docsend_status(status)
+    if normalized not in {
+        "passcode_required",
+        "email_required",
+        "verification_link_required",
+        "blocked",
+        "expired",
+    }:
+        return None
+
+    blocker = {
+        "kind": normalized,
+        "message": error or normalized.replace("_", " "),
+    }
+    required_input = _DOCSEND_BLOCKER_INPUTS.get(normalized)
+    if required_input:
+        blocker["required_input"] = required_input
+    return blocker
+
+
+def _should_fallback_to_standalone_docsend(error: str | None) -> bool:
+    lowered = (error or "").lower()
+    return any(hint in lowered for hint in _DOCSEND_FALLBACK_ERROR_HINTS)
+
+
+def _load_standalone_docsend_client() -> Any:
+    client_path = Path(__file__).resolve().parents[2] / "docsend" / "client.py"
+    spec = importlib.util.spec_from_file_location(
+        "shared.tools_runtime.archiver._docsend_standalone_client",
+        client_path,
+    )
+    if not spec or not spec.loader:
+        raise RuntimeError(f"Unable to load standalone DocSend client from {client_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.DocsendClient()
+
+
+def _build_docsend_payload(
+    *,
+    source_url: str,
+    company_name: str,
+    status: str,
+    error: str | None,
+    files: list[dict],
+    strategy: str,
+    total_pages: int | None = None,
+    downloaded: int | None = None,
+    failed_slides: list[Any] | None = None,
+) -> dict:
+    normalized_status = _normalize_docsend_status(status) or "error"
+    blocker = _docsend_blocker(normalized_status, error)
+    surfaced_error = error
+    if status != "ok" and not blocker:
+        surfaced_error = _with_manual_download_suggestion(error)
+
+    payload = {
+        "status": "ok" if status == "ok" else "error",
+        "error": surfaced_error,
+        "files": files,
+        "docsend": {
+            "status": normalized_status,
+            "strategy": strategy,
+            "total_pages": total_pages,
+            "downloaded": downloaded,
+            "failed_slides": failed_slides or [],
+        },
+    }
+    if blocker:
+        payload["blocker"] = blocker
+    return payload
+
+
+def _save_docsend_client_download(
+    result: dict,
+    *,
+    output_dir: Path,
+    source_url: str,
+    company_name: str,
+) -> list[dict]:
+    data = result.get("data")
+    if not data:
+        return []
+
+    filename = result.get("filename") or f"{company_name}.pdf"
+    path = output_dir / filename
+    path.write_bytes(base64.b64decode(data))
+    record = _build_file_record(
+        path,
+        source_url,
+        "docsend",
+        title=company_name,
+        status="partial" if result.get("error") else "ok",
+        error=result.get("error"),
+    )
+    return [file_record_to_dict(record)]
+
+
+def _run_standalone_docsend_fallback(
+    *,
+    source_url: str,
+    output_dir: Path,
+    company_name: str,
+    password: str | None,
+    email: str | None,
+) -> dict:
+    client = _load_standalone_docsend_client()
+    result = client.download(
+        url=source_url,
+        email=email or os.getenv("DOCSEND_EMAIL", ""),  # noqa: TID251
+        passcode=password,
+    )
+    files = _save_docsend_client_download(
+        result,
+        output_dir=output_dir,
+        source_url=source_url,
+        company_name=company_name,
+    )
+    status = "ok" if result.get("status") == "ok" and files else (result.get("status") or "error")
+    return _build_docsend_payload(
+        source_url=source_url,
+        company_name=company_name,
+        status=status,
+        error=result.get("error"),
+        files=files,
+        strategy="standalone_client",
+        total_pages=result.get("page_count"),
+        downloaded=result.get("downloaded"),
+    )
+
+
+def _fallback_docsend_payload(
+    *,
+    source_url: str,
+    output_dir: Path,
+    company_name: str,
+    password: str | None,
+    email: str | None,
+    original_error: str,
+) -> dict:
+    try:
+        return _run_standalone_docsend_fallback(
+            source_url=source_url,
+            output_dir=output_dir,
+            company_name=company_name,
+            password=password,
+            email=email,
+        )
+    except Exception as exc:
+        combined_error = original_error if str(exc) in original_error else f"{original_error}; fallback failed: {exc}"
+        return _build_docsend_payload(
+            source_url=source_url,
+            company_name=company_name,
+            status="error",
+            error=combined_error,
+            files=[],
+            strategy="fallback_unavailable",
+        )
 
 
 def _build_file_record(
@@ -74,13 +264,6 @@ async def _download_docsend_async(
     password: str | None,
     email: str | None,
 ) -> dict:
-    if not os.getenv("BROWSER_USE_API_KEY"):  # noqa: TID251
-        return {
-            "status": "error",
-            "error": _with_manual_download_suggestion("BROWSER_USE_API_KEY not set"),
-            "files": [],
-        }
-
     company_name = company or "unknown"
     results = await route_all_docsends(
         [{"url": source_url, "company": company_name, "password": password}],
@@ -88,14 +271,17 @@ async def _download_docsend_async(
         email=email or os.getenv("DOCSEND_EMAIL", ""),  # noqa: TID251
     )
     if not results:
-        return {
-            "status": "error",
-            "error": _with_manual_download_suggestion("DocSend router returned no results"),
-            "files": [],
-        }
+        return _fallback_docsend_payload(
+            source_url=source_url,
+            output_dir=output_dir,
+            company_name=company_name,
+            password=password,
+            email=email,
+            original_error="DocSend router returned no results",
+        )
 
     result = results[0]
-    status = "ok" if result.status.value in ("success", "partial") else "error"
+    router_status = "ok" if result.status.value in ("success", "partial") else result.status.value
     files: list[dict] = []
     if result.pdf_path:
         path = Path(result.pdf_path)
@@ -109,27 +295,38 @@ async def _download_docsend_async(
                     # ZIP had no parseable files, keep the ZIP record
                     record = _build_file_record(
                         path, source_url, "docsend", title=company_name,
-                        status="ok" if status == "ok" else "partial",
+                        status="ok" if router_status == "ok" else "partial",
                         error=result.error,
                     )
                     files.append(file_record_to_dict(record))
             else:
                 record = _build_file_record(
                     path, source_url, "docsend", title=company_name,
-                    status="ok" if status == "ok" else "partial",
+                    status="ok" if router_status == "ok" else "partial",
                     error=result.error,
                 )
                 files.append(file_record_to_dict(record))
-    return {
-        "status": status,
-        "error": _with_manual_download_suggestion(result.error) if status != "ok" else result.error,
-        "files": files,
-        "docsend": {
-            "total_pages": result.total_pages,
-            "downloaded": result.downloaded,
-            "failed_slides": result.failed_slides,
-        },
-    }
+    payload = _build_docsend_payload(
+        source_url=source_url,
+        company_name=company_name,
+        status=router_status,
+        error=result.error,
+        files=files,
+        strategy="router",
+        total_pages=result.total_pages,
+        downloaded=result.downloaded,
+        failed_slides=result.failed_slides,
+    )
+    if payload["status"] == "ok" or not _should_fallback_to_standalone_docsend(result.error):
+        return payload
+    return _fallback_docsend_payload(
+        source_url=source_url,
+        output_dir=output_dir,
+        company_name=company_name,
+        password=password,
+        email=email,
+        original_error=result.error or "DocSend router failed",
+    )
 
 
 _ZIP_PARSEABLE_EXTENSIONS = {
@@ -291,19 +488,18 @@ def download_source(
         docsend_dir = output_dir / "docsend"
         docsend_dir.mkdir(parents=True, exist_ok=True)
         payload = download_docsend(source_url, docsend_dir, company, password, email)
-        return {
+        response = {
             "status": payload["status"],
-            "error": (
-                _with_manual_download_suggestion(payload.get("error"))
-                if payload["status"] != "ok"
-                else payload.get("error")
-            ),
+            "error": payload.get("error"),
             "source_url": source_url,
             "canonical_url": canonical_url,
             "source_type": "docsend",
             "files": payload["files"],
             "details": payload.get("docsend"),
         }
+        if payload.get("blocker"):
+            response["blocker"] = payload["blocker"]
+        return response
 
     if "google.com" in canonical_url:
         if not account:
