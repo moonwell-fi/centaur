@@ -29,13 +29,14 @@ const USER_COLS = [
   { key: "rank",     label: "#",       num: true,  noSort: true, w: "3.5%" },
   { key: "name",     label: "Name",    num: false, w: "15%",     cls: "user-name", hasPfp: true },
   { key: "team",     label: "Team",    num: false, w: "12%",     cls: "col-team" },
-  { key: "calls",    label: "Calls",   num: true,  w: "7%" },
-  { key: "threads",  label: "Sessions", num: true,  w: "7.5%" },
-  { key: "tools",    label: "Tools",   num: true,  w: "5.5%" },
-  { key: "calls_per_thread", label: "C/S", num: true, w: "5%", cls: "col-cpt" },
-  { key: "tool1",    label: "#1 Tool", num: false, w: "15%", noSort: true, cls: "method" },
-  { key: "tool2",    label: "#2 Tool", num: false, w: "15%", noSort: true, cls: "method col-method2" },
-  { key: "tool3",    label: "#3 Tool", num: false, w: "15%", noSort: true, cls: "method col-method3 col-tool3" },
+  { key: "calls",    label: "Calls",   num: true,  w: "6%" },
+  { key: "threads",  label: "Sessions", num: true,  w: "7%" },
+  { key: "tokens",   label: "Tokens",  num: true,  w: "6%", fmt: "compact" },
+  { key: "tools",    label: "Tools",   num: true,  w: "5%" },
+  { key: "calls_per_thread", label: "C/S", num: true, w: "4.5%", cls: "col-cpt" },
+  { key: "tool1",    label: "#1 Tool", num: false, w: "14%", noSort: true, cls: "method" },
+  { key: "tool2",    label: "#2 Tool", num: false, w: "14%", noSort: true, cls: "method col-method2" },
+  { key: "tool3",    label: "#3 Tool", num: false, w: "14%", noSort: true, cls: "method col-method3 col-tool3" },
 ];
 
 const TEAM_COLS = [
@@ -91,6 +92,14 @@ const DEFAULT_SORT = { tools: "threads", skills: "threads", users: "threads", te
 function fmt(n) {
   if (n == null) return "\u2014";
   return Number(n).toLocaleString();
+}
+
+function fmtCompact(n) {
+  if (n == null || n === 0) return "0";
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return String(n);
 }
 
 function escapeHtml(s) {
@@ -202,6 +211,8 @@ function renderBody() {
         val = `<a href="${escapeHtml(r.first_url)}" target="_blank" class="date-link">${r.first_seen}</a>`;
       } else if (c.key === "last_seen" && r.last_url) {
         val = `<a href="${escapeHtml(r.last_url)}" target="_blank" class="date-link">${r.last_seen}</a>`;
+      } else if (c.num && c.fmt === "compact") {
+        val = fmtCompact(r[c.key]);
       } else if (c.num) {
         val = fmt(r[c.key]);
       } else {
