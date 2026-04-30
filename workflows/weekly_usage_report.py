@@ -139,16 +139,18 @@ def _build_blocks(
 
     # Teams table
     blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Top Centaur Usage by Team* :celebrate:"}})
-    team_rows = [[_cell("#"), _cell("Team"), _cell("Sessions"), _cell("Members"), _cell("S/M")]]
+    team_rows = [[_cell("#"), _cell("Team"), _cell("Members"), _cell("Sessions"), _cell("Tokens"), _cell("S/M"), _cell("T/M")]]
     for i, t in enumerate(teams):
         members = t["members"]
         sessions = t["threads"]
+        tokens = sum(u.get("tokens", 0) for u in users if u["team"] == t["team"])
         spm = round(sessions / members, 1) if members > 0 else 0
+        tpm = _fmt_tokens(round(tokens / members)) if members > 0 else "0"
         emoji = t.get("emoji", "")
-        team_rows.append([_cell(i + 1), _cell(f"{emoji} {t['team']}"), _cell(sessions), _cell(members), _cell(spm)])
+        team_rows.append([_cell(i + 1), _cell(f"{emoji} {t['team']}"), _cell(members), _cell(sessions), _cell(_fmt_tokens(tokens)), _cell(spm), _cell(tpm)])
     blocks.append({
         "type": "table",
-        "column_settings": [{"align": "center"}, {"align": "left"}, {"align": "right"}, {"align": "right"}, {"align": "right"}],
+        "column_settings": [{"align": "center"}, {"align": "left"}, {"align": "right"}, {"align": "right"}, {"align": "right"}, {"align": "right"}, {"align": "right"}],
         "rows": team_rows,
     })
     blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"<{DASHBOARD_URL}/teams|See live team leaderboard>"}]})
