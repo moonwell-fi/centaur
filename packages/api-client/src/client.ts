@@ -360,13 +360,24 @@ export class CentaurClient {
     return data as Record<string, unknown>;
   }
 
-  async markFinalFailed(executionId: string, error: string, opts?: { consumerId?: string; retryAfterSeconds?: number }) {
+  async markFinalFailed(
+    executionId: string,
+    error: string,
+    opts?: {
+      consumerId?: string;
+      retryAfterSeconds?: number;
+      nonRetryable?: boolean;
+      errorClass?: string;
+    },
+  ) {
     const { data } = await this.http.post(
       `/agent/final-deliveries/${encodeURIComponent(executionId)}/failed`,
       {
         consumer_id: opts?.consumerId,
         error,
         retry_after_seconds: opts?.retryAfterSeconds ?? 15,
+        non_retryable: opts?.nonRetryable ?? false,
+        error_class: opts?.errorClass,
       },
     );
     return data as Record<string, unknown>;

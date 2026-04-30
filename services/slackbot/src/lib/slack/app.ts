@@ -11,10 +11,12 @@ import {
   slackMrkdwnToAst,
   type Root,
 } from "./markdown";
+import { classifySlackError, SlackApiCallError } from "./errors";
 import type { StreamChunk } from "./types";
 
 const PENDING_SUBSCRIPTION_TTL_MS = 2 * 60_000;
 const SEEN_EVENT_TTL_MS = 10 * 60_000;
+const DISPATCH_RETRY_DELAYS_MS = [500, 1500];
 const STREAM_BOOTSTRAP_TEXT = "\u200b";
 const POLICY_TOUCHPOINT_CHANNEL_ID = "C0AM0TR8N91";
 const POLICY_TOUCHPOINT_PATTERN = /(^|\s)#touchpoint\b/i;
@@ -329,14 +331,29 @@ class WebClientSlackAdapter implements SlackAdapter {
     const cached = this.userCache.get(userId);
     if (cached) return cached;
 
-    const result = await this.client.users.info({ user: userId });
-    const user = result.user as { name?: string; profile?: { display_name?: string; real_name?: string } } | undefined;
-    const resolved = {
-      displayName: user?.profile?.display_name || user?.profile?.real_name || user?.name || userId,
-      realName: user?.profile?.real_name || user?.name || userId,
-    };
-    this.userCache.set(userId, resolved);
-    return resolved;
+    try {
+      const result = await this.client.users.info({ user: userId });
+      if (result && result.ok === false) {
+        throw new SlackApiCallError("users.info", typeof result.error === "string" ? result.error : "users.info_failed", result);
+      }
+      const user = result.user as { name?: string; profile?: { display_name?: string; real_name?: string } } | undefined;
+      const resolved = {
+        displayName: user?.profile?.display_name || user?.profile?.real_name || user?.name || userId,
+        realName: user?.profile?.real_name || user?.name || userId,
+      };
+      this.userCache.set(userId, resolved);
+      return resolved;
+    } catch (error) {
+      const classified = classifySlackError(error);
+      log.warn("slack_user_lookup_failed", {
+        user_id: userId,
+        error: classified.message,
+        error_class: classified.errorClass,
+        error_code: classified.code,
+        retryable: classified.retryable,
+      });
+      return { displayName: userId, realName: userId };
+    }
   }
 
   private createAttachment(file: SlackFile): BotAttachment {
@@ -373,7 +390,7 @@ class WebClientSlackAdapter implements SlackAdapter {
     const result = await this.client.apiCall(method, params);
     if (!result || result.ok !== true) {
       const error = typeof result?.error === "string" ? result.error : `Slack ${method} failed`;
-      throw new Error(error);
+      throw new SlackApiCallError(method, error, result);
     }
     return result as T;
   }
@@ -429,6 +446,9 @@ export class BoltSlackApp {
 
   async handleRequest(request: NextRequest, options?: WaitUntilOptions): Promise<NextResponse> {
     const body = await request.text();
+    const requestId = request.headers.get("x-slack-request-id") || "";
+    const retryNum = request.headers.get("x-slack-retry-num") || "";
+    const retryReason = request.headers.get("x-slack-retry-reason") || "";
     try {
       verifySlackRequest({
         signingSecret: this.signingSecret,
@@ -453,20 +473,20 @@ export class BoltSlackApp {
       return NextResponse.json({ ok: true });
     }
     if (payload.event_id && this.seenRecently(payload.event_id)) {
+      log.info("slack_duplicate_event_skipped", {
+        event_id: payload.event_id,
+        event_type: (payload.event as SlackMessageEvent).type,
+        request_id: requestId,
+        retry_num: retryNum,
+        retry_reason: retryReason,
+      });
       return NextResponse.json({ ok: true, duplicate: true });
     }
 
-    const task = this.receiver.dispatch({
-      body: payload as Record<string, unknown>,
-      ack: async () => {},
-      retryNum: numberHeader(request.headers.get("x-slack-retry-num")),
-      retryReason: request.headers.get("x-slack-retry-reason") || undefined,
-    }).catch((error) => {
-      log.error("slack_bolt_dispatch_failed", {
-        event_id: payload.event_id,
-        event_type: (payload.event as SlackMessageEvent).type,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    const task = this.dispatchWithRetry(payload, {
+      requestId,
+      retryNum,
+      retryReason,
     });
 
     if (options?.waitUntil) options.waitUntil(task);
@@ -477,6 +497,52 @@ export class BoltSlackApp {
 
   getSlackAdapter(): SlackAdapter {
     return this.adapter;
+  }
+
+  private async dispatchWithRetry(
+    payload: SlackEventEnvelope,
+    request: { requestId: string; retryNum: string; retryReason: string },
+  ): Promise<void> {
+    const eventType = (payload.event as SlackMessageEvent).type;
+    for (let attempt = 0; attempt <= DISPATCH_RETRY_DELAYS_MS.length; attempt += 1) {
+      try {
+        await this.receiver.dispatch({
+          body: payload as Record<string, unknown>,
+          ack: async () => {},
+          retryNum: numberHeader(request.retryNum),
+          retryReason: request.retryReason || undefined,
+        });
+        if (attempt > 0) {
+          log.info("slack_bolt_dispatch_recovered", {
+            event_id: payload.event_id,
+            event_type: eventType,
+            request_id: request.requestId,
+            attempt: attempt + 1,
+          });
+        }
+        return;
+      } catch (error) {
+        const classified = classifySlackError(error);
+        const shouldRetry = classified.retryable && attempt < DISPATCH_RETRY_DELAYS_MS.length;
+        const logFn = classified.retryable ? log.error : log.warn;
+        logFn("slack_bolt_dispatch_failed", {
+          event_id: payload.event_id,
+          event_type: eventType,
+          request_id: request.requestId,
+          retry_num: request.retryNum,
+          retry_reason: request.retryReason,
+          error: classified.message,
+          error_class: classified.errorClass,
+          error_code: classified.code,
+          status: classified.status,
+          retryable: classified.retryable,
+          attempt: attempt + 1,
+          will_retry: shouldRetry,
+        });
+        if (!shouldRetry) return;
+        await new Promise((resolve) => setTimeout(resolve, DISPATCH_RETRY_DELAYS_MS[attempt]));
+      }
+    }
   }
 
   private registerListeners(): void {

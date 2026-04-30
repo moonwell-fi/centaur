@@ -342,6 +342,36 @@ describe("SlackBot runtime control", () => {
     expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-cancelled", expect.any(String));
   });
 
+  it("uses explicit Slack delivery destination for workflow final deliveries", async () => {
+    const client = createImmediateStreamClient();
+    client.claimFinalDeliveries = vi.fn(async () => ({
+      deliveries: [
+        {
+          execution_id: "exe-workflow",
+          thread_key: "workflow:wfr_123:notify",
+          delivery: {
+            platform: "slack",
+            channel: "C999",
+            thread_ts: "1700000000.999999",
+          },
+          final_payload: { status: "completed", result_text: "workflow result" },
+        },
+      ],
+    }));
+    const slack = createSlackAdapter({
+      postMessage: vi.fn(async () => ({ id: "msg-final" })),
+    });
+    const bot = new SlackBot(client as any, "", slack);
+
+    await (bot as any).drainFinalDeliveriesOnce();
+
+    expect(slack.postMessage).toHaveBeenCalledWith(
+      "slack:C999:1700000000.999999",
+      { markdown: "workflow result" },
+    );
+    expect(client.markFinalDelivered).toHaveBeenCalledWith("exe-workflow", expect.any(String));
+  });
+
   it("posts a friendly cancellation message for the latest cancelled final delivery", async () => {
     const client = createImmediateStreamClient();
     client.claimFinalDeliveries = vi.fn(async () => ({

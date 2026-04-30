@@ -9,6 +9,15 @@ import {
   renderMarkdownForSlack,
   type Root,
 } from "@/lib/slack/markdown";
+import { classifySlackError } from "@/lib/slack/errors";
+import {
+  flattenMarkdownTables,
+  isCancellationTerminalState,
+  isSlackInvalidBlocksError,
+  normalizedTerminalString,
+  renderTerminalResultCopy,
+  splitSlackMessage,
+} from "@/lib/slack/delivery";
 import type { StreamChunk } from "@/lib/slack/types";
 import { ProgressTracker } from "./progress-tracker";
 import { convertDashboardBlocks } from "./dashboard-to-slack";
@@ -16,7 +25,6 @@ import { convertDashboardBlocks } from "./dashboard-to-slack";
 const KEEPALIVE_MS = 120_000; // 2 min — Slack expires streaming state after ~5 min
 const STREAM_EXPIRED_POLL_INTERVAL_MS = 3_000;
 const STREAM_EXPIRED_POLL_MAX_MS = 5 * 60_000;
-const SLACK_MSG_MAX_CHARS = 3900; // Slack's hard limit is 4000; leave margin
 const RECONNECT_MAX_RETRIES = 3;
 const RECONNECT_BASE_DELAY_MS = 2_000;
 const FINAL_DELIVERY_BATCH_SIZE = 5;
@@ -29,145 +37,8 @@ const PROMPT_FLAG_ALIASES = new Map<string, string>([
   ["pi", "pi-mono"],
 ]);
 const STREAM_BOOTSTRAP_TEXT = "\u200b";
-const CANCELLED_EXECUTION_MESSAGE = "Request cancelled. Send another message when you want to retry.";
-const SILENCE_DEADLINE_MESSAGE = "Agent stopped after making no visible progress. Please retry.";
-const EXECUTION_FAILED_MESSAGE = "Agent hit a runtime issue before finishing. Please retry.";
 
-/**
- * Split text into chunks that fit within Slack's message limit.
- * Splits on paragraph boundaries (double newline), falling back to single newlines,
- * then hard-cutting at the limit if no natural break is found.
- */
-export function splitSlackMessage(text: string, limit = SLACK_MSG_MAX_CHARS): string[] {
-  if (text.length <= limit) return [text];
-  const chunks: string[] = [];
-  let remaining = text;
-  while (remaining.length > limit) {
-    let cut = -1;
-    // Prefer splitting at a paragraph boundary
-    const paraIdx = remaining.lastIndexOf("\n\n", limit);
-    if (paraIdx > limit * 0.3) {
-      cut = paraIdx;
-    } else {
-      // Fall back to single newline
-      const nlIdx = remaining.lastIndexOf("\n", limit);
-      if (nlIdx > limit * 0.3) {
-        cut = nlIdx;
-      } else {
-        // Hard cut at last space
-        const spIdx = remaining.lastIndexOf(" ", limit);
-        cut = spIdx > limit * 0.3 ? spIdx : limit;
-      }
-    }
-    chunks.push(remaining.slice(0, cut).trimEnd());
-    remaining = remaining.slice(cut).trimStart();
-  }
-  if (remaining) chunks.push(remaining);
-  return chunks;
-}
-
-function parseMarkdownTableRow(line: string): string[] | null {
-  const trimmed = line.trim();
-  if (!trimmed.includes("|")) return null;
-  const inner = trimmed.replace(/^\|/, "").replace(/\|$/, "");
-  const cells = inner.split("|").map((cell) => cell.trim());
-  return cells.length >= 2 ? cells : null;
-}
-
-function isMarkdownTableSeparator(line: string): boolean {
-  const cells = parseMarkdownTableRow(line);
-  return Boolean(cells?.every((cell) => /^:?-{3,}:?$/.test(cell)));
-}
-
-function flattenMarkdownTables(markdown: string): string {
-  const lines = markdown.split("\n");
-  const output: string[] = [];
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const header = parseMarkdownTableRow(lines[i]);
-    if (!header || i + 1 >= lines.length || !isMarkdownTableSeparator(lines[i + 1])) {
-      output.push(lines[i]);
-      continue;
-    }
-
-    const rows: string[] = [];
-    i += 2;
-    while (i < lines.length) {
-      const cells = parseMarkdownTableRow(lines[i]);
-      if (!cells) break;
-      rows.push(`- ${header.map((label, idx) => `${label}: ${cells[idx] ?? ""}`).join("; ")}`);
-      i += 1;
-    }
-    output.push(...rows);
-    i -= 1;
-  }
-
-  return output.join("\n");
-}
-
-function isSlackInvalidBlocksError(message: string): boolean {
-  return message.includes("invalid_blocks");
-}
-
-function normalizedTerminalString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function isCancellationTerminalState(status: string, terminalReason: string, resultText = "", errorText = ""): boolean {
-  const rawValues = [terminalReason, resultText, errorText]
-    .map((value) => value.toLowerCase())
-    .filter(Boolean);
-  return status === "cancelled"
-    || rawValues.includes("cancel_requested")
-    || rawValues.includes("cancelled")
-    || rawValues.includes("released")
-    || rawValues.includes("user cancelled (sigint/sigterm)");
-}
-
-function renderTerminalResultCopy(opts: {
-  status?: unknown;
-  terminalReason?: unknown;
-  resultText?: unknown;
-  errorText?: unknown;
-  isError?: unknown;
-}): string {
-  const status = normalizedTerminalString(opts.status);
-  const terminalReason = normalizedTerminalString(opts.terminalReason);
-  const resultText = normalizedTerminalString(opts.resultText);
-  const errorText = normalizedTerminalString(opts.errorText);
-  const rawValues = [terminalReason, resultText, errorText]
-    .map((value) => value.toLowerCase())
-    .filter(Boolean);
-  const rawBlob = rawValues.join("\n");
-
-  if (status === "completed") {
-    return resultText;
-  }
-
-  if (isCancellationTerminalState(status, terminalReason, resultText, errorText)) {
-    return CANCELLED_EXECUTION_MESSAGE;
-  }
-
-  if (terminalReason === "silence_deadline_exceeded"
-    || rawBlob.includes("execution made no progress before silence deadline")
-    || rawBlob.includes("silence deadline")) {
-    return SILENCE_DEADLINE_MESSAGE;
-  }
-
-  if (status === "failed_permanent"
-    || Boolean(opts.isError)
-    || rawValues.includes("harness_error")
-    || rawValues.includes("amp_reconnect_timeout")
-    || rawValues.includes("execution_error")
-    || rawValues.includes("stream_ended_without_turn_done")
-    || rawValues.includes("assignment_missing")
-    || rawValues.includes("hard_deadline_exceeded")
-    || rawBlob.includes("connection error")) {
-    return EXECUTION_FAILED_MESSAGE;
-  }
-
-  return resultText;
-}
+export { splitSlackMessage } from "@/lib/slack/delivery";
 
 type SlackRawMessage = {
   team_id?: string;
@@ -291,6 +162,15 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function slackAdapterThreadId(threadKey: string): string {
   return threadKey.startsWith("slack:") ? threadKey : `slack:${threadKey}`;
+}
+
+function slackDeliveryThreadId(threadKey: string, delivery: Record<string, unknown>): string {
+  const channel = typeof delivery.channel === "string" ? delivery.channel.trim() : "";
+  const threadTs = typeof delivery.thread_ts === "string" ? delivery.thread_ts.trim() : "";
+  if (channel && threadTs) {
+    return `slack:${channel}:${threadTs}`;
+  }
+  return slackAdapterThreadId(threadKey);
 }
 
 function slackLink(url: string, label: string): string {
@@ -704,7 +584,7 @@ export class SlackBot {
         await this.ackFinalDelivery(executionId, threadKey, { requireLease: false });
       }
 
-      await this.setAssistantTitle(threadKey, finalText);
+      await this.setAssistantTitle(threadKey, {}, finalText);
     } finally {
       const durationMs = Date.now() - t0;
       log.info("execute_completed", {
@@ -975,10 +855,17 @@ export class SlackBot {
     }
   }
 
-  private async failFinalDelivery(executionId: string, threadKey: string, error: string): Promise<void> {
+  private async failFinalDelivery(
+    executionId: string,
+    threadKey: string,
+    error: string,
+    opts?: { nonRetryable?: boolean; errorClass?: string },
+  ): Promise<void> {
     try {
       await this.client.markFinalFailed(executionId, error, {
         consumerId: this.deliveryConsumerId,
+        nonRetryable: opts?.nonRetryable,
+        errorClass: opts?.errorClass,
       });
     } catch (err) {
       log.warn("final_delivery_fail_mark_failed", {
@@ -1083,7 +970,7 @@ export class SlackBot {
     try {
       await this.postSlackMarkdown(threadKey, delivery, markdown);
       await this.ackFinalDelivery(executionId, threadKey);
-      await this.setAssistantTitle(threadKey, markdown);
+      await this.setAssistantTitle(threadKey, delivery, markdown);
       log.info("final_delivery_completed", { thread_key: threadKey, execution_id: executionId });
     } catch (err) {
       let error = err instanceof Error ? err.message : String(err);
@@ -1097,7 +984,7 @@ export class SlackBot {
             });
             await this.postSlackMarkdown(threadKey, delivery, fallbackMarkdown);
             await this.ackFinalDelivery(executionId, threadKey);
-            await this.setAssistantTitle(threadKey, fallbackMarkdown);
+            await this.setAssistantTitle(threadKey, delivery, fallbackMarkdown);
             log.info("final_delivery_completed", {
               thread_key: threadKey,
               execution_id: executionId,
@@ -1109,12 +996,20 @@ export class SlackBot {
           }
         }
       }
+      const classified = classifySlackError(error);
       log.warn("final_delivery_post_failed", {
         execution_id: executionId,
         thread_key: threadKey,
-        error,
+        error: classified.message,
+        error_class: classified.errorClass,
+        error_code: classified.code,
+        status: classified.status,
+        retryable: classified.retryable,
       });
-      await this.failFinalDelivery(executionId, threadKey, error);
+      await this.failFinalDelivery(executionId, threadKey, classified.message, {
+        nonRetryable: !classified.retryable,
+        errorClass: classified.errorClass,
+      });
     }
   }
 
@@ -1196,9 +1091,10 @@ export class SlackBot {
     delivery: Record<string, unknown>,
     markdown: string,
   ): Promise<void> {
+    const targetThreadId = slackDeliveryThreadId(threadKey, delivery);
     await this.withSlackDeliveryContext(delivery, async () => {
       for (const chunk of splitSlackMessage(markdown)) {
-        await this.slack!.postMessage(slackAdapterThreadId(threadKey), { markdown: chunk });
+        await this.slack!.postMessage(targetThreadId, { markdown: chunk });
       }
     });
   }
@@ -1225,11 +1121,15 @@ export class SlackBot {
     return this.slack.withBotToken(installation.botToken, fn);
   }
 
-  private async setAssistantTitle(threadKey: string, title: string): Promise<void> {
+  private async setAssistantTitle(
+    threadKey: string,
+    delivery: Record<string, unknown>,
+    title: string,
+  ): Promise<void> {
     if (!this.slack || !title.trim()) return;
 
     try {
-      const { channel, threadTs } = splitThreadKey(threadKey);
+      const { channel, threadTs } = splitThreadKey(slackDeliveryThreadId(threadKey, delivery));
       await this.slack.setAssistantTitle(channel, threadTs, title.slice(0, 60));
     } catch (err) {
       log.warn("set_title_failed", {
