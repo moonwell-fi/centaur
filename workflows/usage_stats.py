@@ -312,6 +312,22 @@ async def _fetch_workflow_events(pool) -> list[dict]:
     } for row in rows]
 
 
+async def _fetch_token_events(pool, thread_users: dict[str, str]) -> list[dict]:
+    rows = await pool.fetch(
+        "SELECT thread_key, created_at, "
+        "  (event_json->>'total_tokens')::bigint as tokens "
+        "FROM agent_execution_events "
+        "WHERE event_kind = 'execution_summary' "
+        "  AND created_at > NOW() - INTERVAL '90 days' "
+        "  AND (event_json->>'total_tokens')::bigint > 0"
+    )
+    return [{
+        "uid": thread_users.get(row["thread_key"], "unknown"),
+        "tokens": row["tokens"],
+        "ts": row["created_at"].isoformat(),
+    } for row in rows]
+
+
 # ── Aggregation (runs per window on pre-fetched events) ──────────
 
 
@@ -360,7 +376,7 @@ def _aggregate_tools(events: list[dict]) -> list[dict]:
     return result
 
 
-def _aggregate_users(events: list[dict]) -> list[dict]:
+def _aggregate_users(events: list[dict], token_events: list[dict] | None = None) -> list[dict]:
     stats: dict[str, dict] = {}
     for e in events:
         uid = e["uid"]
@@ -372,6 +388,9 @@ def _aggregate_users(events: list[dict]) -> list[dict]:
         s["tools"].add(e["tool"])
         s["top_tools"][e["tool"]] += 1
 
+    user_tokens: dict[str, int] = {}
+    for te in (token_events or []):
+        user_tokens[te["uid"]] = user_tokens.get(te["uid"], 0) + te["tokens"]
     result = []
     for uid in sorted(stats, key=lambda u: stats[u]["count"], reverse=True):
         s = stats[uid]
@@ -384,6 +403,7 @@ def _aggregate_users(events: list[dict]) -> list[dict]:
             "team_emoji": TEAM_EMOJIS.get(team, ""),
             "calls": s["count"],
             "threads": len(s["threads"]),
+            "tokens": user_tokens.get(uid, 0),
             "tools": len(s["tools"]),
             "calls_per_thread": round(s["count"] / len(s["threads"]), 1),
             "tool1": f"{top[0][0]} ({top[0][1]:,})" if len(top) > 0 else "",
@@ -599,13 +619,15 @@ def _build_window(
     skill_events: list[dict],
     workflow_events: list[dict],
     days: int | None,
+    token_events: list[dict] | None = None,
 ) -> dict[str, list[dict]]:
     te = _filter_by_window(tool_events, days)
     se = _filter_by_window(skill_events, days)
     we = _filter_by_window(workflow_events, days)
+    tke = _filter_by_window(token_events or [], days)
 
     tools = _aggregate_tools(te)
-    users = _aggregate_users(te)
+    users = _aggregate_users(te, tke)
     skills = _aggregate_skills(se)
     teams = _build_teams(users)
     workflows = _aggregate_workflows(we)
@@ -649,11 +671,17 @@ async def handler(_inp: dict[str, Any], ctx: WorkflowContext) -> dict[str, Any]:
         step_kind="gather",
     )
 
+    token_events = await ctx.step(
+        "fetch_token_events",
+        lambda: _fetch_token_events(pool, thread_users),
+        step_kind="gather",
+    )
+
     windowed = {}
     for label, days in WINDOWS.items():
         windowed[label] = await ctx.step(
             f"build_window_{label}",
-            lambda d=days: _build_window(tool_events, skill_events, workflow_events, d),
+            lambda d=days: _build_window(tool_events, skill_events, workflow_events, d, token_events),
             step_kind="transform",
         )
 

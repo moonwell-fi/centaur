@@ -64,6 +64,16 @@ def _cell(text: Any) -> dict:
     return {"type": "raw_text", "text": t}
 
 
+def _fmt_tokens(n: int) -> str:
+    if n >= 1_000_000_000:
+        return f"{n / 1_000_000_000:.1f}B"
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}K"
+    return str(n)
+
+
 def _build_blocks(
     stats: dict,
     new_apps: list[dict],
@@ -146,12 +156,12 @@ def _build_blocks(
 
     # Users table
     blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "*Top Centaur Usage by User* :catjam:"}})
-    user_rows = [[_cell("#"), _cell("User"), _cell("Team"), _cell("Sessions")]]
+    user_rows = [[_cell("#"), _cell("User"), _cell("Team"), _cell("Sessions"), _cell("Tokens")]]
     for i, u in enumerate(users):
-        user_rows.append([_cell(i + 1), _cell(u["name"]), _cell(u["team"]), _cell(u["threads"])])
+        user_rows.append([_cell(i + 1), _cell(u["name"]), _cell(u["team"]), _cell(u["threads"]), _cell(_fmt_tokens(u.get("tokens", 0)))])
     blocks.append({
         "type": "table",
-        "column_settings": [{"align": "center"}, {"align": "left"}, {"align": "left"}, {"align": "right"}],
+        "column_settings": [{"align": "center"}, {"align": "left"}, {"align": "left"}, {"align": "right"}, {"align": "right"}],
         "rows": user_rows,
     })
     blocks.append({"type": "context", "elements": [{"type": "mrkdwn", "text": f"<{DASHBOARD_URL}/users|See live user leaderboard>"}]})
