@@ -34,12 +34,17 @@ class DeployRequest(BaseModel):
     name: str
     repo_url: str
     port: int = 3000
+    is_public: bool = False
     basic_auth_user: str | None = None
     basic_auth_pass: str | None = None
     env: dict[str, str] | None = None
     build_cmd: str | None = None
     start_cmd: str | None = None
     created_by: str | None = None
+
+
+class AccessRequest(BaseModel):
+    is_public: bool
 
 
 @router.post("")
@@ -50,6 +55,12 @@ async def deploy_app(request: Request, body: DeployRequest):
     existing = await pool.fetchrow("SELECT id FROM apps WHERE name = $1", body.name)
     if existing:
         raise HTTPException(status_code=409, detail=f"App '{body.name}' already exists")
+
+    if body.is_public and (body.basic_auth_user or body.basic_auth_pass):
+        raise HTTPException(
+            status_code=400,
+            detail="Public apps cannot also set basic auth credentials",
+        )
 
     pass_hash = (
         hashlib.sha256(body.basic_auth_pass.encode()).hexdigest()
@@ -63,6 +74,7 @@ async def deploy_app(request: Request, body: DeployRequest):
             name=body.name,
             repo_url=body.repo_url,
             port=body.port,
+            is_public=body.is_public,
             basic_auth_user=body.basic_auth_user,
             basic_auth_pass_hash=pass_hash,
             env_json=body.env,
@@ -83,7 +95,7 @@ async def list_apps(request: Request):
     """List all deployed apps."""
     pool = request.app.state.db_pool
     rows = await pool.fetch(
-        "SELECT id, name, repo_url, status, port, created_by, created_at, updated_at "
+        "SELECT id, name, repo_url, status, port, is_public, created_by, created_at, updated_at "
         "FROM apps ORDER BY created_at DESC"
     )
     return {
@@ -94,6 +106,7 @@ async def list_apps(request: Request):
                 "repo_url": r["repo_url"],
                 "status": r["status"],
                 "port": r["port"],
+                "is_public": r["is_public"],
                 "created_by": r["created_by"],
                 "created_at": r["created_at"].isoformat() if r["created_at"] else None,
                 "updated_at": r["updated_at"].isoformat() if r["updated_at"] else None,
@@ -109,7 +122,8 @@ async def get_app(request: Request, name: str):
     pool = request.app.state.db_pool
     row = await pool.fetchrow(
         "SELECT id, name, repo_url, container_id, status, port, "
-        "basic_auth_user, env_json, build_cmd, start_cmd, created_by, "
+        "is_public, basic_auth_user, basic_auth_pass_hash, env_json, build_cmd, "
+        "start_cmd, created_by, "
         "build_log, error_text, created_at, updated_at FROM apps WHERE name = $1",
         name,
     )
@@ -127,7 +141,10 @@ async def get_app(request: Request, name: str):
         "container_id": row["container_id"][:12] if row["container_id"] else None,
         "status": row["status"],
         "port": row["port"],
-        "has_basic_auth": bool(row["basic_auth_user"]),
+        "is_public": row["is_public"],
+        "has_basic_auth": bool(
+            row["basic_auth_user"] or row["basic_auth_pass_hash"]
+        ),
         "env": env_json,
         "build_cmd": row["build_cmd"],
         "start_cmd": row["start_cmd"],
@@ -136,6 +153,28 @@ async def get_app(request: Request, name: str):
         "error_text": row["error_text"],
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+    }
+
+
+@router.post("/_manage/{name}/access")
+async def update_app_access(request: Request, name: str, body: AccessRequest):
+    """Update whether an app is publicly reachable without auth."""
+    pool = request.app.state.db_pool
+    row = await pool.fetchrow(
+        "UPDATE apps SET is_public = $2, updated_at = NOW() WHERE name = $1 "
+        "RETURNING name, is_public, basic_auth_user, basic_auth_pass_hash",
+        name,
+        body.is_public,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail=f"App '{name}' not found")
+
+    return {
+        "name": row["name"],
+        "is_public": row["is_public"],
+        "has_basic_auth": bool(
+            row["basic_auth_user"] or row["basic_auth_pass_hash"]
+        ),
     }
 
 
@@ -229,14 +268,16 @@ async def _do_proxy(request: Request, name: str, path: str):
     """Shared proxy logic used by both path-based and subdomain routes."""
     pool = request.app.state.db_pool
     row = await pool.fetchrow(
-        "SELECT container_id, status, port, basic_auth_user, basic_auth_pass_hash "
+        "SELECT container_id, status, port, is_public, basic_auth_user, basic_auth_pass_hash "
         "FROM apps WHERE name = $1",
         name,
     )
     if not row:
         raise HTTPException(status_code=404, detail=f"App '{name}' not found")
 
-    if row["basic_auth_user"] or row["basic_auth_pass_hash"]:
+    if row["is_public"]:
+        authorized = True
+    elif row["basic_auth_user"] or row["basic_auth_pass_hash"]:
         authorized = _is_valid_basic_auth(
             request,
             expected_user=row["basic_auth_user"],

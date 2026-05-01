@@ -89,6 +89,7 @@ class AppManager:
         name: str,
         repo_url: str,
         port: int = 3000,
+        is_public: bool = False,
         basic_auth_user: str | None = None,
         basic_auth_pass_hash: str | None = None,
         env_json: dict | None = None,
@@ -116,12 +117,13 @@ class AppManager:
         # Insert DB row
         await pool.execute(
             "INSERT INTO apps (id, name, repo_url, status, port, "
-            "basic_auth_user, basic_auth_pass_hash, env_json, build_cmd, start_cmd, created_by) "
-            "VALUES ($1, $2, $3, 'building', $4, $5, $6, $7, $8, $9, $10)",
+            "is_public, basic_auth_user, basic_auth_pass_hash, env_json, build_cmd, start_cmd, created_by) "
+            "VALUES ($1, $2, $3, 'building', $4, $5, $6, $7, $8, $9, $10, $11)",
             app_id,
             name,
             repo_url,
             port,
+            is_public,
             basic_auth_user,
             basic_auth_pass_hash,
             json.dumps(env_json or {}),
@@ -323,7 +325,7 @@ class AppManager:
     async def restart_app(self, pool: asyncpg.Pool, name: str) -> dict:
         """Restart an app: stop old container, redeploy."""
         row = await pool.fetchrow(
-            "SELECT id, repo_url, port, basic_auth_user, basic_auth_pass_hash, "
+            "SELECT id, repo_url, port, is_public, basic_auth_user, basic_auth_pass_hash, "
             "env_json, build_cmd, start_cmd, created_by FROM apps WHERE name = $1",
             name,
         )
@@ -342,6 +344,7 @@ class AppManager:
             name=name,
             repo_url=row["repo_url"],
             port=row["port"],
+            is_public=row["is_public"],
             basic_auth_user=row["basic_auth_user"],
             basic_auth_pass_hash=row["basic_auth_pass_hash"],
             env_json=env_json,

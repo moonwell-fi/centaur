@@ -78,6 +78,7 @@ async def test_app_proxy_requires_global_auth_for_unconfigured_apps(
         "container_id": "container-public",
         "status": "running",
         "port": 3000,
+        "is_public": False,
         "basic_auth_user": None,
         "basic_auth_pass_hash": None,
     }
@@ -157,6 +158,7 @@ async def test_app_proxy_requires_auth_only_for_protected_apps(
         "container_id": "container-private",
         "status": "running",
         "port": 3000,
+        "is_public": False,
         "basic_auth_user": "hackathon",
         "basic_auth_pass_hash": hashlib.sha256("secret123".encode()).hexdigest(),
     }
@@ -221,6 +223,7 @@ async def test_app_proxy_allows_x_api_key_for_unconfigured_apps(
         "container_id": "container-public",
         "status": "running",
         "port": 3000,
+        "is_public": False,
         "basic_auth_user": None,
         "basic_auth_pass_hash": None,
     }
@@ -272,3 +275,98 @@ async def test_app_proxy_allows_x_api_key_for_unconfigured_apps(
     assert response.status_code == 200
     assert api_key_received == ["test-key-123"]
     assert calls == ["http://10.0.0.5:3000/"]
+
+
+@pytest.mark.asyncio
+async def test_app_proxy_allows_public_apps_without_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.routers import apps as apps_router
+
+    pool = AsyncMock()
+    pool.fetchrow.return_value = {
+        "container_id": "container-public",
+        "status": "running",
+        "port": 3000,
+        "is_public": True,
+        "basic_auth_user": None,
+        "basic_auth_pass_hash": None,
+    }
+
+    request = SimpleNamespace(
+        headers={},
+        url=SimpleNamespace(query="city=nyc"),
+        client=SimpleNamespace(host="10.0.0.2"),
+        method="GET",
+        app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)),
+        body=AsyncMock(return_value=b""),
+    )
+
+    async def fail_verify_api_key(request, x_api_key=None):
+        raise AssertionError("public apps should not require API keys")
+
+    async def fail_global_auth(request, pool):
+        raise AssertionError("public apps should not require global auth")
+
+    monkeypatch.setattr(apps_router, "verify_api_key", fail_verify_api_key)
+    monkeypatch.setattr(apps_router, "_check_global_auth", fail_global_auth)
+
+    calls: list[str] = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, method, url, headers=None, content=None):
+            calls.append(url)
+            return httpx.Response(200, content=b"ok")
+
+    monkeypatch.setattr(
+        apps_router.app_manager,
+        "get_container_ip",
+        AsyncMock(return_value="10.0.0.6"),
+    )
+    monkeypatch.setattr(apps_router.httpx, "AsyncClient", FakeAsyncClient)
+
+    response = await apps_router._do_proxy(request, "public-app", "")
+
+    assert response.status_code == 200
+    assert calls == ["http://10.0.0.6:3000/?city=nyc"]
+
+
+@pytest.mark.asyncio
+async def test_update_app_access_sets_public_flag() -> None:
+    from api.routers import apps as apps_router
+
+    pool = AsyncMock()
+    pool.fetchrow.return_value = {
+        "name": "venue-scout",
+        "is_public": True,
+        "basic_auth_user": None,
+        "basic_auth_pass_hash": None,
+    }
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)))
+
+    response = await apps_router.update_app_access(
+        request,
+        "venue-scout",
+        apps_router.AccessRequest(is_public=True),
+    )
+
+    assert response == {
+        "name": "venue-scout",
+        "is_public": True,
+        "has_basic_auth": False,
+    }
+    pool.fetchrow.assert_awaited_once_with(
+        "UPDATE apps SET is_public = $2, updated_at = NOW() WHERE name = $1 "
+        "RETURNING name, is_public, basic_auth_user, basic_auth_pass_hash",
+        "venue-scout",
+        True,
+    )
