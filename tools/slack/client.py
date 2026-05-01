@@ -1,4 +1,4 @@
-"""Slack API client - bot token only (no user token required)."""
+"""Slack API client with bot operations plus optional native search user token."""
 
 from datetime import datetime, timezone
 import json
@@ -16,7 +16,12 @@ from slack_sdk.errors import SlackApiError
 # Cache for channel list to avoid repeated API calls
 
 class SlackClient:
-    """Slack API client — bot token only (no user token required)."""
+    """Slack API client.
+
+    Most operations use the bot token. Native Slack search can optionally use a
+    dedicated user token via ``SLACK_SEARCH_TOKEN`` so workspace-wide search
+    stays on Slack's fast path without expanding the bot's access model.
+    """
 
     # Cache settings
     _CACHE_DIR = Path.home() / ".cache" / "paradigm-slack"
@@ -28,7 +33,7 @@ class SlackClient:
     _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
     _NUMERIC_TS_RE = re.compile(r"^\d+(?:\.\d+)?$")
 
-    def __init__(self, bot_token: str | None = None):
+    def __init__(self, bot_token: str | None = None, search_token: str | None = None):
         token = bot_token or os.environ.get("SLACK_BOT_TOKEN", "")
         if not token:
             raise RuntimeError(
@@ -36,7 +41,9 @@ class SlackClient:
                 "Get one at https://api.slack.com/apps → OAuth & Permissions → Bot User OAuth Token"
             )
         self.token = token
+        self.search_token = (search_token or os.environ.get("SLACK_SEARCH_TOKEN", "")).strip()
         self._client = WebClient(token=token)
+        self._search_client = WebClient(token=self.search_token) if self.search_token else self._client
         self._user_cache: dict[str, str] = {}
         self._ratelimit_deadlines: dict[str, float] = {}
 
@@ -454,9 +461,10 @@ class SlackClient:
     ) -> list[dict]:
         """Search messages using Slack's native search.messages API.
 
-        Uses the search:read.public scope for fast, workspace-wide search.
-        Falls back to local channel scanning if the native API fails
-        (e.g. missing scope).
+        Uses Slack's native search.messages API for fast, workspace-wide
+        search. When ``SLACK_SEARCH_TOKEN`` is configured, the native call runs
+        with that dedicated user token and its ``search:read`` scope. Falls
+        back to local channel scanning if the native API fails.
 
         Supports Slack search modifiers in the query string:
             in:#channel, from:@user, before:YYYY-MM-DD, after:YYYY-MM-DD,
@@ -495,7 +503,7 @@ class SlackClient:
     ) -> list[dict]:
         """Search using Slack's native search.messages API."""
         response = self._retry_on_ratelimit(
-            self._client.api_call,
+            self._search_client.api_call,
             "search.messages",
             method_key="search.messages",
             params={"query": query, "count": max_results, "sort": "timestamp"},
@@ -1388,7 +1396,10 @@ class SlackClient:
 
 def _client() -> SlackClient:
     from centaur_sdk import secret
-    return SlackClient(bot_token=secret("SLACK_BOT_TOKEN"))
+    return SlackClient(
+        bot_token=secret("SLACK_BOT_TOKEN"),
+        search_token=secret("SLACK_SEARCH_TOKEN", ""),
+    )
 
 
 def get_slack_client() -> SlackClient:

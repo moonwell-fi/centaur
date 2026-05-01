@@ -16,6 +16,7 @@ class _FakeWebClient:
         self.last_kwargs = None
         self.history_calls: list[dict] = []
         self.history_pages: list[dict] = []
+        self.api_calls: list[tuple[str, dict]] = []
 
     def chat_postMessage(self, **kwargs):  # noqa: N802
         self.last_kwargs = kwargs
@@ -25,11 +26,16 @@ class _FakeWebClient:
         self.history_calls.append(kwargs)
         return self.history_pages.pop(0)
 
+    def api_call(self, method: str, *, params: dict):
+        self.api_calls.append((method, params))
+        return {"ok": True, "messages": {"matches": []}}
+
 
 def _make_client() -> tuple[SlackClient, _FakeWebClient]:
     client = SlackClient.__new__(SlackClient)
     fake_web_client = _FakeWebClient()
     client._client = fake_web_client
+    client._search_client = fake_web_client
     client._user_cache = {}
     client._ratelimit_deadlines = {}
     client._resolve_channel = lambda channel: "C123"  # type: ignore[method-assign]
@@ -133,6 +139,46 @@ def test_get_channel_history_page_paginates_with_date_window() -> None:
     assert result["count"] == 3
     assert result["has_more"] is False
     assert result["messages"][1]["text"] == "hi @alice"
+
+
+def test_native_search_uses_dedicated_search_client() -> None:
+    client, fake_bot_client = _make_client()
+    fake_search_client = _FakeWebClient()
+    fake_search_client.api_call = lambda method, *, params: {  # type: ignore[method-assign]
+        "ok": True,
+        "messages": {
+            "matches": [
+                {
+                    "user": "U1",
+                    "text": "deploy <@U2>",
+                    "ts": "200.000000",
+                    "permalink": "https://slack.com/archives/C123/p200000000",
+                    "channel": {"id": "C123", "name": "paradigm-pulse"},
+                    "thread_ts": "200.000000",
+                    "reply_count": 2,
+                }
+            ]
+        },
+    }
+    client._search_client = fake_search_client
+    client._get_user_cache = lambda: {"U1": "alice", "U2": "bob"}  # type: ignore[method-assign]
+
+    result = client._search_messages_native("deploy", max_results=5)
+
+    assert result == [
+        {
+            "channel": "paradigm-pulse",
+            "channel_id": "C123",
+            "user": "alice",
+            "user_id": "U1",
+            "text": "deploy @bob",
+            "timestamp": "200.000000",
+            "permalink": "https://slack.com/archives/C123/p200000000",
+            "thread_ts": "200.000000",
+            "reply_count": 2,
+        }
+    ]
+    assert fake_bot_client.api_calls == []
 
 
 def test_sync_channel_history_uses_watermark_lookback() -> None:
