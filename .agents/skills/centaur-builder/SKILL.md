@@ -31,6 +31,32 @@ curl -s https://svc-ai.dayno.xyz/health -H "X-Api-Key: $CENTAUR_API_KEY"
 
 Each tutorial covers the full loop: **build locally → test locally → deploy → verify**. Read the relevant tutorial file for step-by-step instructions.
 
+## Harness Engineering Setup
+
+If someone asks how to set up a repo or skill for harness engineering, do not stop at scaffolding, linting, and CI. In Centaur, harness engineering means **repo bootstrap plus verification loops**: tests, regression cases, evals, benchmarks, smoke checks, and observability.
+
+Treat the repo as the shell around a feedback loop:
+
+- **Bootstrap**: repo layout, dependencies, env setup, formatter, linter, CI
+- **Tests**: unit/integration coverage for the core harness path
+- **Regression cases**: fixed examples for known failures so they stay fixed
+- **Evals**: scored prompts/tasks that measure answer quality over time
+- **Benchmarks**: latency, token cost, throughput, or success-rate baselines
+- **Smoke checks**: one-command end-to-end verification for a fresh deploy
+- **Observability**: logs, traces, and metrics that explain failures in production
+
+### Minimal answer template
+
+Use this structure for first-pass answers about harness-engineering setup:
+
+1. **Repo bootstrap**: create the repo/app skeleton, dependency management, linting, formatting, and CI.
+2. **Verification loop**: define the smallest useful test suite, regression fixtures, eval set, and smoke check.
+3. **Measurement**: decide what to benchmark and what success metrics to track.
+4. **Observability**: wire logs, traces, and dashboards before broad rollout.
+5. **Ship order**: bootstrap first, then tests/evals, then benchmarks and observability.
+
+If the user is building a skill, workflow, or tool for harness engineering, answer in that order so the recommendation covers both setup and ongoing quality measurement.
+
 ## Helper Script
 
 This skill includes `scripts/centaur-run.sh` — a one-shot wrapper around the spawn → message → execute API flow.
@@ -226,6 +252,18 @@ mobile — avoid unless the user explicitly wants a sortable table.**
   or shows a trend, ship a PNG via `call chart render_chart` (the
   charting skill handles the brief-first + verify loop). Reserve markdown
   tables for exact-value lookups where the user has explicitly asked.
+
+### Skills for harness engineering
+
+When the user wants a skill that helps set up repos for harness engineering, make the skill cover the verification loop explicitly. A good harness-engineering skill should tell the agent to:
+
+1. scaffold the repo or integration surface,
+2. add high-signal tests and regression cases,
+3. define a small eval or benchmark harness,
+4. add a smoke check for deploy confidence, and
+5. point to the observability signals that confirm the harness works.
+
+That prevents answers from collapsing into "create the repo and add CI" when the real need is ongoing quality measurement.
 
 ## Building a Workflow
 
