@@ -1,6 +1,6 @@
 ---
 name: sourcer
-description: "Sources and ranks candidates against a job description by parsing the JD, searching LinkedIn, GitHub, and X, enforcing hard location and portfolio-company filters, and publishing a Google Sheet shortlist. Use when asked to source candidates, build a recruiting list, or rank prospects for an open role."
+description: "Sources and ranks candidates against a job description by parsing the JD, searching LinkedIn, GitHub, and X, enforcing hard user constraints, and publishing a Google Sheet shortlist or refined reslate tab. Use when asked to source candidates, build a recruiting list, rerun a role with tighter calibration, or rank prospects for an open role."
 ---
 
 # Sourcer
@@ -17,7 +17,7 @@ Finds high-signal candidates for a single role and publishes a ranked Google She
 
 - A full JD or enough role context to reconstruct one.
 - The requesting Slack user ID if the sheet must be shared automatically.
-- Optional: target count, excluded companies, preferred school backgrounds, or specific search seeds.
+- Optional: target count, excluded companies, preferred school backgrounds, specific search seeds, or an existing spreadsheet link/ID when refining a prior slate.
 
 If the user does not specify a target count, default to 25 ranked candidates.
 
@@ -34,7 +34,13 @@ Produce a Google Sheet with exactly these columns:
 - `Score`
 - `Notes`
 
-Share the sheet with the requesting user.
+Fresh slate:
+- Create a new sheet and share it with the requesting user.
+
+Refined slate:
+- Preserve the existing spreadsheet.
+- Add a new tab for the revised results.
+- Write a short change log above the candidate table explaining what changed in the rerank or reslate.
 
 ## Tooling Rules
 
@@ -45,7 +51,18 @@ Share the sheet with the requesting user.
 
 ## Workflow
 
-1. Parse the JD into a structured search spec.
+1. Choose the sourcing mode before doing any search work.
+
+Fresh slate:
+- The user is asking for a brand-new sheet or has not referenced prior results.
+
+Refine existing slate:
+- The user is retrying the same role, tightening calibration, rejecting prior candidates, or asking to keep working in the same spreadsheet.
+- Require the existing sheet link or spreadsheet ID. If it is not in the thread, ask for it before publishing.
+
+Do not treat a retry as a fresh run.
+
+2. Parse the JD and any follow-up feedback into a structured search spec.
 
 Capture:
 - role type
@@ -56,31 +73,42 @@ Capture:
 - hard location rules
 - compensation or timing clues if present
 
-Write the spec in the working notes before searching. If the location is ambiguous, ask one short clarifying question before sourcing.
+If the user is refining a prior slate, write a calibration checklist in your working notes before sourcing:
+- Inclusion checklist: explicit positives and must-have attributes to amplify.
+- Exclusion checklist: explicit negatives and traits to eliminate.
 
-2. Identify the requester email.
+Treat these as hard filters whenever the user states them explicitly:
+- company set
+- geography
+- hands-on depth
+- school signal
+- leadership scope
 
-If the request came from Slack, run:
+Write 2-4 short change-log bullets that explain how this pass differs from the prior pass. If any of those constraints are materially ambiguous, ask one short clarifying question before sourcing.
+
+3. Identify the requester email when needed.
+
+If the request came from Slack and you are creating a new sheet, run:
 
 ```bash
 call slack get_user_email '{"user_id":"<requester_slack_user_id>"}'
 ```
 
-If Slack user ID is unavailable, ask for the sharing email before creating the sheet.
+If you are refining an existing sheet, preserve the current sharing setup unless the user explicitly asks you to share it with someone else.
 
-3. Build the search plan.
+4. Build the search plan.
 
 Create search strings for each source:
 - LinkedIn title + company background + location
 - GitHub language/domain + role keywords + location
 - X/Twitter bio keywords + employer history + location
 
-Prefer multiple narrow searches over one broad search. Start with the JD's must-have constraints, then layer in high-signal background filters such as:
+Prefer multiple narrow searches over one broad search. Start with the hard filters first, then layer in high-signal background filters such as:
 - elite CS / math / engineering programs
 - early employee windows at hypergrowth companies
 - direct domain adjacency
 
-4. Gather candidates from multiple sources.
+5. Gather candidates from multiple sources.
 
 LinkedIn:
 - Use `browser-use` if available to search profiles and capture current title, company, location, and LinkedIn URL.
@@ -98,7 +126,7 @@ Structured supplement:
 - Use `call harmonic search_people_recruiting` when you need a fast candidate pool for a role/location combination.
 - Use `call harmonic enrich_person` for finalists when you need cleaner work-history or education data.
 
-5. Normalize every candidate into one record.
+6. Normalize every candidate into one record.
 
 For each candidate, collect:
 - `name`
@@ -116,20 +144,28 @@ For each candidate, collect:
 - `scores.talent_density`
 - `scores.timing_window`
 
-Keep the notes factual. Include why the person is interesting, key evidence, and any uncertainty.
+Keep the notes factual. Include why the person is interesting, which hard filters they satisfy, and any uncertainty.
 
-6. Enforce hard filters before scoring.
+7. Enforce hard filters before scoring.
 
 Location:
-- If the JD has a hard location requirement, exclude anyone clearly outside it.
+- If the JD or refinement request has a hard location requirement, exclude anyone clearly outside it.
 - If the candidate location is ambiguous and you cannot resolve it quickly from profile evidence, exclude the candidate instead of guessing.
+
+Feedback-driven hard filters:
+- When the user narrows to explicit companies, only include candidates from those companies or direct equivalents the user approved.
+- When the user asks for stronger hands-on depth, exclude candidates whose evidence is mostly product, strategy, or people management.
+- When the user asks for stronger school signal, exclude candidates without the requested academic foundation or equivalent technical proof.
+- When the user asks for leaders, exclude IC-only profiles unless the user explicitly broadened the scope.
 
 Paradigm portfolio exclusion:
 - Pull the current portfolio company list from `call paradigmdb db_organizations '{"limit":200}'`.
 - Exclude anyone whose current employer is a Paradigm portfolio company.
 - Do not exclude former employees of portfolio companies unless the user asked for that.
 
-7. Add the Paradigm follow signal.
+If the hard filters collapse the market, say that the market is thin and return the smaller high-conviction slate. Do not pad the sheet with weak matches.
+
+8. Add the Paradigm follow signal.
 
 This signal is a priority boost, not an inclusion requirement.
 
@@ -139,7 +175,7 @@ This signal is a priority boost, not an inclusion requirement.
 
 When you do have handles, compare the candidate's X handle against Paradigm-team following lists using `twitter.get_following`. Add the evidence to notes, for example: `Followed by 2 Paradigm team accounts on X.`
 
-8. Score every candidate on the five weighted criteria.
+9. Score every candidate on the five weighted criteria.
 
 Use a 0-5 subscore for each criterion.
 
@@ -174,9 +210,9 @@ Scoring rubric:
 
 Prioritize elite university alumni, early employees at hypergrowth startups, and candidates followed by Paradigm team members on X when the evidence supports it.
 
-9. Publish the shortlist.
+10. Publish the shortlist.
 
-Write the normalized candidate list to JSON, then run:
+Fresh slate:
 
 ```bash
 uv run .agents/skills/sourcer/scripts/sourcer.py publish \
@@ -185,16 +221,30 @@ uv run .agents/skills/sourcer/scripts/sourcer.py publish \
   --share-with "<requester_email>"
 ```
 
-The script computes the weighted score, sorts the candidates, creates the Google Sheet, writes the `Candidates` tab, and shares it with the requester.
+Refine existing slate:
+
+```bash
+uv run .agents/skills/sourcer/scripts/sourcer.py publish \
+  --input /tmp/sourcer-candidates.json \
+  --title "<Role> Sourcer Shortlist" \
+  --spreadsheet-id "<existing_sheet_id_or_url>" \
+  --tab-name "<unique refined tab name>" \
+  --change-log-entry "<What tightened in this pass>" \
+  --change-log-entry "<What you excluded this time>" \
+  --change-log-entry "<Why the ranking or count changed>"
+```
+
+The script computes the weighted score, sorts the candidates, and either creates a new Google Sheet or appends a new tab to the existing spreadsheet with the change log above the candidate table.
 
 Use `--top-n <count>` if you want to cap the exported set.
 
-10. Report back with the artifact.
+11. Report back with the artifact.
 
 Return:
 - the Google Sheet link
 - how many candidates made the final sheet
 - the top 3-5 names with one-line reasons
+- whether the market was thin after the hard filters
 - any hard blockers such as missing location data or unavailable browser automation
 
 ## Candidate JSON Shape
@@ -228,8 +278,11 @@ The publishing script accepts either a bare array or an object with `candidates`
 
 - Never include someone currently at a Paradigm portfolio company.
 - Never relax a hard JD location constraint.
+- Never relax an explicit company, geography, hands-on depth, school-signal, or leadership-scope constraint from a retry.
 - Do not guess an email address.
 - Do not use private or non-consensual data sources.
 - Do not treat missing Paradigm-follow data as a negative signal.
 - Keep notes concise and evidence-based.
+- Do not pad a refined slate with weak candidates just to hit the previous count.
+- Do not treat retry feedback as informal commentary; convert it into the inclusion and exclusion checklist before re-sourcing.
 - If browser automation is unavailable, say so explicitly and continue with the best public-web and tool-backed fallback.
