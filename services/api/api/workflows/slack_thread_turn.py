@@ -14,6 +14,7 @@ WORKFLOW_NAME = "slack_thread_turn"
 
 _RECOVERY_COMMANDS = frozenset(
     {
+        "again",
         "continue",
         "do it again",
         "finish the job",
@@ -36,6 +37,7 @@ _RECOVERY_COMMANDS = frozenset(
     }
 )
 _RECOVERY_NORMALIZE_RE = re.compile(r"[^a-z0-9\s]+")
+_SLACK_ID_MENTION_RE = re.compile(r"^<@[WU][A-Z0-9]+>\s*[:,;-]?\s*(.*)$", re.IGNORECASE)
 _RECOVERY_CONTEXT_PREFIX = "Previous unresolved user request from this thread:\n"
 
 
@@ -66,8 +68,20 @@ class Input:
 
 
 def _normalize_recovery_command(text: str) -> str:
-    normalized = _RECOVERY_NORMALIZE_RE.sub(" ", text.lower())
-    return " ".join(normalized.split())
+    normalized = " ".join(_RECOVERY_NORMALIZE_RE.sub(" ", text.lower()).split())
+    if normalized in _RECOVERY_COMMANDS:
+        return normalized
+
+    # Slack app_mention event text uses ID mentions such as "<@U123> retry".
+    # Strip only that protocol shape so display-name prose stays conversational.
+    stripped = text.lstrip()
+    match = _SLACK_ID_MENTION_RE.match(stripped)
+    if match:
+        candidate = " ".join(_RECOVERY_NORMALIZE_RE.sub(" ", match.group(1).lower()).split())
+        if candidate in _RECOVERY_COMMANDS:
+            return candidate
+
+    return normalized
 
 
 def _extract_text_parts(parts: Any) -> str | None:

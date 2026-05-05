@@ -122,6 +122,7 @@ def test_recovery_command_paraphrases_are_recognized():
     from api.workflows.slack_thread_turn import _is_recovery_turn
 
     paraphrases_observed_in_prod = [
+        "again",
         "retry",
         "continue",
         "finish the job",
@@ -132,6 +133,8 @@ def test_recovery_command_paraphrases_are_recognized():
         "reread the thread",
         "go again",
         "do it again",
+        "<@U0AH5TRP0H0> again",
+        "<@U0AH5TRP0H0> please continue",
     ]
     for text in paraphrases_observed_in_prod:
         assert _is_recovery_turn([{"type": "text", "text": text}]), (
@@ -144,6 +147,17 @@ def test_recovery_command_paraphrases_are_recognized():
         "look at the root cause of this bug",
         "let's go again to the office",
         "do it again but with the new params",
+        "@U0AH5TRP0H0 again",
+        "@Centaur AI again",
+        "@Centaur AI, please retry",
+        "@Centaur AI continue editing the document",
+        "@Centaur AI thanks again",
+        "@Centaur AI hey can you continue",
+        "@U0AH5TRP0H0 thanks again",
+        "@U0AH5TRP0H0 do it again but with the new params",
+        "<@U0AH5TRP0H0> thanks again",
+        "<@U0AH5TRP0H0> hey can you continue",
+        "<@U0AH5TRP0H0> look at the root cause of this bug",
     ]
     for text in not_recovery:
         assert not _is_recovery_turn([{"type": "text", "text": text}]), (
@@ -248,6 +262,57 @@ async def test_slack_thread_turn_hydrates_retry_with_last_substantive_user_ask(d
             ),
         },
         {"type": "text", "text": "retry"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_slack_thread_turn_hydrates_slack_id_mention_prefixed_again(db_pool):
+    from api.workflow_engine import WorkflowContext
+    from api.workflows.slack_thread_turn import Input, handler
+
+    run_id = f"wfr_{uuid.uuid4().hex[:16]}"
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+
+    await db_pool.execute(
+        "INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at) VALUES "
+        "($1, $2, 'user', $3::jsonb, '{}'::jsonb, NOW() - INTERVAL '3 minutes'), "
+        "($4, $2, 'assistant', $5::jsonb, '{}'::jsonb, NOW() - INTERVAL '2 minutes')",
+        f"msg:{thread_key}:ask",
+        thread_key,
+        json.dumps([{"type": "text", "text": "Draft the partner update and include the shipping risks."}]),
+        f"msg:{thread_key}:assistant-1",
+        json.dumps([{"type": "text", "text": "I need the original request again."}]),
+    )
+
+    ctx = WorkflowContext(
+        pool=db_pool,
+        run_id=run_id,
+        checkpoints={},
+        lease_s=30.0,
+        worker_id="w1",
+    )
+    do_agent_turn_mock = AsyncMock(return_value={"ok": True, "execution_id": "exe-1"})
+
+    with patch("api.workflow_engine.do_agent_turn", new=do_agent_turn_mock):
+        await handler(
+            Input(
+                thread_key=thread_key,
+                parts=[{"type": "text", "text": "<@U0AH5TRP0H0> again"}],
+                message_id="msg-current",
+            ),
+            ctx,
+        )
+
+    hydrated_parts = do_agent_turn_mock.await_args.kwargs["parts"]
+    assert hydrated_parts == [
+        {
+            "type": "text",
+            "text": (
+                "Previous unresolved user request from this thread:\n"
+                "Draft the partner update and include the shipping risks."
+            ),
+        },
+        {"type": "text", "text": "<@U0AH5TRP0H0> again"},
     ]
 
 
