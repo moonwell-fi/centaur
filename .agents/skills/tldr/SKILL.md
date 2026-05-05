@@ -1,11 +1,11 @@
 ---
 name: tldr
-description: "Meeting TLDR / company brief generator for pre-meeting prep in the DEFAULT (non-invest) harness. Takes a company URL or name and produces a Coinbase-style slide-deck-formatted briefing with business context, team profiles, recent news, talking points, and Paradigm portfolio connections. Use when the user explicitly asks for a 'tldr', 'brief me on', 'company brief', 'prep for meeting with X', 'meeting prep for X' in a general-purpose thread. DO NOT USE when running the invest persona (--invest) — the invest persona has its own Phase 1 intake + MIQ flow and its own voice rules that this skill's output format directly violates. DO NOT USE for 'dd on X' or 'diligence on X' when the user is clearly forming an investment view — those are invest-persona Phase 1 requests, not TLDR requests."
+description: "Meeting TLDR / company brief generator for pre-meeting prep in the DEFAULT (non-invest) harness. Takes a company URL, company name, or specific external-company question and produces either a public-source-first answer or a Coinbase-style slide-deck-formatted briefing with business context, team profiles, recent news, talking points, and Paradigm portfolio connections. Use when the user explicitly asks for a 'tldr', 'brief me on', 'company brief', 'prep for meeting with X', or 'meeting prep for X' in a general-purpose thread. DO NOT USE when running the invest persona (--invest) — the invest persona has its own Phase 1 intake + MIQ flow and its own voice rules that this skill's output format directly violates. DO NOT USE for 'dd on X' or 'diligence on X' when the user is clearly forming an investment view — those are invest-persona Phase 1 requests, not TLDR requests."
 ---
 
 # Meeting TLDR Generator
 
-Generate a Coinbase-style due diligence briefing for any company. Designed for pre-meeting prep — takes a company URL or name and returns a clean, decision-useful summary in under 60 seconds.
+Generate a Coinbase-style due diligence briefing or public-source answer for any company. Designed for pre-meeting prep and external-company questions — takes a company URL, company name, or specific question and returns a clean, decision-useful summary in under 60 seconds.
 
 ## Identity
 
@@ -88,6 +88,12 @@ still outstanding.
 The user will provide ONE of:
 - A company URL (e.g., `https://tempo.xyz`) — PREFERRED, extract company name from the domain
 - A company name (e.g., "Tempo" or "Bridge")
+- A specific company question (e.g., "Did <company> launch X with Y, and does it replace Z?")
+
+If the user asked a specific question, extract three things before you research:
+- the target company
+- the core question to answer
+- any named counterparties, products, or programs that need comparison
 
 ### Disambiguation
 
@@ -117,9 +123,84 @@ If the company is primarily non-English (e.g., a Korean protocol, a Brazilian ex
 - Translate findings into English for the brief.
 - Do NOT fabricate or guess at details that aren't clearly stated in the source material. If a translation is uncertain, note it.
 
+## Lane Selection
+
+Choose the lane before you start tool calls.
+
+### LANE A — External question / public-source first
+
+Use Lane A when the user is primarily asking an externally answerable question such as:
+- company news, partnerships, launches, acquisitions, or press releases
+- whether a JV, partner program, product line, or operating unit is separate from the parent company
+- whether one initiative replaces another
+- a narrow "what happened / what does this mean" question that can be answered from public sources
+
+Lane A rules:
+- Answer the core question first from public sources using `web_search` and `read_web_page`.
+- Treat Harmonic, Crunchbase, ParadigmDB, Granola, Slack, SimilarWeb, and SensorTower as optional enrichment.
+- If a private enrichment tool is unavailable, unauthorized, empty, or slow, continue and deliver the public-source answer anyway.
+- Never let a private-tool failure collapse the whole turn into raw auth text or a tooling error.
+- Keep the output question-first. Do not force the full company-brief template when the user asked a narrow question.
+
+Examples that should use Lane A:
+- "What did <company> announce with <partner>, and does it replace <program>?"
+- "Is <JV or initiative> a separate commercial entity or a go-to-market wrapper?"
+- "Summarize <company>'s latest announcement and what changed."
+- "Did <company> acquire or partner with <counterparty>, and why does it matter?"
+- "What is the relationship between <company> and <new offering>?"
+
+Paraphrases that should still use Lane A:
+- "Help me understand whether <initiative> stands on its own or sits inside the parent company."
+- "Give me the short version of the announcement and whether it changes the existing field team."
+
+### LANE B — Full company brief
+
+Use Lane B when the user wants comprehensive prep, such as:
+- a meeting brief or prep doc
+- a full company TLDR
+- team, investors, traction, and Paradigm context in one artifact
+
+Examples that should use Lane B:
+- "Prep me for a meeting with <company>."
+- "Give me a full company brief on <company>."
+- "Who are the team, investors, traction metrics, and Paradigm touchpoints for <company>?"
+
 ## Research Steps
 
-Execute ALL steps. Steps are organized into parallel batches — run all calls within a batch concurrently, then move to the next batch. Do not skip steps even if early results seem sufficient.
+Choose a lane first.
+
+- For Lane A, execute the public-source workflow below and add private enrichment only if it is available without blocking.
+- For Lane B, execute all batches in order. Steps are organized into parallel batches — run all calls within a batch concurrently, then move to the next batch.
+
+### LANE A — External question / public-source-first workflow
+
+1. Start with public web research in parallel:
+```
+web_search("<company> <core question>")
+web_search("<company> <counterparty or product> announcement partnership press release")
+web_search("site:<company_domain_if_known> <topic>")
+```
+
+2. Read the most authoritative sources before answering:
+- Use `read_web_page` on the company announcement, partner announcement, and 1-2 reputable third-party sources when available.
+- Prefer official company posts, partner posts, SEC filings, and direct reporting over summaries and SEO pages.
+
+3. Answer the core question directly:
+- Lead with the answer, then support it with the strongest 2-4 public-source facts.
+- Call out what is confirmed versus what remains unclear.
+- If the user asked a comparison question like "does this replace X," answer that exact comparison explicitly.
+
+4. Add optional enrichment only if it helps and is available:
+- Harmonic or Crunchbase for quick company/team/funding context
+- ParadigmDB, Granola, or Slack for internal context when access succeeds
+- SimilarWeb or SensorTower only if traction materially changes the answer
+
+5. Failure handling for Lane A:
+- If a private enrichment tool returns unauthorized, unavailable, or another recoverable tool error, omit that enrichment and continue.
+- Do not surface raw tool-error text as the user-visible answer.
+- If public sources conflict, say so plainly and cite the highest-authority sources you found.
+
+### LANE B — Full company brief
 
 ### BATCH 1 — Foundation (run all in parallel)
 
@@ -310,7 +391,7 @@ Apply these retries to ANY search step that comes back empty, not just Step 1. Y
 
 ## Output Format
 
-Start with a 1-line plain text summary, then present the full briefing inside a PLAIN code block (no language tag — use triple backticks with nothing after them). Do NOT write ```text or ```markdown — just ```.
+Start with a 1-line plain text summary, then present the main answer inside a PLAIN code block (no language tag — use triple backticks with nothing after them). Do NOT write ```text or ```markdown — just ```.
 
 Do NOT include inline source citations like [S1][S3] anywhere in the body.
 
@@ -318,6 +399,30 @@ On a correction turn, the referenced thread structure or the user's requested
 structure overrides the default TLDR template below. The default template is for
 first-pass delivery, not for stubbornly reusing after the user asks for a better
 format.
+
+### Template for LANE A question-first answers:
+
+Use this when the user asked a narrow externally answerable question. Answer the question directly instead of forcing the full company brief.
+
+```
+ANSWER: <direct answer to the user's core question>
+══════════════════════════════════════════════════════════════════════════════════════
+
+WHAT HAPPENED
+- <1-3 bullets on the announcement, partnership, launch, or structural fact>
+
+WHY IT MATTERS
+- <1-2 bullets on commercial, product, or organizational implications>
+
+WHAT IS STILL UNCLEAR
+- <only include if needed; otherwise omit>
+
+OPTIONAL COMPANY CONTEXT
+- <very short context on the company or counterparty if it improves the answer>
+
+SOURCES
+<up to 4 authoritative domains or publications, one per line, no duplicates>
+```
 
 ### Template for NON-PORTFOLIO companies:
 
@@ -465,6 +570,7 @@ SOURCES
 
 - The ENTIRE briefing goes inside one PLAIN code block — use ``` with NO language tag (not ```text, not ```markdown)
 - Precede it with a 1-line plain text summary outside the block
+- For Lane A, the code block should be a direct answer artifact, not the monolithic company brief
 - NEVER use ** bold, # headers, | pipe tables |, emojis, or [link](url) syntax anywhere
 - Use single backticks only outside code blocks for inline values
 - NO inline source citations like [S1][S3] anywhere in the body
@@ -492,6 +598,8 @@ SOURCES
 ## Error Handling
 
 - If the company URL returns nothing, fall back to name-based search
+- If the ask is externally answerable from public sources, do not block on private enrichment tools
+- If a private enrichment tool returns an auth failure, timeout, or availability error, continue with the public-source answer and omit that enrichment
 - If no recent news is found, note "No recent news found" and extend search to 180 days
 - If CoinGecko/DefiLlama return nothing, omit Token/On-chain rows in TRACTION & MARKET DATA
 - If no portfolio connections are plausible, say "No direct portfolio overlap identified — explore at meeting"
