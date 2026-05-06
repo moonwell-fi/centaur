@@ -18,3 +18,4 @@ build-backend = "hatchling.build"
 module = "client.py"
 hosts = ["api.legistorm.com"]
 secrets = ["LEGISTORM_API_KEY"]
+optional_secrets = ["LEGISTORM_ISSUES_ENDPOINT"]

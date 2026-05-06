@@ -1,10 +1,12 @@
 """LegiStorm Congressional API client."""
 
 
-import os
+import time
 from collections import defaultdict
+from typing import Any
 
 import httpx
+
 from centaur_sdk.tool_sdk import secret
 
 
@@ -30,6 +32,11 @@ class LegiStormClient:
         self._client: httpx.Client | None = None
         self._issue_endpoint: str | None = None
         self._issue_endpoint_checked = False
+        self._issue_portfolio_cache: dict[
+            tuple[Any, ...],
+            tuple[float, tuple[dict[int, list[dict]], dict]],
+        ] = {}
+        self._issue_portfolio_cache_ttl_s = 3600.0
 
     @property
     def client(self) -> httpx.Client:
@@ -58,9 +65,9 @@ class LegiStormClient:
             response.raise_for_status()
             return response.json()
         except httpx.HTTPStatusError as e:
-            raise RuntimeError(f"API error: {e.response.status_code} - {e.response.text}")
+            raise RuntimeError(f"API error: {e.response.status_code} - {e.response.text}") from e
         except httpx.RequestError as e:
-            raise RuntimeError(f"Request failed: {e}")
+            raise RuntimeError(f"Request failed: {e}") from e
 
     def raw_request(self, endpoint: str, params: dict | None = None) -> dict | list:
         """Make a raw API request to any LegiStorm Congress endpoint."""
@@ -80,7 +87,9 @@ class LegiStormClient:
 
     @staticmethod
     def _current_positions(staff_row: dict) -> list[dict]:
-        return [position for position in staff_row.get("positions", []) if position.get("is_current")]
+        return [
+            position for position in staff_row.get("positions", []) if position.get("is_current")
+        ]
 
     @staticmethod
     def _first_string(*values: object) -> str | None:
@@ -155,7 +164,7 @@ class LegiStormClient:
 
     @classmethod
     def _portfolio_kind_from_row(cls, row: dict) -> str:
-        lower_keys = {str(key).lower() for key in row.keys()}
+        lower_keys = {str(key).lower() for key in row}
         if any("caucus" in key for key in lower_keys):
             return "caucus_contact"
         return "issue"
@@ -173,7 +182,12 @@ class LegiStormClient:
 
         for row in cls._rows(data):
             staff_id = cls._extract_staff_id(row)
-            embedded_keys = ("issues", "legislative_issues", "issue_portfolios", "issue_assignments")
+            embedded_keys = (
+                "issues",
+                "legislative_issues",
+                "issue_portfolios",
+                "issue_assignments",
+            )
             embedded_seen = False
             for key in embedded_keys:
                 embedded = row.get(key)
@@ -182,12 +196,18 @@ class LegiStormClient:
                 embedded_seen = True
                 for item in embedded:
                     if isinstance(item, dict):
-                        add_portfolio(staff_id, cls._issue_name_from_row(item), cls._portfolio_kind_from_row(item))
+                        add_portfolio(
+                            staff_id,
+                            cls._issue_name_from_row(item),
+                            cls._portfolio_kind_from_row(item),
+                        )
                     elif isinstance(item, str):
                         add_portfolio(staff_id, item, "issue")
             if embedded_seen:
                 continue
-            add_portfolio(staff_id, cls._issue_name_from_row(row), cls._portfolio_kind_from_row(row))
+            add_portfolio(
+                staff_id, cls._issue_name_from_row(row), cls._portfolio_kind_from_row(row)
+            )
 
         return portfolios_by_staff
 
@@ -201,7 +221,7 @@ class LegiStormClient:
         return endpoint if endpoint.startswith("/") else f"/{endpoint}"
 
     def _candidate_issue_endpoints(self, issue_endpoint: str | None = None) -> list[str]:
-        explicit = issue_endpoint or os.environ.get("LEGISTORM_ISSUES_ENDPOINT")
+        explicit = issue_endpoint or secret("LEGISTORM_ISSUES_ENDPOINT", "")
         candidates: list[str] = []
         if explicit:
             candidates.append(self._normalize_endpoint(explicit))
@@ -220,8 +240,12 @@ class LegiStormClient:
         limit: int,
         page: int,
     ) -> list[dict]:
-        member_ids = sorted({member_id for row in staff_rows for member_id in self._extract_member_ids(row)})
-        office_ids = sorted({office_id for row in staff_rows for office_id in self._extract_office_ids(row)})
+        member_ids = sorted(
+            {member_id for row in staff_rows for member_id in self._extract_member_ids(row)}
+        )
+        office_ids = sorted(
+            {office_id for row in staff_rows for office_id in self._extract_office_ids(row)}
+        )
         staff_ids = sorted(
             {
                 staff_id
@@ -282,12 +306,40 @@ class LegiStormClient:
         page: int,
         issue_endpoint: str | None = None,
     ) -> tuple[dict[int, list[dict]], dict]:
+        cache_key = (
+            tuple(
+                sorted(
+                    {
+                        (
+                            self._extract_staff_id(row),
+                            tuple(sorted(self._extract_member_ids(row))),
+                            tuple(sorted(self._extract_office_ids(row))),
+                        )
+                        for row in staff_rows
+                    }
+                )
+            ),
+            updated_from,
+            updated_to,
+            int(limit),
+            int(page),
+            self._normalize_endpoint(issue_endpoint) if issue_endpoint else None,
+        )
+        cached = self._issue_portfolio_cache.get(cache_key)
+        now = time.monotonic()
+        if cached and now - cached[0] < self._issue_portfolio_cache_ttl_s:
+            portfolios, metadata = cached[1]
+            cached_metadata = dict(metadata)
+            cached_metadata["issue_portfolio_cache"] = "hit"
+            return portfolios, cached_metadata
+
         queries = self._issue_scope_queries(staff_rows, updated_from, updated_to, limit, page)
         if not queries:
             return {}, {
                 "issue_endpoint": None,
                 "issue_portfolios_available": False,
                 "issue_portfolio_status": "no_supported_scope",
+                "issue_portfolio_cache": "skipped",
             }
 
         candidates = self._candidate_issue_endpoints(issue_endpoint)
@@ -296,6 +348,7 @@ class LegiStormClient:
                 "issue_endpoint": None,
                 "issue_portfolios_available": False,
                 "issue_portfolio_status": "no_issue_endpoint_discovered",
+                "issue_portfolio_cache": "skipped",
             }
 
         for endpoint in candidates:
@@ -308,11 +361,17 @@ class LegiStormClient:
                     continue
                 self._issue_endpoint = endpoint
                 self._issue_endpoint_checked = True
-                return self._normalize_issue_portfolios(data), {
-                    "issue_endpoint": endpoint,
-                    "issue_portfolios_available": True,
-                    "issue_portfolio_status": f"ok:{query['kind']}",
-                }
+                result = (
+                    self._normalize_issue_portfolios(data),
+                    {
+                        "issue_endpoint": endpoint,
+                        "issue_portfolios_available": True,
+                        "issue_portfolio_status": f"ok:{query['kind']}",
+                        "issue_portfolio_cache": "miss",
+                    },
+                )
+                self._issue_portfolio_cache[cache_key] = (now, result)
+                return result
 
         if not issue_endpoint:
             self._issue_endpoint_checked = True
@@ -321,6 +380,7 @@ class LegiStormClient:
             "issue_endpoint": self._normalize_endpoint(issue_endpoint) if issue_endpoint else None,
             "issue_portfolios_available": False,
             "issue_portfolio_status": "no_issue_endpoint_discovered",
+            "issue_portfolio_cache": "miss",
         }
 
     @classmethod
@@ -335,7 +395,9 @@ class LegiStormClient:
             issue_portfolios = list(portfolios_by_staff.get(staff_id, []))
             enriched_row = dict(staff_row)
             enriched_row["issue_portfolios"] = issue_portfolios
-            enriched_row["issues"] = [item["name"] for item in issue_portfolios if item["kind"] == "issue"]
+            enriched_row["issues"] = [
+                item["name"] for item in issue_portfolios if item["kind"] == "issue"
+            ]
             enriched_row["caucus_contacts"] = [
                 item["name"] for item in issue_portfolios if item["kind"] == "caucus_contact"
             ]
