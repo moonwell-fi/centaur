@@ -1020,18 +1020,32 @@ async def inject_stdin(
     try:
         await backend.write_stdin(session, turn_input)
     except (BrokenPipeError, OSError, RuntimeError, AssertionError) as exc:
-        log.warning(
-            "stdin_broken_pipe",
+        log.info(
+            "stdin_broken_pipe_recovering",
             thread_key=session.thread_key,
             sandbox=session.sandbox_id[:12],
+            durable_turn_id=durable_turn_id,
             error=str(exc),
         )
         st = await backend.status(session)
         if st != "running":
+            log.warning(
+                "stdin_broken_pipe_unrecovered",
+                thread_key=session.thread_key,
+                sandbox=session.sandbox_id[:12],
+                durable_turn_id=durable_turn_id,
+                sandbox_status=st,
+            )
             raise RuntimeError(f"sandbox exited (status={st})") from exc
         # Only reset stdin — leave stdout reader intact
         await backend.reattach_stdin(session)
         await backend.write_stdin(session, turn_input)
+        log.info(
+            "stdin_broken_pipe_recovered",
+            thread_key=session.thread_key,
+            sandbox=session.sandbox_id[:12],
+            durable_turn_id=durable_turn_id,
+        )
 
     await _db_update_state(session.thread_key, "running")
 
@@ -1100,17 +1114,34 @@ async def replay_inflight_turn(session: SandboxSession) -> dict:
     try:
         await backend.write_stdin(session, turn_input)
     except (BrokenPipeError, OSError, RuntimeError, AssertionError) as exc:
-        log.warning(
-            "replay_broken_pipe",
+        log.info(
+            "replay_broken_pipe_recovering",
             thread_key=session.thread_key,
             sandbox=session.sandbox_id[:12],
+            durable_turn_id=durable_turn_id,
+            attempt=next_attempt,
             error=str(exc),
         )
         st = await backend.status(session)
         if st != "running":
+            log.warning(
+                "replay_broken_pipe_unrecovered",
+                thread_key=session.thread_key,
+                sandbox=session.sandbox_id[:12],
+                durable_turn_id=durable_turn_id,
+                attempt=next_attempt,
+                sandbox_status=st,
+            )
             raise RuntimeError(f"sandbox exited during replay (status={st})") from exc
         await backend.reattach_stdin(session)
         await backend.write_stdin(session, turn_input)
+        log.info(
+            "replay_broken_pipe_recovered",
+            thread_key=session.thread_key,
+            sandbox=session.sandbox_id[:12],
+            durable_turn_id=durable_turn_id,
+            attempt=next_attempt,
+        )
 
     await _db_update_state(session.thread_key, "running")
     log.info(

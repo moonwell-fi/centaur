@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from api.sandbox.base import SandboxSession
+from api.sandbox.base import SandboxSession  # noqa: E402
 
 
 def test_coerce_json_object_handles_jsonb_text() -> None:
@@ -101,6 +101,49 @@ async def test_replay_inflight_turn_writes_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_replay_inflight_turn_recovers_broken_stdin() -> None:
+    session = SandboxSession(
+        sandbox_id="sbx-2",
+        thread_key="test:thread-2",
+        harness="amp",
+        engine="amp",
+    )
+    turn_input = {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [{"type": "text", "text": "hello"}],
+        },
+    }
+
+    backend = AsyncMock()
+    backend.refresh_token_by_id = AsyncMock()
+    backend.attach = AsyncMock()
+    backend.status = AsyncMock(return_value="running")
+    backend.reattach_stdin = AsyncMock()
+    backend.write_stdin = AsyncMock(side_effect=[BrokenPipeError("closed"), None])
+
+    with (
+        patch(
+            "api.agent._db_get_inflight_turn",
+            new_callable=AsyncMock,
+            return_value=("turn-abc", turn_input, 1),
+        ),
+        patch("api.agent._db_set_inflight_turn", new_callable=AsyncMock),
+        patch("api.agent._db_update_state", new_callable=AsyncMock),
+        patch("api.agent.get_backend", return_value=backend),
+        patch("api.agent.mint_sandbox_token", return_value="sbx-token"),
+    ):
+        from api.agent import replay_inflight_turn
+
+        result = await replay_inflight_turn(session)
+
+    assert result["ok"] is True
+    backend.reattach_stdin.assert_awaited_once_with(session)
+    assert backend.write_stdin.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_inject_stdin_persists_inflight_turn() -> None:
     session = SandboxSession(
         sandbox_id="sbx-3",
@@ -149,11 +192,11 @@ async def test_flush_pending_skips_assistant_messages(db_pool) -> None:
 
     await db_pool.execute(
         "INSERT INTO chat_messages (id, thread_key, role, parts, metadata, created_at) VALUES "
-        "($1, $4, 'user', '[{\"type\":\"text\",\"text\":\"first\"}]'::jsonb, '{}'::jsonb, "
+        '($1, $4, \'user\', \'[{"type":"text","text":"first"}]\'::jsonb, \'{}\'::jsonb, '
         " TIMESTAMPTZ '2026-01-01T00:00:00Z'), "
-        "($2, $4, 'assistant', '[{\"type\":\"text\",\"text\":\"reply\"}]'::jsonb, '{}'::jsonb, "
+        '($2, $4, \'assistant\', \'[{"type":"text","text":"reply"}]\'::jsonb, \'{}\'::jsonb, '
         " TIMESTAMPTZ '2026-01-01T00:00:01Z'), "
-        "($3, $4, 'user', '[{\"type\":\"text\",\"text\":\"second\"}]'::jsonb, '{}'::jsonb, "
+        '($3, $4, \'user\', \'[{"type":"text","text":"second"}]\'::jsonb, \'{}\'::jsonb, '
         " TIMESTAMPTZ '2026-01-01T00:00:02Z')",
         user_one,
         assistant,
