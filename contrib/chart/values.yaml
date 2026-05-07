@@ -58,6 +58,18 @@ api:
   victoriaMetricsPushEnabled: false
   runtimeCredentialGuardEnabled: true
   requiredRuntimeSecretKeys: AMP_API_KEY
+  startupProbe:
+    failureThreshold: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+  livenessProbe:
+    failureThreshold: 6
+    periodSeconds: 10
+    timeoutSeconds: 5
+  readinessProbe:
+    failureThreshold: 6
+    periodSeconds: 10
+    timeoutSeconds: 5
   egressDiscovery:
     enabled: true
     namespace: centaur-egress

@@ -527,14 +527,27 @@ spec:
           ports:
             - containerPort: 8000
               name: http
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            failureThreshold: {{ .Values.api.startupProbe.failureThreshold }}
+            periodSeconds: {{ .Values.api.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.api.startupProbe.timeoutSeconds }}
           readinessProbe:
             httpGet:
               path: /health/ready
               port: 8000
+            failureThreshold: {{ .Values.api.readinessProbe.failureThreshold }}
+            periodSeconds: {{ .Values.api.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.api.readinessProbe.timeoutSeconds }}
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
+            failureThreshold: {{ .Values.api.livenessProbe.failureThreshold }}
+            periodSeconds: {{ .Values.api.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.api.livenessProbe.timeoutSeconds }}
           volumeMounts:
             - name: firewall-ca
               mountPath: /firewall-certs
