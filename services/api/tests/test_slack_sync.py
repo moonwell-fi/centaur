@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import re
+import datetime as dt
 import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -638,3 +640,33 @@ async def test_failed_write_does_not_advance_watermark(db_pool):
     assert checkpoint is not None
     assert checkpoint["watermark_ts"] is None
     assert checkpoint["last_error"] == "write failed"
+
+
+@pytest.mark.asyncio
+async def test_etl_freshness_metrics_refresh_from_slack_sync_tables(db_pool):
+    from api.vm_metrics import render_metrics
+
+    now = dt.datetime.now(dt.timezone.utc)
+    await db_pool.execute(
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
+        "VALUES ('C_PUBLIC', 'ai-agent', TRUE), ('C_OTHER', 'other-channel', TRUE)",
+    )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_checkpoints (channel_id, watermark_ts, last_error) "
+        "VALUES ($1, $2, ''), ($3, $4, 'write_error')",
+        "C_PUBLIC",
+        f"{(now - dt.timedelta(seconds=60)).timestamp():.6f}",
+        "C_OTHER",
+        f"{(now - dt.timedelta(seconds=120)).timestamp():.6f}",
+    )
+
+    metrics = (await render_metrics(db_pool)).decode()
+
+    assert 'etl_active_scopes{source="slack",source_type="channel"} 2' in metrics
+    assert 'etl_failed_scopes{source="slack",source_type="channel"} 1' in metrics
+    match = re.search(
+        r'etl_source_cursor_lag_seconds\{source="slack",source_type="channel"\} ([0-9.]+)',
+        metrics,
+    )
+    assert match is not None
+    assert float(match.group(1)) >= 100

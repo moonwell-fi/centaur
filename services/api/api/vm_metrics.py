@@ -7,6 +7,7 @@ background asyncio task that periodically pushes to VictoriaMetrics.
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import os
 import threading
 from typing import Any
@@ -425,6 +426,52 @@ WORKFLOW_RUNS_GAUGE = Gauge(
     "Current workflow runs by status.",
     ["status"],
 )
+ETL_SOURCE_CURSOR_LAG_SECONDS = Gauge(
+    "etl_source_cursor_lag_seconds",
+    "Worst source checkpoint lag in seconds.",
+    ["source", "source_type"],
+)
+ETL_ACTIVE_SCOPES = Gauge(
+    "etl_active_scopes",
+    "Number of source scopes expected to sync.",
+    ["source", "source_type"],
+)
+ETL_FAILED_SCOPES = Gauge(
+    "etl_failed_scopes",
+    "Number of source scopes with a recorded sync failure.",
+    ["source", "source_type"],
+)
+ETL_ITEMS_SEEN_TOTAL = Counter(
+    "etl_items_seen_total",
+    "Raw source items fetched or observed by ETL workflows.",
+    ["source", "source_type", "item_type"],
+)
+ETL_ITEMS_UPSERTED_TOTAL = Counter(
+    "etl_items_upserted_total",
+    "Raw source items upserted by ETL workflows.",
+    ["source", "source_type", "item_type"],
+)
+ETL_ITEMS_FAILED_TOTAL = Counter(
+    "etl_items_failed_total",
+    "Source items or scopes that failed ETL processing.",
+    ["source", "source_type", "item_type", "reason"],
+)
+COMPANY_CONTEXT_DOCUMENTS_CHANGED_TOTAL = Counter(
+    "company_context_documents_changed_total",
+    "Company context documents changed by projection workflows.",
+    ["source", "source_type", "action"],
+)
+COMPANY_CONTEXT_PROJECTION_LAG_SECONDS = Gauge(
+    "company_context_projection_lag_seconds",
+    "Lag between raw source data updates and projected company context documents.",
+    ["source"],
+)
+COMPANY_CONTEXT_DOCUMENT_SIZE_CHARS = Histogram(
+    "company_context_document_size_chars",
+    "Generated company context document body size in characters.",
+    ["source", "source_type"],
+    buckets=[100, 500, 1_000, 5_000, 10_000, 25_000, 50_000, 100_000, 250_000, 500_000],
+)
 
 # ---------------------------------------------------------------------------
 # Helper functions (same public interface as the old metrics.py)
@@ -519,6 +566,61 @@ def record_workflow_event_sent(event_type: str) -> None:
     WORKFLOW_EVENTS_TOTAL.labels(event_type=event_type).inc()
 
 
+def record_etl_items_seen(source: str, source_type: str, item_type: str, count: int) -> None:
+    if count > 0:
+        ETL_ITEMS_SEEN_TOTAL.labels(
+            source=source,
+            source_type=source_type,
+            item_type=item_type,
+        ).inc(count)
+
+
+def record_etl_items_upserted(source: str, source_type: str, item_type: str, count: int) -> None:
+    if count > 0:
+        ETL_ITEMS_UPSERTED_TOTAL.labels(
+            source=source,
+            source_type=source_type,
+            item_type=item_type,
+        ).inc(count)
+
+
+def record_etl_items_failed(
+    source: str,
+    source_type: str,
+    item_type: str,
+    reason: str,
+    count: int = 1,
+) -> None:
+    if count > 0:
+        ETL_ITEMS_FAILED_TOTAL.labels(
+            source=source,
+            source_type=source_type,
+            item_type=item_type,
+            reason=reason,
+        ).inc(count)
+
+
+def record_company_context_documents_changed(
+    source: str,
+    source_type: str,
+    action: str,
+    count: int = 1,
+) -> None:
+    if count > 0:
+        COMPANY_CONTEXT_DOCUMENTS_CHANGED_TOTAL.labels(
+            source=source,
+            source_type=source_type,
+            action=action,
+        ).inc(count)
+
+
+def observe_company_context_document_size(source: str, source_type: str, chars: int) -> None:
+    COMPANY_CONTEXT_DOCUMENT_SIZE_CHARS.labels(
+        source=source,
+        source_type=source_type,
+    ).observe(max(chars, 0))
+
+
 def record_usage_observation(
     harness: str,
     model: str | None,
@@ -598,6 +700,58 @@ async def refresh_runtime_metrics(pool: Pool) -> None:
     )
     for row in rows:
         WORKFLOW_RUNS_GAUGE.labels(status=row["status"]).set(row["cnt"])
+
+    await refresh_etl_metrics(pool)
+
+
+async def refresh_etl_metrics(pool: Pool) -> None:
+    """Refresh ETL freshness gauges from durable Postgres state."""
+    ETL_SOURCE_CURSOR_LAG_SECONDS.clear_children()
+    ETL_ACTIVE_SCOPES.clear_children()
+    ETL_FAILED_SCOPES.clear_children()
+    COMPANY_CONTEXT_PROJECTION_LAG_SECONDS.clear_children()
+
+    slack_scope_rows = await pool.fetch(
+        "SELECT ch.channel_id, cp.watermark_ts, cp.last_error "
+        "FROM slack_sync_channels ch "
+        "LEFT JOIN slack_sync_checkpoints cp ON cp.channel_id = ch.channel_id "
+        "WHERE ch.is_member = TRUE"
+    )
+    ETL_ACTIVE_SCOPES.labels(source="slack", source_type="channel").set(
+        len(slack_scope_rows)
+    )
+    failed_scopes = 0
+    max_lag_s = 0.0
+    now = dt.datetime.now(dt.timezone.utc)
+    for row in slack_scope_rows:
+        if str(row["last_error"] or "").strip():
+            failed_scopes += 1
+        watermark_ts = str(row["watermark_ts"] or "").strip()
+        if not watermark_ts:
+            continue
+        try:
+            watermark = dt.datetime.fromtimestamp(float(watermark_ts), tz=dt.timezone.utc)
+        except (TypeError, ValueError, OSError):
+            continue
+        max_lag_s = max(max_lag_s, (now - watermark).total_seconds())
+    ETL_FAILED_SCOPES.labels(source="slack", source_type="channel").set(failed_scopes)
+    ETL_SOURCE_CURSOR_LAG_SECONDS.labels(source="slack", source_type="channel").set(
+        max(max_lag_s, 0.0)
+    )
+
+    raw_latest = await pool.fetchval("SELECT MAX(updated_at) FROM slack_sync_messages")
+    projected_latest = await pool.fetchval(
+        "SELECT MAX(source_updated_at) FROM company_context_documents WHERE source = 'slack'"
+    )
+    projection_lag_s = 0.0
+    if isinstance(raw_latest, dt.datetime):
+        raw_latest = raw_latest.astimezone(dt.timezone.utc)
+        if isinstance(projected_latest, dt.datetime):
+            projected_latest = projected_latest.astimezone(dt.timezone.utc)
+            projection_lag_s = max((raw_latest - projected_latest).total_seconds(), 0.0)
+        else:
+            projection_lag_s = max((now - raw_latest).total_seconds(), 0.0)
+    COMPANY_CONTEXT_PROJECTION_LAG_SECONDS.labels(source="slack").set(projection_lag_s)
 
 
 # ---------------------------------------------------------------------------

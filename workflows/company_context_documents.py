@@ -10,6 +10,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from api.runtime_control import canonical_json, decode_jsonb
+from api.vm_metrics import (
+    observe_company_context_document_size,
+    record_company_context_documents_changed,
+)
 from api.workflow_engine import WorkflowContext
 
 WORKFLOW_NAME = "company_context_documents"
@@ -393,8 +397,15 @@ def _thread_document(
     }
 
 
-async def _upsert_document(pool, document: dict[str, Any]) -> bool:
-    """Upsert a projected document into the company context document table."""
+async def _upsert_document(pool, document: dict[str, Any]) -> str:
+    """Upsert a projected document and return inserted/updated/noop."""
+    existing_hash = await pool.fetchval(
+        "SELECT content_hash FROM company_context_documents WHERE document_id = $1",
+        document["document_id"],
+    )
+    if existing_hash == document["content_hash"]:
+        return "noop"
+
     status = await pool.execute(
         "INSERT INTO company_context_documents ("
         "document_id, source, source_type, source_document_id, source_chunk_id, "
@@ -438,15 +449,18 @@ async def _upsert_document(pool, document: dict[str, Any]) -> bool:
         document["content_hash"],
         canonical_json(document["metadata"]),
     )
-    return status.endswith(" 1")
+    if not status.endswith(" 1"):
+        return "noop"
+    return "updated" if existing_hash else "inserted"
 
 
-async def _delete_document(pool, document_id: str) -> None:
+async def _delete_document(pool, document_id: str) -> bool:
     """Remove a derived document that no longer meets projection criteria."""
-    await pool.execute(
+    status = await pool.execute(
         "DELETE FROM company_context_documents WHERE document_id = $1",
         document_id,
     )
+    return status.endswith(" 1")
 
 
 async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
@@ -485,10 +499,29 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             channels_by_id=channels_by_id,
         )
         if document is None:
-            documents_deleted += 1
-            await _delete_document(ctx._pool, f"slack:channel_day:{channel_id}:{day.isoformat()}")
+            if await _delete_document(
+                ctx._pool,
+                f"slack:channel_day:{channel_id}:{day.isoformat()}",
+            ):
+                documents_deleted += 1
+                record_company_context_documents_changed(
+                    "slack",
+                    "slack_channel_day",
+                    "deleted",
+                )
             continue
-        if await _upsert_document(ctx._pool, document):
+        observe_company_context_document_size(
+            "slack",
+            str(document["source_type"]),
+            len(str(document["body"] or "")),
+        )
+        action = await _upsert_document(ctx._pool, document)
+        record_company_context_documents_changed(
+            "slack",
+            str(document["source_type"]),
+            action,
+        )
+        if action in {"inserted", "updated"}:
             documents_upserted += 1
 
     for channel_id, thread_ts in changed["threads"]:
@@ -501,10 +534,26 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             channels_by_id=channels_by_id,
         )
         if document is None:
-            documents_deleted += 1
-            await _delete_document(ctx._pool, f"slack:thread:{channel_id}:{thread_ts}")
+            if await _delete_document(ctx._pool, f"slack:thread:{channel_id}:{thread_ts}"):
+                documents_deleted += 1
+                record_company_context_documents_changed(
+                    "slack",
+                    "slack_thread",
+                    "deleted",
+                )
             continue
-        if await _upsert_document(ctx._pool, document):
+        observe_company_context_document_size(
+            "slack",
+            str(document["source_type"]),
+            len(str(document["body"] or "")),
+        )
+        action = await _upsert_document(ctx._pool, document)
+        record_company_context_documents_changed(
+            "slack",
+            str(document["source_type"]),
+            action,
+        )
+        if action in {"inserted", "updated"}:
             documents_upserted += 1
 
     watermark = changed["max_updated_at"] or last_watermark

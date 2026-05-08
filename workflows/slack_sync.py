@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from api.runtime_control import canonical_json
+from api.vm_metrics import (
+    record_etl_items_failed,
+    record_etl_items_seen,
+    record_etl_items_upserted,
+)
 from api.workflow_engine import WorkflowContext
 
 WORKFLOW_NAME = "slack_sync"
@@ -215,6 +220,22 @@ def _channel_ref(channel: dict[str, Any], reason: str | None = None) -> dict[str
     if reason:
         result["reason"] = reason
     return result
+
+
+def _failure_reason(error: str) -> str:
+    """Map Slack/client errors to low-cardinality metric reasons."""
+    lowered = error.lower()
+    if "rate_limited" in lowered or "ratelimited" in lowered:
+        return "rate_limited"
+    if "missing_scope" in lowered or "not_in_channel" in lowered or "permission" in lowered:
+        return "permission_error"
+    if "repeated reply cursor" in lowered or "cursor" in lowered:
+        return "cursor_error"
+    if "slack api" in lowered or "slack_sdk" in lowered:
+        return "api_error"
+    if "write" in lowered or "database" in lowered or "postgres" in lowered:
+        return "write_error"
+    return "unknown_error"
 
 
 async def _upsert_channels(pool, channels: list[dict[str, Any]]) -> None:
@@ -559,6 +580,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
     client = _client()
     access_mode = client._etl_access_mode()
     public_channels = client._list_etl_channels(limit=10_000, force_refresh=True)
+    record_etl_items_seen("slack", "channel", "channel", len(public_channels))
     exclusion_patterns = _channel_exclusion_patterns(os.getenv(EXCLUDED_CHANNELS_ENV))
     channels_to_sync, excluded_channels = _filter_excluded_channels(
         public_channels,
@@ -572,6 +594,7 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             channels=excluded_channels,
         )
     await _upsert_channels(ctx._pool, channels_to_sync)
+    record_etl_items_upserted("slack", "channel", "channel", len(channels_to_sync))
 
     if not public_channels:
         reason = "no_public_channels"
@@ -597,7 +620,9 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
         }
 
     users = client._list_etl_users(limit=10_000)
+    record_etl_items_seen("slack", "user", "user", len(users))
     users_upserted = await _upsert_users(ctx._pool, users)
+    record_etl_items_upserted("slack", "user", "user", users_upserted)
 
     run_id = _workflow_run_id_to_sync_run_id(ctx.run_id)
     await _record_run_start(
@@ -652,7 +677,15 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
             messages = page.get("messages") or []
             message_rows = [_message_row(msg, run_id) for msg in messages]
             counts["messages_fetched"] += len(message_rows)
-            counts["messages_upserted"] += await _upsert_messages(ctx._pool, message_rows)
+            record_etl_items_seen("slack", "channel", "root_message", len(message_rows))
+            messages_upserted = await _upsert_messages(ctx._pool, message_rows)
+            counts["messages_upserted"] += messages_upserted
+            record_etl_items_upserted(
+                "slack",
+                "channel",
+                "root_message",
+                messages_upserted,
+            )
 
             thread_roots = {
                 str(msg.get("timestamp"))
@@ -680,7 +713,20 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
                     ]
                     reply_rows = [_message_row(reply, run_id, thread_ts) for reply in replies]
                     counts["replies_fetched"] += len(reply_rows)
-                    counts["replies_upserted"] += await _upsert_messages(ctx._pool, reply_rows)
+                    record_etl_items_seen(
+                        "slack",
+                        "channel",
+                        "thread_reply",
+                        len(reply_rows),
+                    )
+                    replies_upserted = await _upsert_messages(ctx._pool, reply_rows)
+                    counts["replies_upserted"] += replies_upserted
+                    record_etl_items_upserted(
+                        "slack",
+                        "channel",
+                        "thread_reply",
+                        replies_upserted,
+                    )
 
                     next_reply_cursor = replies_page.get("next_cursor")
                     if not replies_page.get("has_more") or not next_reply_cursor:
@@ -717,6 +763,12 @@ async def handler(inp: Input, ctx: WorkflowContext) -> dict[str, Any]:
                 error=error,
             )
             failed.append(_channel_ref(channel, error))
+            record_etl_items_failed(
+                "slack",
+                "channel",
+                "channel",
+                _failure_reason(error),
+            )
             await _update_checkpoint_failure(
                 ctx._pool,
                 channel_id=channel_id,
