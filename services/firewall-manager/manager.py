@@ -81,7 +81,16 @@ DEFAULT_MATCH_HEADERS: tuple[str, ...] = (
     "Auth-Token",
     "Jwt",
     "Cookie",
-    "/^x-[a-z0-9-]*(api-key|apikey|secret|token|auth)$/",
+    "Apikey",
+    "AccessKey",
+    "Api-Access-Key",
+    "Api-Signature",
+    "FX-ACCESS-KEY",
+    "FX-ACCESS-SIGN",
+    "FX-ACCESS-PASSPHRASE",
+    "X-CB-ACCESS-PASSPHRASE",
+    "X-CB-ACCESS-SIGNATURE",
+    "/^x-[a-z0-9-]*(api-key|apikey|secret|token|auth|key)$/",
 )
 
 log = structlog.get_logger("firewall-manager")
