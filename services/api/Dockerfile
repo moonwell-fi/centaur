@@ -18,10 +18,8 @@ WORKDIR /app
 # 1. Install core deps (changes rarely — cached layer)
 COPY services/api/pyproject.toml ./
 COPY centaur_sdk/ centaur_sdk/
-COPY centaur_charts/ centaur_charts/
 RUN sed -i \
         -e 's|path = "../../centaur_sdk"|path = "centaur_sdk"|' \
-        -e 's|path = "../../centaur_charts"|path = "centaur_charts"|' \
         pyproject.toml \
     && rm -f uv.lock
 RUN --mount=type=cache,target=/root/.cache/uv \

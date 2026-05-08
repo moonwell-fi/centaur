@@ -1,4 +1,4 @@
-"""Generate performance graphs from block metrics, themed via centaur_charts.
+"""Generate performance graphs from block metrics.
 
 This module is one of two existing matplotlib sites in the repo. Phase 1 of the
 charting overhaul aligns it with the Centaur visual signature: 16:9, 200 DPI on
@@ -10,17 +10,43 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import centaur_charts as cc
+import matplotlib
 import numpy as np
 import pandas as pd
+from matplotlib.ticker import PercentFormatter
+
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt
 
 from .parser import BlockMetrics
 
 # Two-tone palette for stacked bars: protagonist (Centaur primary) + warm
 # accent (Okabe-Ito vermilion). Stable across themes.
-_EXEC_COLOR = cc.OKABE_ITO[0]    # blue
-_STATE_COLOR = cc.OKABE_ITO[1]   # vermilion
-_TREND_COLOR = cc.OKABE_ITO[1]   # also vermilion for the dashed trend line
+_OKABE_ITO = ["#0072B2", "#D55E00", "#009E73", "#CC79A7", "#F0E442", "#56B4E9", "#E69F00"]
+_EXEC_COLOR = _OKABE_ITO[0]  # blue
+_STATE_COLOR = _OKABE_ITO[1]  # vermilion
+_TREND_COLOR = _OKABE_ITO[1]  # also vermilion for the dashed trend line
+
+
+def _subplots(figsize: tuple[float, float]) -> tuple[plt.Figure, plt.Axes]:
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.grid(axis="y", color="#E5E7EB", linewidth=0.8)
+    return fig, ax
+
+
+def _subtitle_title(ax: plt.Axes, title: str, subtitle: str | None = None) -> None:
+    ax.set_title(title, loc="left", fontsize=15, fontweight=700, pad=16)
+    if subtitle:
+        ax.text(0, 1.02, subtitle, transform=ax.transAxes, ha="left", va="bottom", fontsize=10)
+
+
+def _save(fig: plt.Figure, output_path: Path) -> None:
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
 
 
 def metrics_to_dataframe(blocks: list[BlockMetrics]) -> pd.DataFrame:
@@ -75,7 +101,7 @@ def plot_gas_throughput(
     """Plot gas throughput over time."""
     filtered = _filter_or_raise(df, min_gas_mgas)
 
-    fig, ax = cc.subplots(figsize=(8.0, 4.5))
+    fig, ax = _subplots(figsize=(8.0, 4.5))
     ax.plot(
         filtered["block_number"],
         filtered["gas_throughput_ggas_s"],
@@ -115,12 +141,12 @@ def plot_gas_throughput(
 
     ax.set_xlabel("Block number")
     ax.set_ylabel("Gas throughput (Ggas/s)")
-    cc.subtitle_title(
+    _subtitle_title(
         ax,
         f"Average gas throughput: {avg_throughput:.2f} Ggas/s",
         subtitle=_suffix_subtitle(min_gas_mgas, title_suffix) or None,
     )
-    cc.save(fig, output_path)
+    _save(fig, output_path)
     return output_path
 
 
@@ -130,7 +156,7 @@ def plot_latency_breakdown(
     """Plot latency breakdown (state root vs execution) as stacked bar chart."""
     filtered = _filter_or_raise(df, min_gas_mgas)
 
-    fig, ax = cc.subplots(figsize=(8.0, 4.5))
+    fig, ax = _subplots(figsize=(8.0, 4.5))
     width = 0.8
     x = np.arange(len(filtered))
 
@@ -159,12 +185,12 @@ def plot_latency_breakdown(
     ax.set_ylabel("Latency (ms)")
     ax.legend(loc="upper right", frameon=False)
 
-    cc.subtitle_title(
+    _subtitle_title(
         ax,
         "Block latency breakdown — execution vs state root",
         subtitle=_suffix_subtitle(min_gas_mgas, title_suffix) or None,
     )
-    cc.save(fig, output_path)
+    _save(fig, output_path)
     return output_path
 
 
@@ -174,7 +200,7 @@ def plot_latency_percentage(
     """Plot state root vs execution as percentage of total latency."""
     filtered = _filter_or_raise(df, min_gas_mgas)
 
-    fig, ax = cc.subplots(figsize=(8.0, 4.5))
+    fig, ax = _subplots(figsize=(8.0, 4.5))
     width = 0.8
     x = np.arange(len(filtered))
 
@@ -206,18 +232,22 @@ def plot_latency_percentage(
     ax.set_xlabel("Block number")
     ax.set_ylabel("Percentage of total latency")
     ax.set_ylim(0, 100)
-    cc.format_yaxis_pct(ax, decimals=0)
+    ax.yaxis.set_major_formatter(PercentFormatter(xmax=100, decimals=0))
     ax.legend(loc="upper right", frameon=False)
 
-    cc.subtitle_title(
+    _subtitle_title(
         ax,
         f"Execution dominated at {avg_execution:.1f}% of latency",
         subtitle=(
             f"State root averaged {avg_state_root:.1f}%"
-            + (f" · {_suffix_subtitle(min_gas_mgas, title_suffix)}" if _suffix_subtitle(min_gas_mgas, title_suffix) else "")
+            + (
+                f" · {_suffix_subtitle(min_gas_mgas, title_suffix)}"
+                if _suffix_subtitle(min_gas_mgas, title_suffix)
+                else ""
+            )
         ),
     )
-    cc.save(fig, output_path)
+    _save(fig, output_path)
     return output_path
 
 
@@ -227,7 +257,7 @@ def plot_gas_vs_latency_scatter(
     """Scatter plot of gas used vs latency with trend line."""
     filtered = _filter_or_raise(df, min_gas_mgas)
 
-    fig, ax = cc.subplots(figsize=(8.0, 4.5))
+    fig, ax = _subplots(figsize=(8.0, 4.5))
     ax.scatter(
         filtered["gas_used_mgas"],
         filtered["elapsed_ms"],
@@ -255,7 +285,7 @@ def plot_gas_vs_latency_scatter(
 
     ax.set_xlabel("Gas used (Mgas)")
     ax.set_ylabel("Total latency (ms)")
-    cc.subtitle_title(
+    _subtitle_title(
         ax,
         (
             f"Latency rises {slope:.2f} ms per Mgas"
@@ -264,7 +294,7 @@ def plot_gas_vs_latency_scatter(
         ),
         subtitle=_suffix_subtitle(min_gas_mgas, title_suffix) or None,
     )
-    cc.save(fig, output_path)
+    _save(fig, output_path)
     return output_path
 
 

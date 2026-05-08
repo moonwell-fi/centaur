@@ -4,7 +4,8 @@ description = "Chart generation for Centaur. Single render_chart method returns 
 version = "0.2.0"
 requires-python = ">=3.11"
 dependencies = [
-    "centaur-charts",
+    "matplotlib>=3.7.0",
+    "pandas>=2.0.0",
 ]
 
 [tool.ai-v2]

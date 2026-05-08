@@ -3,8 +3,6 @@
 The non-negotiables that define the Centaur look. These rules are baked into
 the chart tool. Agents should not override them without a clear reason.
 
-This file is the style spec used by the charting skill and `centaur_charts`.
-
 ---
 
 ## 1. Slack-mobile-readable is THE design constraint
@@ -175,10 +173,9 @@ visual signature in the Centaur look.
 Pair colour with shape (`+` / `−` / arrow) so colourblind users get the signal
 even when colour is unavailable.
 
-### Brand colours (auto-resolved)
+### Brand colours
 
-The router auto-resolves names to canonical hex via
-`centaur_charts.crypto.color_for(name)`. Coverage includes:
+Use canonical hex values for common assets and chains where available. Coverage includes:
 
 - **Tokens** — BTC `#F7931A`, ETH `#627EEA`, USDC `#2775CA`, USDT `#26A17B`,
   SOL `#14F195`, BNB `#F3BA2F`, XRP `#00AAE4`, DOGE `#C2A633`, plus another

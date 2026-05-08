@@ -199,8 +199,7 @@ The router auto-downgrades small-n charts to KPI / sparkline. Trust it.
 ## Pointers
 
 - **Visual style spec (light/dark/editorial, crypto conventions, mobile rules)**: [`.agents/skills/charting/STYLE.md`](STYLE.md)
-- **Tool implementation**: `tools/infra/chart/client.py` and `centaur_charts/router.py`
-- **Brand-color resolver**: `centaur_charts/crypto/brand_colors.py`
+- **Tool implementation**: `tools/infra/chart/client.py`
 
 ## Example end-to-end
 

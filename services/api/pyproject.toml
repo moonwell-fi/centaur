@@ -21,7 +21,6 @@ dependencies = [
     "kubernetes-asyncio>=33.3.0",
     "psycopg2-binary>=2.9.11",
     "centaur-sdk",
-    "centaur-charts",
     "sse-starlette>=3.2.0",
     "croniter>=6.2.2",
     "feedparser>=6.0.0",
@@ -37,7 +36,6 @@ dev-dependencies = [
 
 [tool.uv.sources]
 centaur-sdk = { path = "../../centaur_sdk", editable = true }
-centaur-charts = { path = "../../centaur_charts", editable = true }
 
 [build-system]
 requires = ["hatchling"]

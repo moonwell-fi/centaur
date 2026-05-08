@@ -71,7 +71,7 @@ _build-agent:
     docker build --target sandbox -t centaur-agent:latest -f services/sandbox/Dockerfile .
 
 bootstrap-secrets *args:
-    scripts/bootstrap-k8s-secrets.sh --namespace {{namespace}} {{args}}
+    contrib/scripts/bootstrap-k8s-secrets.sh --namespace {{namespace}} {{args}}
 
 deploy:
     helm upgrade --install {{release}} {{chart}} -n {{namespace}} --create-namespace -f {{dev_values}}
