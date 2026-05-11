@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +15,11 @@ from centaur_sdk.tool_sdk import secret
 
 DEFAULT_SEARCH_LIMIT = 10
 MAX_SEARCH_LIMIT = 50
+TITLE_MATCH_BOOST = 4
+THREAD_SCORE_MULTIPLIER = 1.25
+CHANNEL_DAY_SCORE_MULTIPLIER = 0.75
+
+_SEARCH_TERM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]*")
 
 
 def _clamp(value: int, *, minimum: int, maximum: int) -> int:
@@ -40,6 +46,31 @@ def _isoformat(value: Any) -> str | None:
     if isinstance(value, datetime):
         return value.isoformat()
     return None
+
+
+def _search_terms(query: str) -> list[str]:
+    """Extract unique terms for SQL-level AND matching."""
+    seen: set[str] = set()
+    terms: list[str] = []
+    for match in _SEARCH_TERM_RE.finditer(query):
+        term = match.group(0).strip()
+        if len(term) < 2:
+            continue
+        key = term.lower()
+        if key not in seen:
+            seen.add(key)
+            terms.append(term)
+    return terms or [query]
+
+
+def _search_where_clause(terms: list[str]) -> str:
+    """Build a ParadeDB query that requires every term while boosting title hits."""
+    clauses = []
+    for index in range(1, len(terms) + 1):
+        clauses.append(
+            f"(title ||| ${index}::text::pdb.boost({TITLE_MATCH_BOOST}) OR body ||| ${index})"
+        )
+    return " AND ".join(clauses)
 
 
 class CompanyContextClient:
@@ -70,8 +101,12 @@ class CompanyContextClient:
     ) -> dict[str, Any]:
         conn = await self._connect()
         try:
+            terms = _search_terms(query)
+            source_param = len(terms) + 1
+            source_type_param = len(terms) + 2
+            limit_param = len(terms) + 3
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT
                     document_id,
                     source,
@@ -83,13 +118,20 @@ class CompanyContextClient:
                     metadata,
                     paradedb.score(document_id) AS score
                 FROM company_context_documents
-                WHERE (title ||| $1 OR body ||| $1)
-                  AND ($2::text IS NULL OR source = $2)
-                  AND ($3::text IS NULL OR source_type = $3)
-                ORDER BY paradedb.score(document_id), source_updated_at DESC NULLS LAST
-                LIMIT $4
+                WHERE {_search_where_clause(terms)}
+                  AND (${source_param}::text IS NULL OR source = ${source_param})
+                  AND (${source_type_param}::text IS NULL OR source_type = ${source_type_param})
+                ORDER BY
+                    paradedb.score(document_id)
+                    * CASE source_type
+                        WHEN 'slack_thread' THEN {THREAD_SCORE_MULTIPLIER}
+                        WHEN 'slack_channel_day' THEN {CHANNEL_DAY_SCORE_MULTIPLIER}
+                        ELSE 1.0
+                    END DESC,
+                    source_updated_at DESC NULLS LAST
+                LIMIT ${limit_param}
                 """,
-                query,
+                *terms,
                 source,
                 source_type,
                 limit,

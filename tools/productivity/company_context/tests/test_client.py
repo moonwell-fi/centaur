@@ -85,10 +85,36 @@ def test_search_queries_bm25_and_returns_compact_results(monkeypatch):
         "metadata": {"channel_name": "eng-ai", "thread_ts": "1770000000.000000"},
     }
     query, args = fake.fetch_calls[0]
-    assert "title ||| $1 OR body ||| $1" in query
+    assert "title ||| $1::text::pdb.boost(4) OR body ||| $1" in query
+    assert "title ||| $2::text::pdb.boost(4) OR body ||| $2" in query
+    assert "WHEN 'slack_thread' THEN 1.25" in query
+    assert "WHEN 'slack_channel_day' THEN 0.75" in query
+    assert "END DESC" in query
     assert "paradedb.score(document_id)" in query
-    assert args == ("ParadeDB BM25", "slack", "slack_thread", 5)
+    assert args == ("ParadeDB", "BM25", "slack", "slack_thread", 5)
     assert fake.closed is True
+
+
+def test_search_terms_are_required_once(monkeypatch):
+    fake = _FakeConnection(rows=[])
+
+    async def fake_connect(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+
+    result = CompanyContextClient("postgresql://example").search(
+        "state root state mismatch",
+        limit=3,
+    )
+
+    assert result["status"] == "ok"
+    query, args = fake.fetch_calls[0]
+    assert "WHERE (title ||| $1::text::pdb.boost(4) OR body ||| $1)" in query
+    assert "AND (title ||| $2::text::pdb.boost(4) OR body ||| $2)" in query
+    assert "AND (title ||| $3::text::pdb.boost(4) OR body ||| $3)" in query
+    assert "title ||| $4::text::pdb.boost(4)" not in query
+    assert args == ("state", "root", "mismatch", None, None, 3)
 
 
 def test_read_document_returns_full_content_by_default(monkeypatch):
