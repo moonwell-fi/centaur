@@ -412,6 +412,35 @@ describe("SlackBot runtime control", () => {
     expect(streamText(runtime.streamedChunks)).not.toContain("Connection error.");
   });
 
+  it("does not treat successful turn text that mentions connection errors as a runtime failure", async () => {
+    const result = "Root cause: a database connection error caused stale pool retries.";
+    const client = createImmediateStreamClient();
+    client.streamEvents = vi.fn(() => (async function* () {
+      yield {
+        eventId: 1,
+        eventKind: "amp_raw_event",
+        data: {
+          type: "turn.done",
+          result,
+        },
+      };
+    })());
+    const postMessage = vi.fn(async () => ({ id: "alert-msg" }));
+    const slack = createSlackAdapter({ postMessage });
+    const bot = new SlackBot(client as any, "", slack, "C_ERROR_CHANNEL");
+    const runtime = createThread();
+
+    await bot.onSubscribedMessage(runtime.thread, userMessage("follow-up", {
+      id: "1700000000.000004",
+      isMention: true,
+    }));
+
+    const rendered = streamText(runtime.streamedChunks);
+    expect(rendered).toContain(result);
+    expect(rendered).not.toContain("Agent hit a runtime issue before finishing. Please retry.");
+    expect(postMessage).not.toHaveBeenCalledWith("slack:C_ERROR_CHANNEL", expect.anything());
+  });
+
   it("renders provider harness errors in a Slack code block", async () => {
     const client = createImmediateStreamClient();
     client.streamEvents = vi.fn(() => (async function* () {
@@ -947,8 +976,9 @@ describe("SlackBot runtime control", () => {
     );
   });
 
-  it("does not post to error channel for non-error final deliveries", async () => {
+  it("does not post to error channel for completed final deliveries that mention connection errors", async () => {
     const client = createImmediateStreamClient();
+    const result = "The root cause was a connection error in the database pool.";
     client.claimFinalDeliveries = vi.fn(async () => ({
       deliveries: [
         {
@@ -957,7 +987,7 @@ describe("SlackBot runtime control", () => {
           delivery: { platform: "slack" },
           final_payload: {
             status: "completed",
-            result_text: "all good",
+            result_text: result,
           },
         },
       ],
@@ -969,6 +999,10 @@ describe("SlackBot runtime control", () => {
     await (bot as any).drainFinalDeliveriesOnce();
 
     // Should post to the original thread only, not the error channel
+    expect(postMessage).toHaveBeenCalledWith(
+      `slack:${normalizedThreadKey}`,
+      { markdown: expect.stringContaining(result) },
+    );
     const errorChannelCalls = postMessage.mock.calls.filter(
       (call: any) => typeof call[0] === "string" && call[0].includes("C_ERROR_CHANNEL"),
     );

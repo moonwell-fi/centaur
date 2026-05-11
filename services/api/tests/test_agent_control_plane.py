@@ -931,7 +931,7 @@ async def test_worker_marks_turn_done_error_as_failed_and_updates_runtime(db_poo
             )
         }
 
-    backend = SimpleNamespace(attach=AsyncMock())
+    backend = SimpleNamespace(attach=AsyncMock(), close_streams=AsyncMock())
     with (
         patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
         patch(
@@ -964,6 +964,7 @@ async def test_worker_marks_turn_done_error_as_failed_and_updates_runtime(db_poo
     )
     assert assignment is not None
     assert assignment["runtime_id"] == resumed_runtime_id
+    backend.close_streams.assert_awaited_once_with(session)
 
 
 @pytest.mark.asyncio
@@ -1976,6 +1977,92 @@ async def test_worker_marks_silence_deadline_exceeded_and_stops_session(db_pool)
     assert execution["terminal_reason"] == "silence_deadline_exceeded"
     assert "no progress" in (execution["error_text"] or "")
     stop_session_mock.assert_awaited_once_with(thread_key)
+
+
+@pytest.mark.asyncio
+async def test_worker_ignores_stream_end_after_execution_already_terminal(db_pool):
+    from api.runtime_control import _process_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, "
+        "durable_turn_id, terminal_reason, result_text, delivery, metadata, hard_deadline_at, completed_at"
+        ") VALUES ($1, $2, 1, 'exec-terminal-race', 'hash-terminal-race', 'completed', "
+        "'turn-existing', 'completed', 'already done', '{}'::jsonb, '{}'::jsonb, "
+        "NOW() + INTERVAL '10 minutes', NOW())",
+        execution_id,
+        thread_key,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_final_delivery_outbox (execution_id, thread_key, delivery, state) "
+        "VALUES ($1, $2, '{}'::jsonb, 'delivered')",
+        execution_id,
+        thread_key,
+    )
+
+    row = {
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "assignment_generation": 1,
+        "durable_turn_id": "turn-existing",
+        "status": "running",
+        "delivery": {},
+        "metadata": {},
+        "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=10),
+        "claimed_at": dt.datetime.now(dt.timezone.utc),
+    }
+    session = SandboxSession(
+        sandbox_id=runtime_id,
+        thread_key=thread_key,
+        harness="amp",
+        engine="amp",
+    )
+
+    async def _ended_stream(*_args, **_kwargs):
+        if False:
+            yield {}
+
+    stop_session_mock = AsyncMock()
+    backend = SimpleNamespace(
+        attach=AsyncMock(),
+        status=AsyncMock(return_value="gone"),
+        close_streams=AsyncMock(),
+    )
+    with (
+        patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
+        patch("api.runtime_control.get_backend", return_value=backend),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
+        patch("api.runtime_control._stream_stdout", _ended_stream),
+        patch("api.runtime_control.stop_session", stop_session_mock),
+    ):
+        await _process_execution(db_pool, row)
+
+    execution = await db_pool.fetchrow(
+        "SELECT status, terminal_reason, result_text, error_text "
+        "FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "completed"
+    assert execution["terminal_reason"] == "completed"
+    assert execution["result_text"] == "already done"
+    assert execution["error_text"] is None
+    stop_session_mock.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -1334,7 +1334,7 @@ async def _mark_execution_terminal(
         "UPDATE agent_execution_requests SET status = $1, terminal_reason = $2, "
         "result_text = $3, error_text = $4, completed_at = $6, "
         "worker_id = NULL, worker_lease_expires_at = NULL, updated_at = NOW() "
-        "WHERE execution_id = $5 "
+        "WHERE execution_id = $5 AND status NOT IN ('completed', 'failed_permanent', 'cancelled') "
         "RETURNING started_at, assignment_generation, metadata, delivery",
         status,
         terminal_reason,
@@ -1343,6 +1343,21 @@ async def _mark_execution_terminal(
         execution_id,
         completed_at,
     )
+    if row is None:
+        current = await pool.fetchrow(
+            "SELECT status, terminal_reason FROM agent_execution_requests WHERE execution_id = $1",
+            execution_id,
+        )
+        log.info(
+            "execution_terminal_update_skipped",
+            execution_id=execution_id,
+            thread_key=thread_key,
+            attempted_status=status,
+            attempted_terminal_reason=terminal_reason,
+            current_status=current["status"] if current else None,
+            current_terminal_reason=current["terminal_reason"] if current else None,
+        )
+        return
     harness = None
     engine = None
     persona_id = None
@@ -1882,6 +1897,21 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
         result_text: str,
         error_text: str | None,
     ) -> None:
+        current_status = await pool.fetchval(
+            "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
+            execution_id,
+        )
+        if execution_terminal(str(current_status or "")):
+            log.info(
+                "execution_finalize_skipped_terminal",
+                execution_id=execution_id,
+                thread_key=thread_key,
+                attempted_status=status,
+                attempted_terminal_reason=terminal_reason,
+                current_status=current_status,
+            )
+            return
+
         duration_s = 0.0
         completed_at = dt.datetime.now(dt.timezone.utc)
         if isinstance(started_at, dt.datetime):
@@ -2158,12 +2188,22 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                 await pending_event
         with contextlib.suppress(Exception):
             await stream.aclose()
+        with contextlib.suppress(Exception):
+            await backend.close_streams(session)
 
     if turn_done_event is None:
         status_row = await pool.fetchrow(
             "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
             execution_id,
         )
+        if status_row and execution_terminal(str(status_row["status"] or "")):
+            log.info(
+                "execution_stream_end_ignored_after_terminal",
+                execution_id=execution_id,
+                thread_key=thread_key,
+                status=status_row["status"],
+            )
+            return
         if status_row and status_row["status"] == "cancel_requested":
             await _stop_execution_session(
                 thread_key,

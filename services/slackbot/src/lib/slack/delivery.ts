@@ -186,8 +186,7 @@ export function renderTerminalResultCopy(opts: {
     || rawValues.includes("execution_error")
     || rawValues.includes("stream_ended_without_turn_done")
     || rawValues.includes("assignment_missing")
-    || rawValues.includes("hard_deadline_exceeded")
-    || rawBlob.includes("connection error")) {
+    || rawValues.includes("hard_deadline_exceeded")) {
     const detail = harnessErrorDetail(terminalReason, detailText);
     return detail ? `${EXECUTION_FAILED_MESSAGE}\n\n${detail}` : EXECUTION_FAILED_MESSAGE;
   }
@@ -225,8 +224,31 @@ export function isRuntimeError(opts: {
     || rawValues.includes("stream_ended_without_turn_done")
     || rawValues.includes("assignment_missing")
     || rawValues.includes("hard_deadline_exceeded")
-    || rawBlob.includes("connection error")
   );
+}
+
+export function shouldNotifyRuntimeErrorChannel(opts: {
+  status?: unknown;
+  terminalReason?: unknown;
+  resultText?: unknown;
+  errorText?: unknown;
+}): boolean {
+  const status = normalizedTerminalString(opts.status);
+  const terminalReason = normalizedTerminalString(opts.terminalReason);
+  const resultText = normalizedTerminalString(opts.resultText);
+  const errorText = normalizedTerminalString(opts.errorText);
+  const rawBlob = [terminalReason, resultText, errorText]
+    .map((value) => value.toLowerCase())
+    .filter(Boolean)
+    .join("\n");
+
+  if (status !== "failed_permanent") return false;
+  if (isCancellationTerminalState(status, terminalReason, resultText, errorText)) return false;
+  if (terminalReason === "silence_deadline_exceeded"
+    || rawBlob.includes("execution made no progress before silence deadline")
+    || rawBlob.includes("silence deadline")) return false;
+
+  return true;
 }
 
 export function buildRuntimeErrorDetail(opts: {

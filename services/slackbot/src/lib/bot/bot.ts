@@ -16,10 +16,10 @@ import {
   buildRuntimeErrorDetail,
   flattenMarkdownTables,
   isCancellationTerminalState,
-  isRuntimeError,
   isSlackInvalidBlocksError,
   normalizedTerminalString,
   renderTerminalResultCopy,
+  shouldNotifyRuntimeErrorChannel,
   splitSlackMessage,
 } from "@/lib/slack/delivery";
 import type { SlackBlock, StreamChunk } from "@/lib/slack/types";
@@ -1142,27 +1142,11 @@ export class SlackBot {
               isError: payload.is_error,
             });
             if (rendered) tracker.resultText = rendered;
-            if (isRuntimeError({ resultText: result, errorText, isError: payload.is_error })) {
-              this.notifyRuntimeErrorChannel({
-                threadKey,
-                executionId,
-                status: "turn_error",
-                terminalReason: "",
-                errorText,
-                resultText: result,
-              }).catch((err) => {
-                log.warn("runtime_error_alert_failed", {
-                  thread_key: threadKey,
-                  execution_id: executionId,
-                  error: err instanceof Error ? err.message : String(err),
-                });
-              });
-            }
-              terminal = true;
-              break;
-            }
+            terminal = true;
+            break;
+          }
 
-            if (eventType === "execution.state") {
+          if (eventType === "execution.state") {
             const status = String(payload.status || "");
             tracker.agentThreadId = agentThreadIdFromRecord(payload) || tracker.agentThreadId;
             tracker.observeRepoContext(normalizeRepoContext(payload.repo_context));
@@ -1174,7 +1158,12 @@ export class SlackBot {
                 errorText: payload.error_text,
               });
               if (rendered) tracker.resultText = rendered;
-              if (isRuntimeError({ status, terminalReason: payload.terminal_reason, errorText: payload.error_text, isError: payload.is_error })) {
+              if (shouldNotifyRuntimeErrorChannel({
+                status,
+                terminalReason: payload.terminal_reason,
+                resultText: payload.result_text,
+                errorText: payload.error_text,
+              })) {
                 this.notifyRuntimeErrorChannel({
                   threadKey,
                   executionId,
@@ -1395,7 +1384,12 @@ export class SlackBot {
     const fpTerminalReason = typeof finalPayload.terminal_reason === "string" ? finalPayload.terminal_reason : "";
     const fpErrorText = typeof finalPayload.error_text === "string" ? finalPayload.error_text : "";
     const fpResultText = typeof finalPayload.result_text === "string" ? finalPayload.result_text : "";
-    if (isRuntimeError({ status: fpStatus, terminalReason: fpTerminalReason, errorText: fpErrorText })) {
+    if (shouldNotifyRuntimeErrorChannel({
+      status: fpStatus,
+      terminalReason: fpTerminalReason,
+      resultText: fpResultText,
+      errorText: fpErrorText,
+    })) {
       this.notifyRuntimeErrorChannel({
         threadKey,
         executionId,
