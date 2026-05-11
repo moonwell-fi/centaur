@@ -1250,7 +1250,6 @@ async def steer_execution(
 
     status = row["status"]
     thread_key = row["thread_key"]
-    assignment_generation = int(row["assignment_generation"])
 
     if status != "running":
         log.info(
