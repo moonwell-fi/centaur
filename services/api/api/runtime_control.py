@@ -82,7 +82,7 @@ _MAX_WORKFLOW_EXECUTION_SLOTS = max(
     1,
 )
 EXECUTION_WORKER_LEASE_S = max(
-    float(os.getenv("EXECUTION_WORKER_LEASE_S", "5.0")),
+    float(os.getenv("EXECUTION_WORKER_LEASE_S", "60.0")),
     max(EXECUTION_WATCHDOG_POLL_S * 2, 1.0),
 )
 FINAL_DELIVERY_READY_GRACE_S = max(

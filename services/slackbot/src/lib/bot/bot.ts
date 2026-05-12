@@ -38,6 +38,10 @@ const FINAL_DELIVERY_BATCH_SIZE = 5;
 const FINAL_DELIVERY_IDLE_MS = 2_000;
 const FINAL_DELIVERY_ERROR_MS = 5_000;
 const FINAL_DELIVERY_LEASE_SECONDS = 90;
+const WORKFLOW_START_TIMEOUT_MS = Math.max(
+  Number(process.env.CENTAUR_WORKFLOW_START_TIMEOUT_MS || 120_000),
+  30_000,
+);
 const EXECUTION_HARNESSES = new Set(["amp", "claude-code", "codex", "pi-mono"]);
 const PROMPT_FLAG_ALIASES = new Map<string, string>([
   ["claude", "claude-code"],
@@ -488,6 +492,7 @@ export class SlackBot {
       new CentaurClient({
         apiUrl: process.env.CENTAUR_API_URL || "http://api:8000",
         apiKey: process.env.SLACKBOT_API_KEY || process.env.API_SECRET_KEY || "",
+        timeoutMs: Number(process.env.CENTAUR_API_TIMEOUT_MS || 30_000),
         logger: log,
       }),
       process.env.THREAD_VIEWER_URL || "",
@@ -716,6 +721,7 @@ export class SlackBot {
         triggerKey,
         eagerStart: true,
         input: workflowInput,
+        timeoutMs: WORKFLOW_START_TIMEOUT_MS,
       });
     } catch (err) {
       if (triggerKey && isIdempotencyMismatch(err)) {
@@ -727,6 +733,7 @@ export class SlackBot {
           workflowName: "slack_thread_turn",
           eagerStart: true,
           input: workflowInput,
+          timeoutMs: WORKFLOW_START_TIMEOUT_MS,
         });
       } else {
         throw err;

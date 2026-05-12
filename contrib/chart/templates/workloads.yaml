@@ -12,7 +12,9 @@ metadata:
 {{ include "centaur.componentLabels" (dict "root" . "component" "postgres") | nindent 4 }}
 spec:
   serviceName: {{ include "centaur.componentName" (dict "root" . "component" "postgres") }}
+  podManagementPolicy: OrderedReady
   replicas: 1
+  revisionHistoryLimit: 10
   selector:
     matchLabels:
 {{ include "centaur.componentSelectorLabels" (dict "root" . "component" "postgres") | nindent 6 }}
@@ -46,20 +48,42 @@ spec:
                   name: {{ required "postgres.auth.existingSecretName is required when postgres.enabled=true" .Values.postgres.auth.existingSecretName | quote }}
                   key: {{ required "postgres.auth.existingSecretKey is required when postgres.enabled=true" .Values.postgres.auth.existingSecretKey | quote }}
 {{- end }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           ports:
             - containerPort: 5432
               name: postgres
+              protocol: TCP
           readinessProbe:
+            failureThreshold: 3
+            periodSeconds: 10
+            successThreshold: 1
             tcpSocket:
               port: 5432
+            timeoutSeconds: 1
           livenessProbe:
+            failureThreshold: 3
+            periodSeconds: 10
+            successThreshold: 1
             tcpSocket:
               port: 5432
+            timeoutSeconds: 1
           resources:
 {{ toYaml .Values.postgres.resources | nindent 12 }}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      terminationGracePeriodSeconds: 30
+  updateStrategy:
+    rollingUpdate:
+      partition: 0
+    type: RollingUpdate
   {{- if .Values.postgres.persistence.enabled }}
   volumeClaimTemplates:
     - metadata:
@@ -72,6 +96,7 @@ spec:
         resources:
           requests:
             storage: {{ .Values.postgres.persistence.size }}
+        volumeMode: Filesystem
   {{- else }}
   volumeClaimTemplates: []
   {{- end }}

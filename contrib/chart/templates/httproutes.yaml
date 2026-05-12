@@ -42,15 +42,21 @@ spec:
           {{- end }}
           {{- with $backend.kind }}
           kind: {{ . | quote }}
+          {{- else }}
+          kind: "Service"
           {{- end }}
           {{- with $backend.group }}
           group: {{ . | quote }}
+          {{- else }}
+          group: ""
           {{- end }}
           {{- with $backend.port }}
           port: {{ . }}
           {{- end }}
           {{- with $backend.weight }}
           weight: {{ . }}
+          {{- else }}
+          weight: 1
           {{- end }}
 {{- end }}
       {{- end }}

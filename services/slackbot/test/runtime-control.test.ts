@@ -135,6 +135,7 @@ describe("SlackBot runtime control", () => {
     expect(client.startWorkflowRun.mock.calls[0][0].triggerKey).toBe(
       `slack-thread-turn:${normalizedThreadKey}:slack:1700000000.000002`,
     );
+    expect(client.startWorkflowRun.mock.calls[0][0].timeoutMs).toBe(120_000);
     expect(client.startWorkflowRun.mock.calls[0][0].input.history_messages).toEqual([
       {
         message_id: "slack:1700000000.000001",

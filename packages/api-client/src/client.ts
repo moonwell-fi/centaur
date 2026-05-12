@@ -72,6 +72,7 @@ export interface WorkflowRunOptions {
   triggerKey?: string;
   input?: Record<string, unknown>;
   eagerStart?: boolean;
+  timeoutMs?: number;
 }
 
 export interface WorkflowRunAccepted {
@@ -119,13 +120,14 @@ export class CentaurClient {
   constructor(opts: {
     apiUrl: string;
     apiKey: string;
+    timeoutMs?: number;
     logger?: { info: Function; warn: Function; error: Function };
   }) {
     this.log = opts.logger;
     this.http = axios.create({
       baseURL: opts.apiUrl,
       headers: { Authorization: `Bearer ${opts.apiKey}` },
-      timeout: 30_000,
+      timeout: opts.timeoutMs ?? 30_000,
     });
   }
 
@@ -186,6 +188,8 @@ export class CentaurClient {
       trigger_key: opts.triggerKey,
       input: opts.input ?? {},
       eager_start: opts.eagerStart ?? false,
+    }, {
+      timeout: opts.timeoutMs,
     });
     return data as WorkflowRunAccepted;
   }
