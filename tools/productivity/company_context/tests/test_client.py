@@ -33,6 +33,16 @@ class _FakeConnection:
         self.closed = True
 
 
+class _FakeSlackClient:
+    def __init__(self, messages=None) -> None:
+        self.messages = messages or []
+        self.calls = []
+
+    def search_messages(self, query, max_results=20):
+        self.calls.append((query, max_results))
+        return self.messages
+
+
 @pytest.mark.parametrize("query", ["", "   "])
 def test_search_rejects_empty_query(query):
     result = CompanyContextClient("postgresql://example").search(query)
@@ -56,13 +66,21 @@ def test_search_queries_bm25_and_returns_compact_results(monkeypatch):
                 "metadata": {"channel_name": "eng-ai", "thread_ts": "1770000000.000000"},
                 "score": 1.25,
             }
-        ]
+        ],
+        row={
+            "latest_date": dt.datetime(2026, 5, 10, 15, 30, tzinfo=dt.UTC),
+            "latest_source_updated_at": dt.datetime(2026, 5, 10, 15, 30, tzinfo=dt.UTC),
+            "latest_occurred_at": dt.datetime(2026, 5, 10, 14, 0, tzinfo=dt.UTC),
+            "document_count": 42,
+        },
     )
+    fake_slack = _FakeSlackClient()
 
     async def fake_connect(*args, **kwargs):
         return fake
 
     monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+    monkeypatch.setattr(company_context_client, "_load_slack_client", lambda: fake_slack)
 
     result = CompanyContextClient("postgresql://example").search(
         "ParadeDB BM25",
@@ -73,6 +91,10 @@ def test_search_queries_bm25_and_returns_compact_results(monkeypatch):
 
     assert result["status"] == "ok"
     assert result["count"] == 1
+    assert result["indexed_count"] == 1
+    assert result["live_count"] == 0
+    assert result["indexed_cutoff"] == "2026-05-10T15:30:00+00:00"
+    assert fake_slack.calls == [("ParadeDB BM25 after:2026-05-10", 5)]
     assert result["results"][0] == {
         "document_id": "slack:thread:C123:1770000000.000000",
         "source": "slack",
@@ -86,6 +108,8 @@ def test_search_queries_bm25_and_returns_compact_results(monkeypatch):
         "access_scope": "",
         "score": 1.25,
         "preview": "",
+        "lane": "indexed",
+        "result_type": "slack_thread",
         "occurred_at": "2026-05-08T12:00:00+00:00",
         "source_updated_at": "2026-05-08T12:05:00+00:00",
         "metadata": {"channel_name": "eng-ai", "thread_ts": "1770000000.000000"},
@@ -99,6 +123,109 @@ def test_search_queries_bm25_and_returns_compact_results(monkeypatch):
     assert "paradedb.score(document_id)" in query
     assert args == ("ParadeDB", "BM25", "slack", "slack_thread", 5)
     assert fake.closed is True
+
+
+def test_search_appends_live_slack_gap_results(monkeypatch):
+    fake = _FakeConnection(
+        rows=[],
+        row={
+            "latest_date": dt.datetime(2026, 5, 10, 15, 30, tzinfo=dt.UTC),
+            "latest_source_updated_at": dt.datetime(2026, 5, 10, 15, 30, tzinfo=dt.UTC),
+            "latest_occurred_at": dt.datetime(2026, 5, 10, 14, 0, tzinfo=dt.UTC),
+            "document_count": 42,
+        },
+    )
+    fake_slack = _FakeSlackClient(
+        [
+            {
+                "channel": "eng-ai",
+                "channel_id": "C123",
+                "user": "alice",
+                "user_id": "U123",
+                "text": "New state root mismatch update",
+                "timestamp": "1770000000.000000",
+                "permalink": "https://slack.example/archives/C123/p1770000000000000",
+                "thread_ts": "1770000000.000000",
+                "reply_count": 3,
+            }
+        ]
+    )
+
+    async def fake_connect(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+    monkeypatch.setattr(company_context_client, "_load_slack_client", lambda: fake_slack)
+
+    result = CompanyContextClient("postgresql://example").search(
+        "state root mismatch",
+        limit=7,
+        source="slack",
+    )
+
+    assert result["status"] == "ok"
+    assert result["count"] == 1
+    assert result["indexed_count"] == 0
+    assert result["live_count"] == 1
+    assert result["indexed_cutoff"] == "2026-05-10T15:30:00+00:00"
+    assert result["live_error"] is None
+    assert fake_slack.calls == [("state root mismatch after:2026-05-10", 7)]
+    assert result["results"] == [
+        {
+            "document_id": "",
+            "source": "slack",
+            "source_type": "slack_live_message",
+            "source_document_id": "1770000000.000000",
+            "source_chunk_id": "1770000000.000000",
+            "parent_document_id": None,
+            "title": "#eng-ai from alice",
+            "url": "https://slack.example/archives/C123/p1770000000000000",
+            "author_name": "alice",
+            "access_scope": "",
+            "score": None,
+            "preview": "New state root mismatch update",
+            "occurred_at": "2026-02-02T02:40:00+00:00",
+            "source_updated_at": None,
+            "lane": "live",
+            "result_type": "slack_live_message",
+            "metadata": {
+                "channel_name": "eng-ai",
+                "channel_id": "C123",
+                "user_name": "alice",
+                "user_id": "U123",
+                "message_ts": "1770000000.000000",
+                "thread_ts": "1770000000.000000",
+                "reply_count": 3,
+            },
+        }
+    ]
+
+
+def test_search_preserves_existing_slack_after_modifier(monkeypatch):
+    fake = _FakeConnection(
+        rows=[],
+        row={
+            "latest_date": dt.datetime(2026, 5, 10, 15, 30, tzinfo=dt.UTC),
+            "latest_source_updated_at": dt.datetime(2026, 5, 10, 15, 30, tzinfo=dt.UTC),
+            "latest_occurred_at": dt.datetime(2026, 5, 10, 14, 0, tzinfo=dt.UTC),
+            "document_count": 42,
+        },
+    )
+    fake_slack = _FakeSlackClient()
+
+    async def fake_connect(*args, **kwargs):
+        return fake
+
+    monkeypatch.setattr(company_context_client.asyncpg, "connect", fake_connect)
+    monkeypatch.setattr(company_context_client, "_load_slack_client", lambda: fake_slack)
+
+    result = CompanyContextClient("postgresql://example").search(
+        "state root after:2026-05-11",
+        source="slack",
+    )
+
+    assert result["status"] == "ok"
+    assert fake_slack.calls == [("state root after:2026-05-11", 10)]
 
 
 def test_search_terms_are_required_once(monkeypatch):
