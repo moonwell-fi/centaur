@@ -22,7 +22,7 @@ class FakeCtx:
 @pytest_asyncio.fixture(autouse=True)
 async def _clear_company_context_tables(db_pool):
     await db_pool.execute(
-        "TRUNCATE TABLE company_context_documents, slack_sync_checkpoints, "
+        "TRUNCATE TABLE company_context_documents, slack_sync_backfill_jobs, slack_sync_checkpoints, "
         "slack_sync_messages, slack_sync_runs, slack_sync_users, slack_sync_channels, "
         "workflow_runs CASCADE",
     )
@@ -61,7 +61,7 @@ def test_schedule_respects_env_overrides(monkeypatch):
 
 async def _seed_slack_basics(db_pool) -> None:
     await db_pool.execute(
-        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
         "VALUES ('C_PUBLIC', 'team-eng', TRUE), ('C_OTHER', 'general', TRUE)",
     )
     await db_pool.execute(
@@ -174,7 +174,7 @@ async def test_projects_documents_without_user_rows(db_pool):
     from workflows import company_context_documents
 
     await db_pool.execute(
-        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
         "VALUES ('C_PUBLIC', 'team-eng', TRUE)",
     )
     base = dt.datetime(2026, 5, 6, 12, 0, tzinfo=dt.timezone.utc)

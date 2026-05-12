@@ -441,6 +441,26 @@ ETL_FAILED_SCOPES = Gauge(
     "Number of source scopes with a recorded sync failure.",
     ["source", "source_type"],
 )
+ETL_BACKFILL_JOBS = Gauge(
+    "etl_backfill_jobs",
+    "Number of backfill jobs by source, job type, and status.",
+    ["source", "job_type", "status"],
+)
+ETL_BACKFILL_JOB_AGE_SECONDS = Gauge(
+    "etl_backfill_job_age_seconds",
+    "Oldest age in seconds for backfill jobs by source, job type, and status.",
+    ["source", "job_type", "status"],
+)
+ETL_ITEMS_ENQUEUED_TOTAL = Counter(
+    "etl_items_enqueued_total",
+    "Deferred source items enqueued by ETL workflows.",
+    ["source", "source_type", "item_type"],
+)
+ETL_ITEMS_DELETED_TOTAL = Counter(
+    "etl_items_deleted_total",
+    "Source items hard-deleted by ETL workflows.",
+    ["source", "source_type", "item_type"],
+)
 ETL_ITEMS_SEEN_TOTAL = Counter(
     "etl_items_seen_total",
     "Raw source items fetched or observed by ETL workflows.",
@@ -575,9 +595,27 @@ def record_etl_items_seen(source: str, source_type: str, item_type: str, count: 
         ).inc(count)
 
 
+def record_etl_items_enqueued(source: str, source_type: str, item_type: str, count: int) -> None:
+    if count > 0:
+        ETL_ITEMS_ENQUEUED_TOTAL.labels(
+            source=source,
+            source_type=source_type,
+            item_type=item_type,
+        ).inc(count)
+
+
 def record_etl_items_upserted(source: str, source_type: str, item_type: str, count: int) -> None:
     if count > 0:
         ETL_ITEMS_UPSERTED_TOTAL.labels(
+            source=source,
+            source_type=source_type,
+            item_type=item_type,
+        ).inc(count)
+
+
+def record_etl_items_deleted(source: str, source_type: str, item_type: str, count: int) -> None:
+    if count > 0:
+        ETL_ITEMS_DELETED_TOTAL.labels(
             source=source,
             source_type=source_type,
             item_type=item_type,
@@ -709,13 +747,15 @@ async def refresh_etl_metrics(pool: Pool) -> None:
     ETL_SOURCE_CURSOR_LAG_SECONDS.clear_children()
     ETL_ACTIVE_SCOPES.clear_children()
     ETL_FAILED_SCOPES.clear_children()
+    ETL_BACKFILL_JOBS.clear_children()
+    ETL_BACKFILL_JOB_AGE_SECONDS.clear_children()
     COMPANY_CONTEXT_PROJECTION_LAG_SECONDS.clear_children()
 
     slack_scope_rows = await pool.fetch(
         "SELECT ch.channel_id, cp.watermark_ts, cp.last_error "
         "FROM slack_sync_channels ch "
         "LEFT JOIN slack_sync_checkpoints cp ON cp.channel_id = ch.channel_id "
-        "WHERE ch.is_member = TRUE"
+        "WHERE ch.is_syncable = TRUE"
     )
     ETL_ACTIVE_SCOPES.labels(source="slack", source_type="channel").set(
         len(slack_scope_rows)
@@ -738,6 +778,32 @@ async def refresh_etl_metrics(pool: Pool) -> None:
     ETL_SOURCE_CURSOR_LAG_SECONDS.labels(source="slack", source_type="channel").set(
         max(max_lag_s, 0.0)
     )
+
+    backfill_rows = await pool.fetch(
+        "SELECT job_type, status, COUNT(*) AS cnt, MIN(updated_at) AS oldest_updated_at "
+        "FROM slack_sync_backfill_jobs "
+        "GROUP BY job_type, status"
+    )
+    for row in backfill_rows:
+        job_type = str(row["job_type"] or "")
+        status = str(row["status"] or "")
+        ETL_BACKFILL_JOBS.labels(
+            source="slack",
+            job_type=job_type,
+            status=status,
+        ).set(int(row["cnt"] or 0))
+        age_seconds = 0.0
+        oldest_updated_at = row["oldest_updated_at"]
+        if isinstance(oldest_updated_at, dt.datetime):
+            age_seconds = max(
+                (now - oldest_updated_at.astimezone(dt.timezone.utc)).total_seconds(),
+                0.0,
+            )
+        ETL_BACKFILL_JOB_AGE_SECONDS.labels(
+            source="slack",
+            job_type=job_type,
+            status=status,
+        ).set(age_seconds)
 
     raw_latest = await pool.fetchval("SELECT MAX(updated_at) FROM slack_sync_messages")
     projected_latest = await pool.fetchval(

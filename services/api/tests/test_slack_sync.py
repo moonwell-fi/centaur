@@ -12,9 +12,9 @@ import pytest_asyncio
 
 
 class FakeCtx:
-    def __init__(self, db_pool):
+    def __init__(self, db_pool, run_id: str = "wfr-test-slack-sync"):
         self._pool = db_pool
-        self.run_id = "wfr-test-slack-sync"
+        self.run_id = run_id
         self.logs: list[tuple[str, dict[str, Any]]] = []
 
     def log(self, msg: str, **kwargs: Any) -> None:
@@ -28,6 +28,7 @@ class FakeSlackClient:
         channels: list[dict[str, Any]] | None = None,
         users: list[dict[str, Any]] | None = None,
         messages: list[dict[str, Any]] | None = None,
+        history_pages: dict[str, list[dict[str, Any]]] | None = None,
         replies: dict[str, list[dict[str, Any]]] | None = None,
         reply_pages: dict[str, list[dict[str, Any]]] | None = None,
         sync_state: dict[str, Any] | None = None,
@@ -35,6 +36,7 @@ class FakeSlackClient:
         self.channels = channels or []
         self.users = users or []
         self.messages = messages or []
+        self.history_pages = history_pages or {}
         self.replies = replies or {}
         self.reply_pages = reply_pages or {}
         self.sync_state = sync_state or {
@@ -55,7 +57,7 @@ class FakeSlackClient:
         return [
             ch
             for ch in self.channels
-            if not ch.get("is_private") and ch.get("is_member", True)
+            if not ch.get("is_private") and ch.get("is_syncable", True)
         ][:limit]
 
     def _etl_access_mode(self) -> str:
@@ -90,6 +92,18 @@ class FakeSlackClient:
             "oldest": oldest,
             "latest": latest,
         })
+        if channel in self.history_pages:
+            page = self.history_pages[channel].pop(0)
+            messages = page.get("messages", [])
+            return {
+                "channel": channel,
+                "channel_id": channel,
+                "messages": messages,
+                "count": len(messages),
+                "has_more": bool(page.get("has_more")),
+                "next_cursor": page.get("next_cursor"),
+                "sync_state": page.get("sync_state", self.sync_state),
+            }
         return {
             "channel": channel,
             "channel_id": channel,
@@ -146,8 +160,8 @@ class FakeSlackClient:
 async def _clear_slack_sync_tables(db_pool, monkeypatch):
     monkeypatch.delenv("SLACK_ETL_EXCLUDED_CHANNEL_PATTERNS", raising=False)
     await db_pool.execute(
-        "TRUNCATE TABLE slack_sync_checkpoints, slack_sync_messages, slack_sync_runs, "
-        "slack_sync_users, slack_sync_channels CASCADE",
+        "TRUNCATE TABLE slack_sync_backfill_jobs, slack_sync_checkpoints, "
+        "slack_sync_messages, slack_sync_runs, slack_sync_users, slack_sync_channels CASCADE",
     )
     yield
 
@@ -158,7 +172,7 @@ def _public_channel() -> dict[str, Any]:
         "name": "ai-agent",
         "is_private": False,
         "is_archived": False,
-        "is_member": True,
+        "is_syncable": True,
         "topic": "Agents",
         "purpose": "Testing",
         "member_count": 10,
@@ -171,7 +185,7 @@ def _private_channel() -> dict[str, Any]:
         "name": "private-room",
         "is_private": True,
         "is_archived": False,
-        "is_member": True,
+        "is_syncable": True,
     }
 
 
@@ -181,7 +195,7 @@ def _other_public_channel() -> dict[str, Any]:
         "name": "other-channel",
         "is_private": False,
         "is_archived": False,
-        "is_member": False,
+        "is_syncable": False,
         "topic": "Other",
         "purpose": "Also public",
         "member_count": 5,
@@ -194,7 +208,7 @@ def _alert_channel() -> dict[str, Any]:
         "name": "eng-cyclops-alerts",
         "is_private": False,
         "is_archived": False,
-        "is_member": True,
+        "is_syncable": True,
         "topic": "Alerts",
         "purpose": "Monitoring noise",
         "member_count": 3,
@@ -259,6 +273,36 @@ def test_schedule_respects_env_overrides(monkeypatch):
     assert reloaded.SCHEDULE["interval_seconds"] == 900
 
 
+def test_backfill_schedule_defaults_enabled(monkeypatch):
+    monkeypatch.delenv("SLACK_ETL_ENABLED", raising=False)
+    monkeypatch.delenv("SLACK_BACKFILL_ENABLED", raising=False)
+    monkeypatch.delenv("SLACK_BACKFILL_INTERVAL_SECONDS", raising=False)
+
+    from workflows import slack_backfill
+
+    reloaded = importlib.reload(slack_backfill)
+
+    assert reloaded.SCHEDULE == {
+        "schedule_id": "slack_backfill",
+        "interval_seconds": 3600,
+        "enabled": True,
+        "no_delivery": True,
+    }
+
+
+def test_backfill_schedule_respects_env_overrides(monkeypatch):
+    monkeypatch.setenv("SLACK_ETL_ENABLED", "true")
+    monkeypatch.setenv("SLACK_BACKFILL_ENABLED", "false")
+    monkeypatch.setenv("SLACK_BACKFILL_INTERVAL_SECONDS", "120")
+
+    from workflows import slack_backfill
+
+    reloaded = importlib.reload(slack_backfill)
+
+    assert reloaded.SCHEDULE["enabled"] is False
+    assert reloaded.SCHEDULE["interval_seconds"] == 120
+
+
 def test_repo_slack_client_paths_prefer_reorganized_tool_layout():
     from workflows import slack_sync
 
@@ -273,7 +317,7 @@ async def test_slack_etl_disabled_noops_without_run_row(db_pool, monkeypatch):
     from workflows import slack_sync
 
     await db_pool.execute(
-        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
         "VALUES ('C_OLD', 'old-channel', TRUE)",
     )
     fake = FakeSlackClient(channels=[_public_channel()])
@@ -291,7 +335,7 @@ async def test_slack_etl_disabled_noops_without_run_row(db_pool, monkeypatch):
     assert fake.list_etl_users_calls == 0
     assert await db_pool.fetchval("SELECT COUNT(*) FROM slack_sync_runs") == 0
     assert await db_pool.fetchval(
-        "SELECT is_member FROM slack_sync_channels WHERE channel_id = 'C_OLD'",
+        "SELECT is_syncable FROM slack_sync_channels WHERE channel_id = 'C_OLD'",
     ) is True
 
 
@@ -300,7 +344,7 @@ async def test_no_public_channels_noops_without_run_row(db_pool):
     from workflows import slack_sync
 
     await db_pool.execute(
-        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
         "VALUES ('C_OLD', 'old-channel', TRUE)",
     )
     fake = FakeSlackClient(channels=[])
@@ -315,7 +359,7 @@ async def test_no_public_channels_noops_without_run_row(db_pool):
     assert fake.list_bot_channels_calls == 0
     assert await db_pool.fetchval("SELECT COUNT(*) FROM slack_sync_runs") == 0
     assert await db_pool.fetchval(
-        "SELECT is_member FROM slack_sync_channels WHERE channel_id = 'C_OLD'",
+        "SELECT is_syncable FROM slack_sync_channels WHERE channel_id = 'C_OLD'",
     ) is False
 
 
@@ -332,7 +376,7 @@ async def test_syncs_all_public_channels_by_default(db_pool):
     assert result["status"] == "completed"
     assert result["channels_synced"] == 2
     assert [call["channel"] for call in fake.history_calls] == ["C_PUBLIC", "C_OTHER"]
-    assert [call["limit"] for call in fake.history_calls] == [600, 600]
+    assert [call["limit"] for call in fake.history_calls] == [100, 100]
     assert await db_pool.fetchval(
         "SELECT COUNT(*) FROM slack_sync_channels WHERE channel_id = 'C_OTHER'",
     ) == 1
@@ -397,7 +441,7 @@ async def test_all_channels_excluded_noops_without_run_row(db_pool, monkeypatch)
     from workflows import slack_sync
 
     await db_pool.execute(
-        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
         "VALUES ('C_OLD', 'old-channel', TRUE)",
     )
     fake = FakeSlackClient(channels=[_alert_channel()])
@@ -420,7 +464,7 @@ async def test_all_channels_excluded_noops_without_run_row(db_pool, monkeypatch)
     assert fake.list_etl_users_calls == 0
     assert await db_pool.fetchval("SELECT COUNT(*) FROM slack_sync_runs") == 0
     assert await db_pool.fetchval(
-        "SELECT is_member FROM slack_sync_channels WHERE channel_id = 'C_OLD'",
+        "SELECT is_syncable FROM slack_sync_channels WHERE channel_id = 'C_OLD'",
     ) is False
 
 
@@ -469,18 +513,18 @@ async def test_syncs_user_token_public_channels(
     assert result["channels_synced"] == 1
     assert result["channels_skipped"] == 0
     assert result["messages_upserted"] == 1
-    assert result["replies_upserted"] == 1
+    assert result["replies_upserted"] == 0
     assert fake.list_etl_channels_calls == 1
     assert fake.list_bot_channels_calls == 0
     assert fake.list_etl_users_calls == 1
     assert fake.list_users_calls == 0
 
     channel = await db_pool.fetchrow(
-        "SELECT channel_name, is_member FROM slack_sync_channels WHERE channel_id = 'C_PUBLIC'",
+        "SELECT channel_name, is_syncable FROM slack_sync_channels WHERE channel_id = 'C_PUBLIC'",
     )
     assert channel is not None
     assert channel["channel_name"] == "ai-agent"
-    assert channel["is_member"] is True
+    assert channel["is_syncable"] is True
     assert await db_pool.fetchval(
         "SELECT COUNT(*) FROM slack_sync_channels WHERE channel_id = 'G_PRIVATE'",
     ) == 0
@@ -496,17 +540,17 @@ async def test_syncs_user_token_public_channels(
         "SELECT message_ts, thread_ts, parent_message_ts, text FROM slack_sync_messages "
         "ORDER BY message_ts",
     )
-    assert [row["message_ts"] for row in messages] == ["3000000.000000", "3000001.000000"]
-    assert messages[1]["thread_ts"] == "3000000.000000"
-    assert messages[1]["parent_message_ts"] == "3000000.000000"
+    assert [row["message_ts"] for row in messages] == ["3000000.000000"]
+    assert messages[0]["thread_ts"] == "3000000.000000"
+    assert messages[0]["parent_message_ts"] is None
 
     checkpoint = await db_pool.fetchrow(
-        "SELECT watermark_ts, thread_lookback_days FROM slack_sync_checkpoints "
+        "SELECT watermark_ts, last_error FROM slack_sync_checkpoints "
         "WHERE channel_id = 'C_PUBLIC'",
     )
     assert checkpoint is not None
     assert checkpoint["watermark_ts"] == "3000000.000000"
-    assert checkpoint["thread_lookback_days"] == 3
+    assert checkpoint["last_error"] == ""
 
     run = await db_pool.fetchrow(
         "SELECT status, channels_requested, channels_skipped, metadata "
@@ -521,44 +565,42 @@ async def test_syncs_user_token_public_channels(
 
 
 @pytest.mark.asyncio
-async def test_syncs_all_thread_reply_pages_before_advancing_checkpoint(db_pool):
+async def test_sync_enqueues_thread_refresh_for_recent_thread_roots(db_pool):
     from workflows import slack_sync
 
-    second_reply = {
-        **_reply_message(),
-        "timestamp": "3000002.000000",
-        "text": "second reply page",
-    }
+    await db_pool.execute(
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
+        "VALUES ('C_PUBLIC', 'ai-agent', TRUE)",
+    )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_checkpoints (channel_id, watermark_ts) "
+        "VALUES ('C_PUBLIC', '3000000.000000')",
+    )
     fake = FakeSlackClient(
         channels=[_public_channel()],
         messages=[_root_message()],
-        reply_pages={
-            "3000000.000000": [
-                {
-                    "messages": [_root_message(), _reply_message()],
-                    "has_more": True,
-                    "next_cursor": "cursor-2",
-                },
-                {
-                    "messages": [second_reply],
-                    "has_more": False,
-                    "next_cursor": None,
-                },
-            ],
-        },
     )
     ctx = FakeCtx(db_pool)
 
-    with patch.object(slack_sync, "_client", return_value=fake):
+    with (
+        patch.object(slack_sync, "_client", return_value=fake),
+        patch.object(slack_sync, "_ts_within_days", return_value=True),
+    ):
         result = await slack_sync.handler(slack_sync.Input(), ctx)
 
     assert result["status"] == "completed"
-    assert result["replies_upserted"] == 2
-    assert [call["cursor"] for call in fake.reply_calls] == [None, "cursor-2"]
-    assert [call["limit"] for call in fake.reply_calls] == [200, 200]
-    assert await db_pool.fetchval(
-        "SELECT COUNT(*) FROM slack_sync_messages WHERE parent_message_ts = '3000000.000000'",
-    ) == 2
+    assert result["replies_upserted"] == 0
+    assert fake.reply_calls == []
+    thread_job = await db_pool.fetchrow(
+        "SELECT job_type, payload_json, status "
+        "FROM slack_sync_backfill_jobs "
+        "WHERE job_key = 'thread_refresh:C_PUBLIC:3000000.000000'",
+    )
+    assert thread_job is not None
+    payload = json.loads(str(thread_job["payload_json"]))
+    assert thread_job["job_type"] == "thread_refresh"
+    assert payload["thread_ts"] == "3000000.000000"
+    assert thread_job["status"] == "pending"
 
     checkpoint = await db_pool.fetchrow(
         "SELECT watermark_ts, last_error FROM slack_sync_checkpoints "
@@ -570,16 +612,119 @@ async def test_syncs_all_thread_reply_pages_before_advancing_checkpoint(db_pool)
 
 
 @pytest.mark.asyncio
+async def test_sync_skips_thread_refresh_when_recently_refreshed(db_pool):
+    from workflows import slack_sync
+
+    await db_pool.execute(
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
+        "VALUES ('C_PUBLIC', 'ai-agent', TRUE)",
+    )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_checkpoints (channel_id, watermark_ts) "
+        "VALUES ('C_PUBLIC', '3000000.000000')",
+    )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_messages ("
+        "channel_id, message_ts, occurred_at, thread_ts, parent_message_ts, is_thread_root, "
+        "user_id, text, reply_count, raw_payload, thread_refreshed_at, updated_at, last_seen_at"
+        ") VALUES ("
+        "'C_PUBLIC', '3000000.000000', NOW(), '3000000.000000', NULL, TRUE, "
+        "'U123', 'root message', 1, '{}'::jsonb, NOW(), NOW(), NOW()"
+        ")",
+    )
+    fake = FakeSlackClient(
+        channels=[_public_channel()],
+        messages=[_root_message()],
+    )
+    ctx = FakeCtx(db_pool)
+
+    with (
+        patch.object(slack_sync, "_client", return_value=fake),
+        patch.object(slack_sync, "_ts_within_days", return_value=True),
+    ):
+        result = await slack_sync.handler(slack_sync.Input(), ctx)
+
+    assert result["status"] == "completed"
+    assert await db_pool.fetchval(
+        "SELECT COUNT(*) FROM slack_sync_backfill_jobs "
+        "WHERE job_key = 'thread_refresh:C_PUBLIC:3000000.000000'",
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_backfill_thread_refresh_replaces_replies_and_marks_root(db_pool):
+    from workflows import slack_backfill
+
+    await db_pool.execute(
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
+        "VALUES ('C_PUBLIC', 'ai-agent', TRUE)",
+    )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_messages ("
+        "channel_id, message_ts, occurred_at, thread_ts, parent_message_ts, is_thread_root, "
+        "user_id, text, reply_count, raw_payload, updated_at, last_seen_at"
+        ") VALUES ("
+        "'C_PUBLIC', '3000000.000000', NOW(), '3000000.000000', NULL, TRUE, "
+        "'U123', 'root message', 1, '{}'::jsonb, NOW(), NOW()"
+        ")",
+    )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_messages ("
+        "channel_id, message_ts, occurred_at, thread_ts, parent_message_ts, is_thread_root, "
+        "user_id, text, reply_count, raw_payload, updated_at, last_seen_at"
+        ") VALUES ("
+        "'C_PUBLIC', '3000002.000000', NOW(), '3000000.000000', '3000000.000000', FALSE, "
+        "'U123', 'stale reply', 0, '{}'::jsonb, NOW(), NOW()"
+        ")",
+    )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_backfill_jobs ("
+        "job_key, job_type, payload_version, channel_id, payload_json, status"
+        ") VALUES ("
+        "'thread_refresh:C_PUBLIC:3000000.000000', 'thread_refresh', 1, 'C_PUBLIC', "
+        "$1::jsonb, 'pending')",
+        json.dumps({"thread_ts": "3000000.000000"}),
+    )
+    fake = FakeSlackClient(
+        channels=[_public_channel()],
+        replies={"3000000.000000": [_root_message(), _reply_message()]},
+    )
+    ctx = FakeCtx(db_pool, run_id="wfr-test-slack-backfill-thread-refresh")
+
+    with patch.object(slack_backfill, "shared_client", return_value=fake):
+        result = await slack_backfill.handler(slack_backfill.Input(channel_batch_limit=1), ctx)
+
+    assert result["status"] == "completed"
+    assert fake.history_calls == []
+    assert [call["cursor"] for call in fake.reply_calls] == [None]
+    assert await db_pool.fetchval(
+        "SELECT COUNT(*) FROM slack_sync_messages WHERE parent_message_ts = '3000000.000000'",
+    ) == 1
+    assert await db_pool.fetchval(
+        "SELECT text FROM slack_sync_messages "
+        "WHERE channel_id = 'C_PUBLIC' AND message_ts = '3000001.000000'",
+    ) == "reply"
+    assert await db_pool.fetchval(
+        "SELECT COUNT(*) FROM slack_sync_messages "
+        "WHERE channel_id = 'C_PUBLIC' AND message_ts = '3000002.000000'",
+    ) == 0
+    assert await db_pool.fetchval(
+        "SELECT thread_refreshed_at IS NOT NULL FROM slack_sync_messages "
+        "WHERE channel_id = 'C_PUBLIC' AND message_ts = '3000000.000000'",
+    ) is True
+
+
+@pytest.mark.asyncio
 async def test_incremental_oldest_uses_thread_lookback(db_pool):
     from workflows import slack_sync
 
     await db_pool.execute(
-        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
         "VALUES ('C_PUBLIC', 'ai-agent', TRUE)",
     )
     await db_pool.execute(
-        "INSERT INTO slack_sync_checkpoints (channel_id, watermark_ts, thread_lookback_days) "
-        "VALUES ('C_PUBLIC', '3000000.000000', 3)",
+        "INSERT INTO slack_sync_checkpoints (channel_id, watermark_ts) "
+        "VALUES ('C_PUBLIC', '3000000.000000')",
     )
     fake = FakeSlackClient(channels=[_public_channel()], messages=[], replies={})
     ctx = FakeCtx(db_pool)
@@ -591,28 +736,170 @@ async def test_incremental_oldest_uses_thread_lookback(db_pool):
 
 
 @pytest.mark.asyncio
-async def test_pending_backfill_cursor_preserves_original_window(db_pool):
+async def test_first_incremental_run_seeds_historical_backfill_job(db_pool):
     from workflows import slack_sync
 
-    await db_pool.execute(
-        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
-        "VALUES ('C_PUBLIC', 'ai-agent', TRUE)",
-    )
-    await db_pool.execute(
-        "INSERT INTO slack_sync_checkpoints ("
-        "channel_id, cursor, watermark_ts, oldest_ts, thread_lookback_days"
-        ") VALUES ('C_PUBLIC', 'cursor-2', '3000000.000000', '400000.000000', 3)",
-    )
     fake = FakeSlackClient(channels=[_public_channel()], messages=[], replies={})
     ctx = FakeCtx(db_pool)
 
-    with patch.object(slack_sync, "_client", return_value=fake):
+    with (
+        patch.object(slack_sync, "_client", return_value=fake),
+        patch.object(slack_sync, "_ts_now_minus_hours", return_value="900000.000000"),
+        patch.object(slack_sync, "_ts_now_minus_days", return_value="100000.000000"),
+    ):
         await slack_sync.handler(slack_sync.Input(), ctx)
 
     call = fake.history_calls[0]
-    assert call["oldest"] is None
-    assert call["state"]["cursor"] == "cursor-2"
-    assert call["state"]["oldest"] == "400000.000000"
+    assert call["state"]["cursor"] is None
+    assert call["oldest"] == "900000.000000"
+
+    backfill = await db_pool.fetchrow(
+        "SELECT job_key, job_type, payload_version, payload_json, status "
+        "FROM slack_sync_backfill_jobs "
+        "WHERE channel_id = 'C_PUBLIC' AND job_key LIKE 'bootstrap:%'",
+    )
+    assert backfill is not None
+    payload = json.loads(str(backfill["payload_json"]))
+    assert backfill["job_type"] == "channel_bootstrap"
+    assert backfill["payload_version"] == 1
+    assert payload["cursor"] is None
+    assert payload["oldest"] == "100000.000000"
+    assert payload["latest"] == call["oldest"]
+    assert backfill["status"] == "pending"
+
+    checkpoint = await db_pool.fetchrow(
+        "SELECT watermark_ts, last_error FROM slack_sync_checkpoints WHERE channel_id = 'C_PUBLIC'",
+    )
+    assert checkpoint is not None
+    assert checkpoint["watermark_ts"] == "3000000.000000"
+    assert checkpoint["last_error"] == ""
+
+
+@pytest.mark.asyncio
+async def test_incremental_enqueues_backfill_when_history_page_has_more(db_pool):
+    from workflows import slack_sync
+
+    await db_pool.execute(
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
+        "VALUES ('C_PUBLIC', 'ai-agent', TRUE)",
+    )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_checkpoints (channel_id, watermark_ts) "
+        "VALUES ('C_PUBLIC', '2500000.000000')",
+    )
+
+    fake = FakeSlackClient(
+        channels=[_public_channel()],
+        history_pages={
+            "C_PUBLIC": [{
+                "messages": [_root_message()],
+                "has_more": True,
+                "next_cursor": "cursor-2",
+                "sync_state": {
+                    "cursor": "cursor-2",
+                    "watermark": "3000000.000000",
+                    "oldest": "2000000.000000",
+                    "latest": None,
+                },
+            }],
+        },
+        replies={"3000000.000000": [_root_message(), _reply_message()]},
+    )
+    ctx = FakeCtx(db_pool)
+
+    with patch.object(slack_sync, "_client", return_value=fake):
+        result = await slack_sync.handler(slack_sync.Input(), ctx)
+
+    assert result["status"] == "completed"
+    backfill = await db_pool.fetchrow(
+        "SELECT job_key, job_type, payload_version, payload_json, status "
+        "FROM slack_sync_backfill_jobs "
+        "WHERE channel_id = 'C_PUBLIC' AND job_key LIKE 'continuation:%'",
+    )
+    assert backfill is not None
+    payload = json.loads(str(backfill["payload_json"]))
+    assert backfill["job_type"] == "channel_continuation"
+    assert backfill["payload_version"] == 1
+    assert payload["cursor"] == "cursor-2"
+    assert payload["oldest"] == "2000000.000000"
+    assert payload["latest"] is None
+    assert backfill["status"] == "pending"
+
+    checkpoint = await db_pool.fetchrow(
+        "SELECT watermark_ts, last_error FROM slack_sync_checkpoints "
+        "WHERE channel_id = 'C_PUBLIC'",
+    )
+    assert checkpoint is not None
+    assert checkpoint["watermark_ts"] == "3000000.000000"
+    assert checkpoint["last_error"] == ""
+
+
+@pytest.mark.asyncio
+async def test_backfill_workflow_drains_pending_cursor_without_touching_incremental_checkpoint(db_pool):
+    from workflows import slack_backfill
+
+    await db_pool.execute(
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
+        "VALUES ('C_PUBLIC', 'ai-agent', TRUE)",
+    )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_checkpoints (channel_id, watermark_ts) "
+        "VALUES ('C_PUBLIC', '3000000.000000')",
+    )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_backfill_jobs ("
+        "job_key, job_type, payload_version, channel_id, payload_json, status"
+        ") VALUES ("
+        "'continuation:C_PUBLIC:400000.000000:', 'channel_continuation', 1, 'C_PUBLIC', "
+        "$1::jsonb, 'pending')",
+        json.dumps(
+            {
+                "cursor": "cursor-2",
+                "oldest": "400000.000000",
+                "latest": None,
+                "lookback_days": 30,
+                "thread_lookback_days": 3,
+            }
+        ),
+    )
+    fake = FakeSlackClient(
+        channels=[_public_channel()],
+        history_pages={
+            "C_PUBLIC": [{
+                "messages": [_root_message()],
+                "has_more": False,
+                "next_cursor": None,
+                "sync_state": {
+                    "cursor": None,
+                    "watermark": "3000000.000000",
+                    "oldest": "400000.000000",
+                    "latest": None,
+                },
+            }],
+        },
+        replies={"3000000.000000": [_root_message(), _reply_message()]},
+    )
+    ctx = FakeCtx(db_pool, run_id="wfr-test-slack-backfill")
+
+    with patch.object(slack_backfill, "shared_client", return_value=fake):
+        result = await slack_backfill.handler(slack_backfill.Input(channel_batch_limit=1), ctx)
+
+    assert result["status"] == "completed"
+    assert fake.history_calls[0]["state"]["cursor"] == "cursor-2"
+    assert fake.history_calls[0]["state"]["oldest"] == "400000.000000"
+    backfill = await db_pool.fetchrow(
+        "SELECT status, last_completed_at FROM slack_sync_backfill_jobs WHERE channel_id = 'C_PUBLIC'",
+    )
+    assert backfill is not None
+    assert backfill["status"] == "completed"
+    assert backfill["last_completed_at"] is not None
+    checkpoint = await db_pool.fetchrow(
+        "SELECT watermark_ts, last_error FROM slack_sync_checkpoints "
+        "WHERE channel_id = 'C_PUBLIC'",
+    )
+    assert checkpoint is not None
+    assert checkpoint["watermark_ts"] == "3000000.000000"
+    assert checkpoint["last_error"] == ""
 
 
 @pytest.mark.asyncio
@@ -648,7 +935,7 @@ async def test_etl_freshness_metrics_refresh_from_slack_sync_tables(db_pool):
 
     now = dt.datetime.now(dt.timezone.utc)
     await db_pool.execute(
-        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_member) "
+        "INSERT INTO slack_sync_channels (channel_id, channel_name, is_syncable) "
         "VALUES ('C_PUBLIC', 'ai-agent', TRUE), ('C_OTHER', 'other-channel', TRUE)",
     )
     await db_pool.execute(
@@ -659,14 +946,37 @@ async def test_etl_freshness_metrics_refresh_from_slack_sync_tables(db_pool):
         "C_OTHER",
         f"{(now - dt.timedelta(seconds=120)).timestamp():.6f}",
     )
+    await db_pool.execute(
+        "INSERT INTO slack_sync_backfill_jobs ("
+        "job_key, job_type, payload_version, channel_id, status, payload_json, updated_at"
+        ") VALUES "
+        "('bootstrap:C_PUBLIC:123', 'channel_bootstrap', 1, 'C_PUBLIC', 'pending', $1::jsonb, $2), "
+        "('continuation:C_OTHER::', 'channel_continuation', 1, 'C_OTHER', 'failed', $3::jsonb, $4), "
+        "('thread_refresh:C_PUBLIC:3000000.000000', 'thread_refresh', 1, 'C_PUBLIC', 'running', $5::jsonb, $6)",
+        json.dumps({"latest": "123"}),
+        now - dt.timedelta(seconds=300),
+        json.dumps({"cursor": "cursor-2"}),
+        now - dt.timedelta(seconds=180),
+        json.dumps({"thread_ts": "3000000.000000"}),
+        now - dt.timedelta(seconds=60),
+    )
 
     metrics = (await render_metrics(db_pool)).decode()
 
     assert 'etl_active_scopes{source="slack",source_type="channel"} 2' in metrics
     assert 'etl_failed_scopes{source="slack",source_type="channel"} 1' in metrics
+    assert 'etl_backfill_jobs{job_type="channel_bootstrap",source="slack",status="pending"} 1' in metrics
+    assert 'etl_backfill_jobs{job_type="channel_continuation",source="slack",status="failed"} 1' in metrics
+    assert 'etl_backfill_jobs{job_type="thread_refresh",source="slack",status="running"} 1' in metrics
     match = re.search(
         r'etl_source_cursor_lag_seconds\{source="slack",source_type="channel"\} ([0-9.]+)',
         metrics,
     )
     assert match is not None
     assert float(match.group(1)) >= 100
+    age_match = re.search(
+        r'etl_backfill_job_age_seconds\{job_type="channel_bootstrap",source="slack",status="pending"\} ([0-9.]+)',
+        metrics,
+    )
+    assert age_match is not None
+    assert float(age_match.group(1)) >= 250
