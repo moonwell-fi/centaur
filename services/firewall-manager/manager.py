@@ -83,6 +83,16 @@ DEFAULT_MATCH_HEADERS: tuple[str, ...] = (
 log = structlog.get_logger("firewall-manager")
 
 
+# Centaur secret-source values that resolve to a 1Password `op://` ref.
+# `onepassword` emits iron-proxy's `1password` source (direct service-account
+# SDK access); `onepassword-connect` emits `1password_connect` (self-hosted
+# Connect server). Both consume the same deterministically-built ref.
+_OP_REF_SOURCES: dict[str, str] = {
+    "onepassword": "1password",
+    "onepassword-connect": "1password_connect",
+}
+
+
 def _build_source(key: str) -> dict[str, str]:
     """Translate a centaur key name to iron-proxy's secret source schema.
 
@@ -90,9 +100,10 @@ def _build_source(key: str) -> dict[str, str]:
     on the ``credential`` field, so the ref is built deterministically from
     the key name. iron-proxy resolves the source itself.
     """
-    if SECRET_SOURCE == "onepassword":
+    iron_proxy_type = _OP_REF_SOURCES.get(SECRET_SOURCE)
+    if iron_proxy_type is not None:
         return {
-            "type": "1password",
+            "type": iron_proxy_type,
             "secret_ref": f"op://{OP_VAULT}/{key}/credential",
             "ttl": SECRET_TTL,
         }

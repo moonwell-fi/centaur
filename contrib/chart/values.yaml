@@ -36,6 +36,18 @@ ironProxy:
     secretTtl: 10m
   extraEnv: {}
 
+# Values for the upstream 1Password Connect subchart
+# (https://github.com/1Password/connect-helm-charts/tree/main/charts/connect).
+# Deployment is gated on onepasswordConnect.connect.create AND on
+# ironProxy.manager.secretSource == "onepassword-connect"; just up sets
+# both when OP_CONNECT_CREDENTIALS_FILE is present. The credentials Secret
+# itself is created externally by contrib/scripts/bootstrap-k8s-secrets.sh.
+onepasswordConnect:
+  connect:
+    create: false
+    credentialsName: centaur-onepassword-connect-credentials
+    credentialsKey: 1password-credentials.json
+
 secrets:
   image:
     repository: centaur-secrets

@@ -217,6 +217,15 @@ spec:
                 secretKeyRef:
                   name: {{ include "centaur.secretEnvName" . }}
                   key: {{ printf "%sIRON_MANAGEMENT_API_KEY" .Values.secretManager.envPrefix }}
+{{- if eq .Values.ironProxy.manager.secretSource "onepassword-connect" }}
+            - name: OP_CONNECT_HOST
+              value: {{ include "centaur.onepasswordConnectUrl" . | quote }}
+            - name: OP_CONNECT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "centaur.secretEnvName" . }}
+                  key: {{ printf "%sOP_CONNECT_TOKEN" .Values.secretManager.envPrefix }}
+{{- end }}
 {{- range $name, $value := .Values.ironProxy.extraEnv }}
             - name: {{ $name }}
               value: {{ $value | quote }}
@@ -615,6 +624,10 @@ spec:
               value: {{ .Values.ironProxy.manager.secretSource | quote }}
             - name: KUBERNETES_FIREWALL_MANAGER_SECRET_TTL
               value: {{ .Values.ironProxy.manager.secretTtl | quote }}
+{{- if eq .Values.ironProxy.manager.secretSource "onepassword-connect" }}
+            - name: KUBERNETES_OP_CONNECT_HOST
+              value: {{ include "centaur.onepasswordConnectUrl" . | quote }}
+{{- end }}
             - name: KUBERNETES_FIREWALL_MANAGER_INJECTION_MAP_URL
               value: {{ printf "http://%s:8000/internal/injection-map" (include "centaur.componentName" (dict "root" . "component" "api")) | quote }}
             - name: KUBERNETES_API_POD_LABEL_SELECTOR

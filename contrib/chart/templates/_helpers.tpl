@@ -142,3 +142,25 @@ app.kubernetes.io/component: {{ .component }}
 {{- define "centaur.laminarBaseUrl" -}}
 {{- printf "http://%s" (include "centaur.componentName" (dict "root" . "component" "laminar-app-server")) -}}
 {{- end -}}
+
+{{- /*
+The upstream 1Password Connect subchart names its Service after
+`connect.applicationName` (default `onepassword-connect`) and exposes the
+API on `connect.api.httpPort` (default 8080). The Service is in the same
+namespace as this release, so a short DNS name is enough.
+*/ -}}
+{{- define "centaur.onepasswordConnectAppName" -}}
+{{- default "onepassword-connect" (((.Values.onepasswordConnect).connect).applicationName) -}}
+{{- end -}}
+
+{{- define "centaur.onepasswordConnectPort" -}}
+{{- default 8080 ((((.Values.onepasswordConnect).connect).api).httpPort) -}}
+{{- end -}}
+
+{{- define "centaur.onepasswordConnectHost" -}}
+{{- include "centaur.onepasswordConnectAppName" . -}}
+{{- end -}}
+
+{{- define "centaur.onepasswordConnectUrl" -}}
+{{- printf "http://%s:%v" (include "centaur.onepasswordConnectHost" .) (include "centaur.onepasswordConnectPort" .) -}}
+{{- end -}}

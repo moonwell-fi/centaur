@@ -152,6 +152,40 @@ def _secret_env_key(name: str) -> str:
     return f"{os.getenv('KUBERNETES_SECRET_ENV_PREFIX', '')}{name}"
 
 
+def _proxy_iron_env(secret_name: str) -> list[dict[str, Any]]:
+    """Env block for the per-sandbox iron-proxy container."""
+    env: list[dict[str, Any]] = [
+        {
+            "name": "IRON_MANAGEMENT_API_KEY",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": secret_name,
+                    "key": _secret_env_key("IRON_MANAGEMENT_API_KEY"),
+                }
+            },
+        }
+    ]
+    if (
+        os.getenv("KUBERNETES_FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
+        == "onepassword-connect"
+    ):
+        connect_host = os.getenv("KUBERNETES_OP_CONNECT_HOST", "").strip()
+        if connect_host:
+            env.append({"name": "OP_CONNECT_HOST", "value": connect_host})
+        env.append(
+            {
+                "name": "OP_CONNECT_TOKEN",
+                "valueFrom": {
+                    "secretKeyRef": {
+                        "name": secret_name,
+                        "key": _secret_env_key("OP_CONNECT_TOKEN"),
+                    }
+                },
+            }
+        )
+    return env
+
+
 def _api_pod_match_labels() -> dict[str, str]:
     return _parse_match_labels(
         os.getenv(
@@ -791,19 +825,7 @@ class KubernetesExecutorBackend(SandboxBackend):
                             "name": "iron-proxy",
                             "image": _proxy_image(),
                             "imagePullPolicy": _proxy_image_pull_policy(),
-                            "env": [
-                                {
-                                    "name": "IRON_MANAGEMENT_API_KEY",
-                                    "valueFrom": {
-                                        "secretKeyRef": {
-                                            "name": secret_name,
-                                            "key": _secret_env_key(
-                                                "IRON_MANAGEMENT_API_KEY"
-                                            ),
-                                        }
-                                    },
-                                }
-                            ],
+                            "env": _proxy_iron_env(secret_name),
                             "envFrom": env_from,
                             "ports": [
                                 {"containerPort": _proxy_port(), "name": "proxy"},

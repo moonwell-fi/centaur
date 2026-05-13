@@ -74,7 +74,17 @@ bootstrap-secrets *args:
     contrib/scripts/bootstrap-k8s-secrets.sh --namespace {{namespace}} {{args}}
 
 deploy:
-    helm upgrade --install {{release}} {{chart}} -n {{namespace}} --create-namespace -f {{dev_values}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    helm dependency update {{chart}} >/dev/null
+    extra_args=()
+    if [[ -n "${OP_CONNECT_CREDENTIALS_FILE:-}" ]]; then
+      extra_args+=(
+        --set ironProxy.manager.secretSource=onepassword-connect
+        --set onepasswordConnect.connect.create=true
+      )
+    fi
+    helm upgrade --install {{release}} {{chart}} -n {{namespace}} --create-namespace -f {{dev_values}} "${extra_args[@]}"
 
 up:
     just bootstrap-secrets

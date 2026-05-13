@@ -11,6 +11,12 @@ Usage: scripts/bootstrap-k8s-secrets.sh [--namespace NAMESPACE] [--force]
 Creates the required local-dev Kubernetes infra Secrets consumed by the Helm chart.
 Requires OP_SERVICE_ACCOUNT_TOKEN, OP_VAULT, SLACK_BOT_TOKEN,
 SLACK_SIGNING_SECRET, and SLACKBOT_API_KEY in the shell environment.
+
+Optional 1Password Connect bootstrap (when ironProxy.manager.secretSource is
+set to onepassword-connect in the Helm values):
+  OP_CONNECT_CREDENTIALS_FILE  path to 1password-credentials.json; if set,
+                               creates Secret centaur-onepassword-connect-credentials
+  OP_CONNECT_TOKEN             Connect API token; added to centaur-infra-env
 EOF
 }
 
@@ -79,6 +85,7 @@ kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -
 delete_if_forced centaur-infra-env
 delete_if_forced centaur-firewall-ca
 delete_if_forced centaur-firewall-ca-key
+delete_if_forced centaur-onepassword-connect-credentials
 
 if secret_exists centaur-infra-env; then
   patch_data=()
@@ -87,6 +94,9 @@ if secret_exists centaur-infra-env; then
   fi
   if [[ -n "${LMNR_BASE_URL:-}" ]]; then
     patch_data+=("\"LMNR_BASE_URL\":\"$(printf '%s' "$LMNR_BASE_URL" | base64 | tr -d '\n')\"")
+  fi
+  if [[ -n "${OP_CONNECT_TOKEN:-}" ]]; then
+    patch_data+=("\"OP_CONNECT_TOKEN\":\"$(printf '%s' "$OP_CONNECT_TOKEN" | base64 | tr -d '\n')\"")
   fi
   if [[ "${#patch_data[@]}" -gt 0 ]]; then
     patch_json="{\"data\":{$(IFS=,; echo "${patch_data[*]}")}}"
@@ -117,6 +127,9 @@ else
   if [[ -n "${LMNR_BASE_URL:-}" ]]; then
     secret_args+=(--from-literal=LMNR_BASE_URL="$LMNR_BASE_URL")
   fi
+  if [[ -n "${OP_CONNECT_TOKEN:-}" ]]; then
+    secret_args+=(--from-literal=OP_CONNECT_TOKEN="$OP_CONNECT_TOKEN")
+  fi
   kubectl "${secret_args[@]}" >/dev/null
   echo "Created Secret centaur-infra-env in namespace $NAMESPACE"
 fi
@@ -143,4 +156,18 @@ else
     --from-file=ca-cert.pem="$CA_CERT" \
     --from-file=ca-key.pem="$CA_KEY" >/dev/null
   echo "Created firewall CA Secrets in namespace $NAMESPACE"
+fi
+
+if [[ -n "${OP_CONNECT_CREDENTIALS_FILE:-}" ]]; then
+  if [[ ! -r "$OP_CONNECT_CREDENTIALS_FILE" ]]; then
+    echo "FATAL: OP_CONNECT_CREDENTIALS_FILE=$OP_CONNECT_CREDENTIALS_FILE is not readable" >&2
+    exit 1
+  fi
+  if secret_exists centaur-onepassword-connect-credentials; then
+    echo "Secret centaur-onepassword-connect-credentials already exists in namespace $NAMESPACE; leaving unchanged"
+  else
+    kubectl -n "$NAMESPACE" create secret generic centaur-onepassword-connect-credentials \
+      --from-file=1password-credentials.json="$OP_CONNECT_CREDENTIALS_FILE" >/dev/null
+    echo "Created Secret centaur-onepassword-connect-credentials in namespace $NAMESPACE"
+  fi
 fi

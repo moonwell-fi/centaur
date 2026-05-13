@@ -431,6 +431,37 @@ spec:
         - protocol: TCP
           port: 80
 ---
+{{- if eq .Values.ironProxy.manager.secretSource "onepassword-connect" }}
+# Targets the 1Password Connect subchart's pods, which carry
+# `app: <applicationName>` (default `onepassword-connect`).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "centaur.fullname" . }}-onepassword-connect
+  labels:
+{{ include "centaur.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: {{ include "centaur.onepasswordConnectAppName" . | quote }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+{{ include "centaur.componentSelectorLabels" (dict "root" . "component" "iron-proxy") | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: {{ include "centaur.onepasswordConnectPort" . }}
+  egress:
+    # connect-sync needs outbound HTTPS to my.1password.com.
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+{{- end }}
 {{- if .Values.repoCache.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
