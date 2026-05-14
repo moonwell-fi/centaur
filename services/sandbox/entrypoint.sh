@@ -4,6 +4,8 @@ set -e
 HOME_DIR="$(eval echo ~)"
 FIREWALL_HOSTNAME="${FIREWALL_HOST:-firewall}"
 
+mkdir -p "$HOME_DIR/.config/amp"
+
 # ── Write harness configs (no MCP — adds ~10s startup overhead) ───────────────
 cat > "$HOME_DIR/.config/amp/settings.json" <<EOF
 {
@@ -12,6 +14,25 @@ cat > "$HOME_DIR/.config/amp/settings.json" <<EOF
   "amp.git.commit.coauthor.enabled": false
 }
 EOF
+
+# ── Mock Google ADC for sandbox-only SDK initialization ─────────────────────
+# Some Google client libraries refuse to initialize without ADC, even when the
+# per-sandbox proxy is responsible for attaching the real auth headers.
+if [ -z "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]; then
+    GOOGLE_APPLICATION_CREDENTIALS="$HOME_DIR/.config/gcloud/application_default_credentials.json"
+    export GOOGLE_APPLICATION_CREDENTIALS
+    mkdir -p "$(dirname "$GOOGLE_APPLICATION_CREDENTIALS")"
+    if [ ! -f "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
+        cat > "$GOOGLE_APPLICATION_CREDENTIALS" <<EOF
+{
+  "type": "authorized_user",
+  "client_id": "centaur-sandbox",
+  "client_secret": "centaur-sandbox",
+  "refresh_token": "centaur-sandbox"
+}
+EOF
+    fi
+fi
 
 # ── Pi-mono settings ─────────────────────────────────────────────────────────
 mkdir -p "$HOME_DIR/.pi/agent/extensions"
