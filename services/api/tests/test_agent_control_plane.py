@@ -90,6 +90,11 @@ async def test_db_insert_session_initial_state_tracks_inflight_turn(db_pool):
     assert idle_row["inflight_turn_id"] is None
     assert idle_row["trace_id"] is not None
     assert idle_session.trace_id == str(idle_row["trace_id"])
+    idle_thread_trace_id = await db_pool.fetchval(
+        "SELECT trace_id FROM thread_traces WHERE thread_key = $1",
+        idle_thread_key,
+    )
+    assert str(idle_thread_trace_id) == str(idle_row["trace_id"])
 
     running_thread_key = f"slack:C-test:{uuid.uuid4().hex}:running"
     running_session = SandboxSession(
@@ -574,6 +579,12 @@ async def test_execute_rejects_recent_failure_loop(client, db_pool, api_key: str
 async def test_final_delivery_claim_and_mark_delivered(client, db_pool, api_key: str):
     execution_id = f"exe-{uuid.uuid4().hex[:10]}"
     thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    trace_id = uuid.UUID("00000000-0000-4000-8000-000000000123")
+    await db_pool.execute(
+        "INSERT INTO thread_traces (thread_key, trace_id) VALUES ($1, $2)",
+        thread_key,
+        trace_id,
+    )
     await db_pool.execute(
         "INSERT INTO agent_final_delivery_outbox ("
         "execution_id, thread_key, delivery, state, final_payload, next_attempt_at"
@@ -594,6 +605,8 @@ async def test_final_delivery_claim_and_mark_delivered(client, db_pool, api_key:
     assert len(deliveries) == 1
     assert deliveries[0]["execution_id"] == execution_id
     assert deliveries[0]["attempt_count"] == 1
+    assert deliveries[0]["trace_id"] == str(trace_id)
+    assert deliveries[0]["traceparent"].startswith("00-00000000000040008000000000000123-")
 
     delivered = await client.post(
         f"/agent/final-deliveries/{execution_id}/delivered",

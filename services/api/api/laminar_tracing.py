@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import inspect
+import uuid
 from contextlib import contextmanager, nullcontext
 from typing import Any
 
@@ -86,6 +87,7 @@ def start_span(
     name: str,
     span_type: str = "DEFAULT",
     metadata: dict[str, Any] | None = None,
+    trace_id: str | None = None,
     ignore_input: bool = True,
     ignore_output: bool = True,
 ):
@@ -96,17 +98,63 @@ def start_span(
 
         @contextmanager
         def _span_context():
-            with Laminar.start_as_current_span(name=name, span_type=span_type) as span:
-                if metadata:
-                    span.set_attributes(
-                        {f"centaur.metadata.{key}": value for key, value in metadata.items()}
-                    )
-                yield span
+            with _synthetic_parent_trace(trace_id):
+                with Laminar.start_as_current_span(name=name, span_type=span_type) as span:
+                    if metadata:
+                        span.set_attributes(
+                            {
+                                f"centaur.metadata.{key}": value
+                                for key, value in metadata.items()
+                            }
+                        )
+                    yield span
 
         return _span_context()
     except Exception as exc:
         log.debug("laminar_start_span_failed", span=name, error=str(exc))
         return nullcontext()
+
+
+@contextmanager
+def _synthetic_parent_trace(trace_id: str | None):
+    if not trace_id:
+        yield
+        return
+    try:
+        parsed = uuid.UUID(trace_id)
+        if parsed.int == 0:
+            yield
+            return
+        from opentelemetry import context as otel_context
+        from opentelemetry import trace
+        from opentelemetry.trace import (
+            NonRecordingSpan,
+            SpanContext,
+            TraceFlags,
+            TraceState,
+        )
+
+        current = trace.get_current_span()
+        if current and current.get_span_context().is_valid:
+            yield
+            return
+        parent = NonRecordingSpan(
+            SpanContext(
+                trace_id=parsed.int,
+                span_id=int.from_bytes(os.urandom(8), "big") or 1,
+                is_remote=True,
+                trace_flags=TraceFlags(TraceFlags.SAMPLED),
+                trace_state=TraceState(),
+            )
+        )
+        token = otel_context.attach(trace.set_span_in_context(parent))
+        try:
+            yield
+        finally:
+            otel_context.detach(token)
+    except Exception as exc:
+        log.debug("laminar_parent_trace_failed", error=str(exc))
+        yield
 
 
 def set_trace_context(

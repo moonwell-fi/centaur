@@ -89,7 +89,7 @@ describe("CentaurClient", () => {
         method: "GET",
         headers: {
           Authorization: "Bearer test-key",
-          "X-Trace-Id": "slack:C123:1700000000.000100",
+          "X-Centaur-Thread-Key": "slack:C123:1700000000.000100",
         },
       }),
     );

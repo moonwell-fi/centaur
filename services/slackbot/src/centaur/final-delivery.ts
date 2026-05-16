@@ -2,6 +2,7 @@ import type { WebClient } from '@slack/web-api'
 import { centaurApiKey, type AppConfig } from '../config'
 import { AgentSessionRenderer } from '../slack/agent-session'
 import { codexFooter } from '../slack/codex-session'
+import { withLaminarSpan } from './laminar'
 
 const CONSUMER_ID = `slackbot-${process.pid}`
 
@@ -27,19 +28,31 @@ async function pollOnce(config: AppConfig, client: WebClient): Promise<void> {
   })
   const deliveries = Array.isArray(claimed.deliveries) ? claimed.deliveries : []
   for (const delivery of deliveries) {
-    const executionId = String(delivery.execution_id)
-    try {
-      await deliver(client, delivery)
-      await centaur(config, `/agent/final-deliveries/${executionId}/delivered`, {
-        consumer_id: CONSUMER_ID
-      })
-    } catch (error) {
-      await centaur(config, `/agent/final-deliveries/${executionId}/failed`, {
-        consumer_id: CONSUMER_ID,
-        error: error instanceof Error ? error.message : String(error),
-        retry_after_seconds: 10
-      }).catch(failError => console.error('final_delivery_mark_failed_failed', failError))
-    }
+    await withLaminarSpan('centaur.slackbot.final_delivery', delivery, async () => {
+      const executionId = String(delivery.execution_id)
+      try {
+        await deliver(client, delivery)
+        await centaur(
+          config,
+          `/agent/final-deliveries/${executionId}/delivered`,
+          {
+            consumer_id: CONSUMER_ID
+          },
+          delivery
+        )
+      } catch (error) {
+        await centaur(
+          config,
+          `/agent/final-deliveries/${executionId}/failed`,
+          {
+            consumer_id: CONSUMER_ID,
+            error: error instanceof Error ? error.message : String(error),
+            retry_after_seconds: 10
+          },
+          delivery
+        ).catch(failError => console.error('final_delivery_mark_failed_failed', failError))
+      }
+    })
   }
 }
 
@@ -95,12 +108,19 @@ function targetFromDelivery(delivery: any): {
   return {}
 }
 
-async function centaur(config: AppConfig, path: string, body: unknown): Promise<any> {
+async function centaur(
+  config: AppConfig,
+  path: string,
+  body: unknown,
+  trace?: any
+): Promise<any> {
   const apiKey = centaurApiKey(config)
+  const traceHeaders = centaurTraceHeaders(trace)
   const response = await fetch(new URL(path, config.CENTAUR_API_URL), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...traceHeaders,
       ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
     },
     body: JSON.stringify(body)
@@ -112,4 +132,15 @@ async function centaur(config: AppConfig, path: string, body: unknown): Promise<
       parsed?.detail?.message ?? parsed?.detail ?? parsed?.error ?? response.statusText
     )
   return parsed
+}
+
+function centaurTraceHeaders(trace: any): Record<string, string> {
+  const traceId = String(trace?.trace_id ?? '').trim()
+  const threadKey = String(trace?.thread_key ?? '').trim()
+  const traceparent = String(trace?.traceparent ?? '').trim()
+  return {
+    ...(traceId ? { 'X-Trace-Id': traceId } : {}),
+    ...(threadKey ? { 'X-Centaur-Thread-Key': threadKey } : {}),
+    ...(traceparent ? { traceparent } : {})
+  }
 }

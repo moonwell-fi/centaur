@@ -47,6 +47,7 @@ from api.runtime_control import (
     spawn_assignment,
     steer_execution,
 )
+from api.trace_context import traceparent_from_trace_id
 from api.warm_pool import pool_status
 from api.warm_pool import replenish as replenish_pool
 
@@ -1053,7 +1054,11 @@ async def claim_final_delivery(request: Request, body: ClaimFinalDeliveryRequest
         "  FROM candidates c "
         "  WHERE o.execution_id = c.execution_id "
         "  RETURNING o.execution_id, o.thread_key, o.delivery, o.final_payload, o.attempt_count"
-        ") SELECT * FROM claimed",
+        ") "
+        "SELECT claimed.*, COALESCE(tt.trace_id, ss.trace_id)::text AS trace_id "
+        "FROM claimed "
+        "LEFT JOIN thread_traces tt ON tt.thread_key = claimed.thread_key "
+        "LEFT JOIN sandbox_sessions ss ON ss.thread_key = claimed.thread_key",
         limit,
         body.consumer_id,
         lease_seconds,
@@ -1071,6 +1076,8 @@ async def claim_final_delivery(request: Request, body: ClaimFinalDeliveryRequest
             {
                 "execution_id": row["execution_id"],
                 "thread_key": row["thread_key"],
+                "trace_id": row["trace_id"],
+                "traceparent": traceparent_from_trace_id(row["trace_id"]),
                 "attempt_count": int(row["attempt_count"]),
                 "delivery": delivery,
                 "final_payload": payload,
@@ -1080,6 +1087,7 @@ async def claim_final_delivery(request: Request, body: ClaimFinalDeliveryRequest
             "final_delivery_claimed",
             execution_id=row["execution_id"],
             thread_key=row["thread_key"],
+            trace_id=row["trace_id"],
             consumer_id=body.consumer_id,
             attempt_count=int(row["attempt_count"]),
             platform=(delivery or {}).get("platform") if isinstance(delivery, dict) else None,

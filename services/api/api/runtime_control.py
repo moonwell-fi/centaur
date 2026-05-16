@@ -513,6 +513,7 @@ async def spawn_assignment(
                 "ok": True,
                 "runtime_id": runtime_id,
                 "thread_key": thread_key,
+                "trace_id": session.trace_id,
                 "assignment_state": assignment_state,
                 "assignment_generation": generation,
                 "persona_id": resolved_persona,

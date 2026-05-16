@@ -27,6 +27,7 @@ export interface SpawnResult {
   ok: boolean;
   runtime_id: string;
   thread_key: string;
+  trace_id?: string;
   assignment_state: string;
   assignment_generation: number;
   persona_id?: string | null;
@@ -260,7 +261,7 @@ export class CentaurClient {
       method: "GET",
       headers: {
         Authorization: this.authHeader,
-        "X-Trace-Id": opts.threadKey,
+        "X-Centaur-Thread-Key": opts.threadKey,
       },
       signal: opts.signal,
     });

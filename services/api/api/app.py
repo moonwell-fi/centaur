@@ -26,6 +26,7 @@ from api.laminar_tracing import (
     start_span,
 )
 from api.logging_config import configure_structlog
+from api.trace_context import get_or_create_thread_trace_id, traceparent_from_trace_id
 from api.vm_metrics import (
     HTTP_REQUESTS_IN_PROGRESS,
     observe_http_request,
@@ -298,16 +299,27 @@ async def instrument_requests(request, call_next):
         "/agent/spawn",
         "/agent/message",
         "/agent/messages",
+        "/workflows/runs",
     ):
         try:
             body_bytes = await request.body()
             body_json = json.loads(body_bytes)
             body_tk = body_json.get("thread_key")
+            if not body_tk and isinstance(body_json.get("input"), dict):
+                body_tk = body_json["input"].get("thread_key")
             if body_tk:
                 thread_key = body_tk
                 structlog.contextvars.bind_contextvars(thread_key=thread_key)
         except Exception:
             pass
+
+    if not trace_id and thread_key:
+        try:
+            trace_id = await get_or_create_thread_trace_id(request.app.state.db_pool, thread_key)
+            if trace_id:
+                structlog.contextvars.bind_contextvars(trace_id=trace_id)
+        except Exception:
+            log.debug("thread_trace_lookup_failed", thread_key=thread_key, exc_info=True)
 
     start = time.perf_counter()
     status_code = 500
@@ -325,6 +337,7 @@ async def instrument_requests(request, call_next):
                 "http_method": request.method,
                 "http_path": path,
             },
+            trace_id=trace_id,
         ):
             set_trace_context(
                 session_id=trace_id or thread_key,
@@ -338,6 +351,11 @@ async def instrument_requests(request, call_next):
             )
             response = await call_next(request)
             status_code = response.status_code
+            if trace_id:
+                response.headers["X-Trace-Id"] = trace_id
+                traceparent = traceparent_from_trace_id(trace_id)
+                if traceparent:
+                    response.headers["traceparent"] = traceparent
             set_span_attributes(
                 {
                     "http.method": request.method,

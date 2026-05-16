@@ -36,6 +36,7 @@ from api.sandbox.harness_protocol import (
 from api.deps import mint_sandbox_token
 from api.sandbox.normalize import normalize_harness_event
 from api.sandbox.registry import get_backend
+from api.trace_context import get_or_create_thread_trace_id
 
 log = structlog.get_logger()
 
@@ -235,7 +236,8 @@ async def _db_insert_session(
     # the container process exists. Fresh spawns with no in-flight turn should
     # enter the normal idle TTL path.
     initial_state = "running" if inflight_turn_id else "idle"
-    trace_id = session.trace_id or str(uuid.uuid4())
+    thread_trace_id = await get_or_create_thread_trace_id(pool, session.thread_key)
+    trace_id = session.trace_id or thread_trace_id or str(uuid.uuid4())
     session.trace_id = trace_id
     row = await pool.fetchrow(
         "INSERT INTO sandbox_sessions ("
@@ -625,6 +627,9 @@ async def get_or_spawn(
             await _db_delete_session(thread_key)
             _drop_runtime(session.sandbox_id)
 
+    pool = _get_pool()
+    thread_trace_id = await get_or_create_thread_trace_id(pool, thread_key)
+
     # Resolve harness profile (engine, persona, repo) once for both warm and cold paths
     resolved_engine, persona, repo = _resolve_harness_profile(
         harness, engine_override=engine
@@ -640,7 +645,7 @@ async def get_or_spawn(
     if should_try_warm:
         from api.warm_pool import claim_container
 
-        trace_id = old_trace_id or str(uuid.uuid4())
+        trace_id = old_trace_id or thread_trace_id or str(uuid.uuid4())
         claimed = await claim_container(
             thread_key, harness, persona=persona, repo=repo, trace_id=trace_id
         )
@@ -668,7 +673,7 @@ async def get_or_spawn(
     )
     backend = get_backend()
     await _evict_idle_sessions_for_capacity(backend)
-    trace_id = old_trace_id or str(uuid.uuid4())
+    trace_id = old_trace_id or thread_trace_id or str(uuid.uuid4())
     session = await backend.create(
         thread_key,
         harness,
