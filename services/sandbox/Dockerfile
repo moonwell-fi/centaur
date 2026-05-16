@@ -26,7 +26,9 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
     python-docx==1.2.0 lxml==6.0.2 docx-revisions==0.1.4 \
     matplotlib==3.10.8 numpy==2.4.4 pandas==3.0.2 \
     python-pptx==1.0.2 openpyxl==3.1.5 PyMuPDF==1.27.2 mammoth==1.12.0 \
-    faster-whisper
+    faster-whisper pydantic==2.12.5 \
+    && pip3 install --break-system-packages --no-deps \
+    "openai-codex @ git+https://github.com/openai/codex.git@de9c5c0226f8f31b9ce7dfef8b9ad401126ca3b5#subdirectory=sdk/python"
 
 # ── GitHub CLI + Node.js 24 (LTS) + Docker CLI (single layer, cached) ─────────────
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

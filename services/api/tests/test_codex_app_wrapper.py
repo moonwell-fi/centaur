@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import importlib.util
 from pathlib import Path
 from types import ModuleType
@@ -17,23 +18,16 @@ def _load_wrapper() -> ModuleType:
     return module
 
 
-def test_configure_laminar_otel_uses_turn_trace_id(monkeypatch) -> None:
+def test_laminar_otel_writes_use_turn_trace_id(monkeypatch) -> None:
     wrapper = _load_wrapper()
-    writes: list[tuple[str, object]] = []
 
-    def fake_request(method: str, params: dict, timeout: float = 30.0) -> dict:
-        assert method == "config/value/write"
-        writes.append((params["keyPath"], params["value"]))
-        return {}
-
-    monkeypatch.setattr(wrapper, "request", fake_request)
     monkeypatch.setenv("CENTAUR_TRACE_ID", "00000000-0000-0000-0000-000000000001")
     monkeypatch.setenv("CENTAUR_THREAD_KEY", "warm-placeholder")
     monkeypatch.setenv("LMNR_BASE_URL", "http://laminar:8000")
     monkeypatch.setenv("LMNR_PROJECT_API_KEY", "lmnr-key")
     monkeypatch.setenv("CODEX_OTEL_ENVIRONMENT", "staging")
 
-    wrapper._configure_laminar_otel(
+    writes = wrapper.laminar_otel_writes(
         "00000000-0000-0000-0000-000000000123",
         "slack:C123:1700000000.000100",
     )
@@ -50,3 +44,24 @@ def test_configure_laminar_otel_uses_turn_trace_id(monkeypatch) -> None:
         "x-centaur-thread-key": "slack:C123:1700000000.000100",
         "authorization": "Bearer lmnr-key",
     }
+
+
+def test_notification_parts_dump_pydantic_aliases() -> None:
+    wrapper = _load_wrapper()
+
+    class Payload(wrapper.BaseModel):
+        turn_id: str
+
+        model_config = {"alias_generator": lambda value: "turnId", "populate_by_name": True}
+
+    @dataclass
+    class Notification:
+        method: str
+        payload: Payload
+
+    method, params = wrapper._notification_parts(
+        Notification("item/agentMessage/delta", Payload(turn_id="turn-1"))
+    )
+
+    assert method == "item/agentMessage/delta"
+    assert params == {"turnId": "turn-1"}
