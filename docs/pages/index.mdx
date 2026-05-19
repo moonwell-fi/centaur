@@ -28,7 +28,6 @@ import ThreadPanel from '../components/ThreadPanel'
         <a className="home-button home-button-primary" href="/quickstart">Get Started</a>
         <a className="home-button" href="/what-is-centaur">Why Centaur</a>
         <a className="home-button" href="https://github.com/paradigmxyz/centaur">GitHub</a>
-        <a className="home-license" href="https://github.com/paradigmxyz/centaur/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">license <strong>MIT</strong></a>
       </div>
 
       <div className="home-built-with" aria-label="Built by">

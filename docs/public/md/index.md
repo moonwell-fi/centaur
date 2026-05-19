@@ -28,7 +28,6 @@ import ThreadPanel from '../components/ThreadPanel'
         <a className="home-button home-button-primary" href="/quickstart">Get Started</a>
         <a className="home-button" href="/what-is-centaur">Why Centaur</a>
         <a className="home-button" href="https://github.com/paradigmxyz/centaur">GitHub</a>
-        <a className="home-license" href="https://github.com/paradigmxyz/centaur/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">license <strong>MIT</strong></a>
       </div>
 
       <div className="home-built-with" aria-label="Built by">
@@ -58,7 +57,7 @@ import ThreadPanel from '../components/ThreadPanel'
     <ul className="home-overview-list">
       <li>
         <strong>Open source foundation.</strong>
-        <span>Built from open infrastructure and MIT-licensed project packages so teams can inspect, run, and extend the platform themselves.</span>
+        <span>Built from open infrastructure and inspectable project packages so teams can run and extend the platform themselves.</span>
       </li>
       <li>
         <strong>Self-hosted by design.</strong>
