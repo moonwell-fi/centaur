@@ -26,12 +26,7 @@ export default defineConfig({
   titleTemplate: '%s - Centaur',
   description: 'The production control plane for shared AI agents, tools, workflows, and sandboxes.',
   // Browser-tab favicon: standalone centaur mark only (no background frame).
-  // Vocs emits a per-scheme <link rel="icon"> pair so the tab shows the
-  // black silhouette on light chrome and the white silhouette on dark.
-  iconUrl: {
-    light: '/brand/mark-black.svg',
-    dark: '/brand/mark-white.svg',
-  },
+  iconUrl: '/brand/mark-white.png',
   // Top-left site logo: full lockup on docs routes (the sidebar / topNav
   // gets enough space to carry the wordmark). The landing page hides Vocs's
   // topNav entirely and renders its own lockup in the hero.
