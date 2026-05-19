@@ -86,7 +86,8 @@ bun run auth:bootstrap
 The command writes only secret payload values to `.env.local`. Source that file
 before `just bootstrap-secrets` so `CODEX_AUTH_JSON`,
 `CLAUDE_AUTH_JSON`, and `CLAUDE_CREDENTIALS_JSON`, when present, are copied
-into `centaur-infra-env`.
+into the separate `centaur-harness-auth` Secret. They are not added to
+`centaur-infra-env`, which the API consumes with `envFrom`.
 
 If local auth is missing, run the command it prints, or use:
 

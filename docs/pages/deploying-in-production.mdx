@@ -122,7 +122,13 @@ bun run auth:bootstrap -- --login
 ```
 
 For production, deliver these keys through the same infra Secret transport you
-use for other chart secrets:
+use for other chart secrets, but put them in a separate Secret. The chart
+defaults to:
+
+```yaml
+harnessAuth:
+  existingSecretName: centaur-harness-auth
+```
 
 | Secret | Used for |
 |--------|----------|
@@ -143,7 +149,8 @@ The Kubernetes sandbox backend mounts auth payloads from Secret references, not
 literal PodSpec values, and scopes them by engine: Codex pods receive only
 Codex auth, Claude pods receive only Claude auth, and Amp receives none. If a
 local auth payload is missing, the entrypoint preserves the normal API-key
-fallback path.
+fallback path. Do not put these payloads in `centaur-infra-env`; the API pod
+imports that Secret with `envFrom`.
 
 Durable provider resume is separately opt-in:
 

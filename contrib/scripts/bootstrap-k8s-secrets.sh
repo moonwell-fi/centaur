@@ -17,9 +17,9 @@ set to onepassword-connect in the Helm values):
   OP_CONNECT_CREDENTIALS_FILE  path to 1password-credentials.json; if set,
                                creates Secret centaur-onepassword-connect-credentials
   OP_CONNECT_TOKEN             Connect API token; added to centaur-infra-env
-  CODEX_AUTH_JSON              Codex local auth payload; added to centaur-infra-env
-  CLAUDE_AUTH_JSON             Claude local auth payload; added to centaur-infra-env
-  CLAUDE_CREDENTIALS_JSON      Claude credentials payload; added to centaur-infra-env
+  CODEX_AUTH_JSON              Codex local auth payload; added to centaur-harness-auth
+  CLAUDE_AUTH_JSON             Claude local auth payload; added to centaur-harness-auth
+  CLAUDE_CREDENTIALS_JSON      Claude credentials payload; added to centaur-harness-auth
 EOF
 }
 
@@ -87,6 +87,9 @@ optional_secret_env_names=(
   LMNR_PROJECT_API_KEY
   LMNR_BASE_URL
   OP_CONNECT_TOKEN
+)
+
+harness_auth_env_names=(
   CODEX_AUTH_JSON
   CLAUDE_AUTH_JSON
   CLAUDE_CREDENTIALS_JSON
@@ -98,6 +101,7 @@ delete_if_forced centaur-infra-env
 delete_if_forced centaur-firewall-ca
 delete_if_forced centaur-firewall-ca-key
 delete_if_forced centaur-onepassword-connect-credentials
+delete_if_forced centaur-harness-auth
 
 if secret_exists centaur-infra-env; then
   patch_data=()
@@ -134,6 +138,29 @@ else
   done
   kubectl "${secret_args[@]}" >/dev/null
   echo "Created Secret centaur-infra-env in namespace $NAMESPACE"
+fi
+
+harness_auth_args=()
+for name in "${harness_auth_env_names[@]}"; do
+  if [[ -n "${!name:-}" ]]; then
+    harness_auth_args+=(--from-literal="$name=${!name}")
+  fi
+done
+if [[ "${#harness_auth_args[@]}" -gt 0 ]]; then
+  if secret_exists centaur-harness-auth; then
+    patch_data=()
+    for name in "${harness_auth_env_names[@]}"; do
+      if [[ -n "${!name:-}" ]]; then
+        patch_data+=("\"$name\":\"$(printf '%s' "${!name}" | base64 | tr -d '\n')\"")
+      fi
+    done
+    patch_json="{\"data\":{$(IFS=,; echo "${patch_data[*]}")}}"
+    kubectl -n "$NAMESPACE" patch secret centaur-harness-auth --type merge -p "$patch_json" >/dev/null
+    echo "Updated local auth payload keys in Secret centaur-harness-auth in namespace $NAMESPACE"
+  else
+    kubectl -n "$NAMESPACE" create secret generic centaur-harness-auth "${harness_auth_args[@]}" >/dev/null
+    echo "Created Secret centaur-harness-auth in namespace $NAMESPACE"
+  fi
 fi
 
 if secret_exists centaur-firewall-ca && secret_exists centaur-firewall-ca-key; then

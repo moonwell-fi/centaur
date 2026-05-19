@@ -118,8 +118,9 @@ Each item should live in `OP_VAULT` with its value in `credential`.
 Codex/Claude local OAuth payloads are not [iron-proxy](https://docs.iron.sh)
 API-key substitutions. If you opt into `CODEX_USE_LOCAL_AUTH` or
 `CLAUDE_USE_LOCAL_AUTH`, deliver `CODEX_AUTH_JSON`, `CLAUDE_AUTH_JSON`, and
-`CLAUDE_CREDENTIALS_JSON` through the infra Secret path and treat them as
-provider login state that will be reconstructed inside the matching sandbox.
+`CLAUDE_CREDENTIALS_JSON` through the separate `centaur-harness-auth` Secret
+and treat them as provider login state that will be reconstructed inside the
+matching sandbox.
 
 ## Verify
 

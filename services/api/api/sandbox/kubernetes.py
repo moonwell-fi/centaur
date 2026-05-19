@@ -57,13 +57,18 @@ _API_PROXY_POD_NAME = "centaur-api-proxy"
 _API_PROXY_SANDBOX_ID = "api"
 
 
+def _harness_auth_secret_name() -> str:
+    value = (os.getenv("KUBERNETES_HARNESS_AUTH_SECRET_NAME") or "").strip()
+    return value or "centaur-harness-auth"
+
+
 def _harness_auth_secret_sources(engine: str) -> list[dict[str, Any]]:
     def source(key: str, path: str) -> dict[str, Any]:
         return {
             "secret": {
-                "name": _secret_env_name(),
+                "name": _harness_auth_secret_name(),
                 "optional": True,
-                "items": [{"key": _secret_env_key(key), "path": path}],
+                "items": [{"key": key, "path": path}],
             }
         }
 

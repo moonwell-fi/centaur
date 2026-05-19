@@ -155,8 +155,10 @@ bun run auth:bootstrap
 If a login is missing, run the printed command yourself or use
 `bun run auth:bootstrap -- --login` to stream the Codex device flow or Claude
 setup-token flow. Then `source .env.local` before `just bootstrap-secrets` and
-enable the matching sandbox flags, such as `CODEX_USE_LOCAL_AUTH=true` or
-`CLAUDE_USE_LOCAL_AUTH=true`, only for deployments that need local auth.
+`just bootstrap-secrets` will create or patch a separate
+`centaur-harness-auth` Secret for those payloads. Enable the matching sandbox
+flags, such as `CODEX_USE_LOCAL_AUTH=true` or `CLAUDE_USE_LOCAL_AUTH=true`,
+only for deployments that need local auth.
 
 Then create local Kubernetes Secrets from those environment variables and boot the stack:
 

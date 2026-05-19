@@ -49,8 +49,8 @@ Secret from your shell environment.
 Most harness credentials should stay in [iron-proxy](https://docs.iron.sh)'s
 secret source as API keys. Codex and Claude Code local OAuth/subscription auth
 is different: their CLIs require local auth files. When enabled, Centaur mounts
-opaque auth payloads from the infra Secret into the matching sandbox and the
-entrypoint reconstructs those files.
+opaque auth payloads from a separate harness auth Secret into the matching
+sandbox and the entrypoint reconstructs those files.
 
 Use `bun run auth:bootstrap` to import local payloads into `.env.local`, then
 `source .env.local` before `just bootstrap-secrets`. Use
@@ -64,6 +64,10 @@ Optional payload keys:
 | `CODEX_AUTH_JSON` | Copied from `~/.codex/auth.json`. |
 | `CLAUDE_AUTH_JSON` | Claude account metadata from `~/.claude.json`, when available. |
 | `CLAUDE_CREDENTIALS_JSON` | Portable Claude credentials from `~/.claude/.credentials.json`; create with `claude setup-token`. |
+
+`just bootstrap-secrets` writes those payloads to `centaur-harness-auth`, not
+`centaur-infra-env`, so the API pod does not receive raw local OAuth payloads
+through its `envFrom` import.
 
 Enable use with sandbox flags such as `CODEX_USE_LOCAL_AUTH=true` and
 `CLAUDE_USE_LOCAL_AUTH=true`. These payloads are intentionally available inside

@@ -153,6 +153,7 @@ class FakeWsApiClient:
 def _default_per_sandbox_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME", "firewall-ca-key")
     monkeypatch.setenv("KUBERNETES_SECRET_ENV_NAME", "centaur-infra-env")
+    monkeypatch.delenv("KUBERNETES_HARNESS_AUTH_SECRET_NAME", raising=False)
     monkeypatch.delenv("KUBERNETES_BOOTSTRAP_SECRET_NAME", raising=False)
     for key in (
         "HARNESS_DURABLE_RESUME",
@@ -362,7 +363,7 @@ def test_harness_auth_secret_sources_are_engine_scoped(
     assert _harness_auth_secret_sources("codex") == [
         {
             "secret": {
-                "name": "centaur-infra-env",
+                "name": "centaur-harness-auth",
                 "optional": True,
                 "items": [{"key": "CODEX_AUTH_JSON", "path": "codex-auth.json"}],
             }
@@ -371,14 +372,14 @@ def test_harness_auth_secret_sources_are_engine_scoped(
     assert _harness_auth_secret_sources("claude-code") == [
         {
             "secret": {
-                "name": "centaur-infra-env",
+                "name": "centaur-harness-auth",
                 "optional": True,
                 "items": [{"key": "CLAUDE_AUTH_JSON", "path": "claude-auth.json"}],
             }
         },
         {
             "secret": {
-                "name": "centaur-infra-env",
+                "name": "centaur-harness-auth",
                 "optional": True,
                 "items": [
                     {
@@ -390,6 +391,25 @@ def test_harness_auth_secret_sources_are_engine_scoped(
         },
     ]
     assert _harness_auth_secret_sources("amp") == []
+
+
+def test_harness_auth_secret_sources_honor_configured_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api.sandbox.kubernetes import _harness_auth_secret_sources
+
+    monkeypatch.setenv("KUBERNETES_HARNESS_AUTH_SECRET_NAME", "custom-harness-auth")
+    monkeypatch.setenv("CODEX_USE_LOCAL_AUTH", "true")
+
+    assert _harness_auth_secret_sources("codex") == [
+        {
+            "secret": {
+                "name": "custom-harness-auth",
+                "optional": True,
+                "items": [{"key": "CODEX_AUTH_JSON", "path": "codex-auth.json"}],
+            }
+        }
+    ]
 
 
 def test_container_env_passes_laminar_otel_config(
