@@ -68,6 +68,9 @@ Application-level model and tool secrets, such as `OPENAI_API_KEY`,
 placeholder values and [iron-proxy](https://iron.sh) injects the real credentials only on approved
 outbound requests.
 
+For local deployments, run `just model` after `just bootstrap-secrets` to
+configure model-provider credentials interactively.
+
 The default harness is `codex`, so `OPENAI_API_KEY` must exist in the configured
 secret source before Slack agent turns can complete. Use explicit harness
 selectors only when you want a non-default harness such as Amp or Claude Code.
@@ -81,8 +84,9 @@ just up
 That runs:
 
 1. `just bootstrap-secrets`
-2. `just build`
-3. `just deploy`
+2. `just model`
+3. `just build`
+4. `just deploy`
 
 Check the namespace:
 

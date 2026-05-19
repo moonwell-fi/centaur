@@ -23,6 +23,7 @@ export const sidebar = [
   {
     text: 'Secrets',
     items: [
+      { text: 'Configure Model Credentials', link: '/secrets/model-credentials' },
       { text: 'Use 1Password', link: '/secrets/onepassword' },
       { text: 'Use Environment Variables', link: '/secrets/environment' },
     ],

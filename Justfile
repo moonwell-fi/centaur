@@ -58,6 +58,9 @@ _build-agent:
 bootstrap-secrets *args:
     contrib/scripts/bootstrap-k8s-secrets.sh --namespace {{namespace}} {{args}}
 
+model *args:
+    contrib/scripts/configure-model-secrets.sh --namespace {{namespace}} {{args}}
+
 deploy:
     #!/usr/bin/env bash
     set -euo pipefail
