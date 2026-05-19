@@ -979,6 +979,66 @@ a.home-lockup-link {
   white-space: nowrap;
 }
 
+/* Decorative slack-style chrome anchored to the right of the thread
+ * detail header. All four buttons are pointer-events disabled so they
+ * don't try to look interactive — they're set dressing to make the
+ * panel read as a real slack window. */
+.slack-chrome {
+  align-items: center;
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.slack-chrome-btn {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: var(--thread-ink-2);
+  cursor: default;
+  display: inline-flex;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 5px;
+  height: 28px;
+  letter-spacing: 0;
+  padding: 0 8px;
+  pointer-events: none;
+  user-select: none;
+}
+
+.slack-chrome-split {
+  gap: 4px;
+  padding-right: 6px;
+}
+
+.slack-chrome-bell {
+  padding: 0 8px;
+  position: relative;
+}
+
+.slack-chrome-dot {
+  background: #f15a4a;
+  border: 1.5px solid var(--thread-panel);
+  border-radius: 50%;
+  height: 7px;
+  position: absolute;
+  right: 6px;
+  top: 4px;
+  width: 7px;
+}
+
+@media (max-width: 760px) {
+  /* Hide everything except the overflow menu on narrow viewports so
+   * the thread title still gets the room it needs. */
+  .slack-chrome > .slack-chrome-btn:not(:last-child) {
+    display: none;
+  }
+}
+
 .thread-panel-scroll {
   flex: 1;
   min-height: 0;
