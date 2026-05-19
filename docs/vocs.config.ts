@@ -4,12 +4,15 @@ import { defineConfig, McpSource } from 'vocs/config'
 import { sidebar } from './sidebar.js'
 
 const basePath = process.env.VOCS_BASE_PATH || undefined
-const siteUrl = 'https://centaur.run'
-
-function canonicalHref(path: string) {
-  if (path === '/') return `${siteUrl}/`
-  return `${siteUrl}${path.replace(/\/+$/, '')}/`
-}
+// Outer-scope identifiers (constants, helper functions) referenced from
+// inside Vocs config callbacks like `ogImageUrl` and `head` are NOT
+// captured by Vocs's config-serializer — it stringifies the function
+// body and re-evaluates it in a scope where the outer identifier doesn't
+// exist, throwing `ReferenceError: siteUrl is not defined` at SSR time
+// and producing a blank page in dev. Anything those callbacks need has
+// to be inlined into the callback body. SITE_URL kept here as a single
+// source of truth for the `baseUrl` field only.
+const SITE_URL = 'https://centaur.run'
 
 export default defineConfig({
   rootDir: '.',
@@ -19,7 +22,7 @@ export default defineConfig({
   // public/ (like our zip and brand SVGs), so downgrade to a warning rather
   // than failing the build.
   checkDeadlinks: 'warn',
-  baseUrl: siteUrl,
+  baseUrl: SITE_URL,
   title: 'Centaur',
   titleTemplate: '%s - Centaur',
   description: 'The production control plane for shared AI agents, tools, workflows, and sandboxes.',
@@ -62,6 +65,9 @@ export default defineConfig({
   // operate/slack-etl) get picked up automatically the next time the
   // prebuild script runs — no manual map maintenance required.
   ogImageUrl: (path: string, { baseUrl }: { baseUrl: string }) => {
+    // siteUrl inlined here because Vocs's config-serializer drops the
+    // outer-scope binding when it re-evaluates this callback at SSR.
+    const siteUrl = 'https://centaur.run'
     const key = path.replace(/\/$/, '') || '/'
     const slug = key === '/' ? 'index' : key.replace(/^\//, '').replace(/\//g, '_')
     const root = baseUrl ?? siteUrl
@@ -75,8 +81,13 @@ export default defineConfig({
   // Per-page <head>: canonical URL for SEO plus the global font preload and
   // the centaur-brand-menu.js script that powers the right-click logo menu.
   head({ path }) {
+    // Helpers + constants inlined here because Vocs's config-serializer
+    // re-evaluates this callback in a scope without the outer bindings.
+    const siteUrl = 'https://centaur.run'
+    const canonicalHref =
+      path === '/' ? `${siteUrl}/` : `${siteUrl}${path.replace(/\/+$/, '')}/`
     return createElement(Fragment, null,
-      createElement('link', { rel: 'canonical', href: canonicalHref(path) }),
+      createElement('link', { rel: 'canonical', href: canonicalHref }),
       createElement('link', {
         rel: 'preload',
         href: '/fonts/PerfectlyNineties-Regular.woff',
