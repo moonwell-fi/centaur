@@ -133,9 +133,7 @@ harnessAuth:
 | Secret | Used for |
 |--------|----------|
 | `CODEX_AUTH_JSON` | Codex local auth file reconstruction. |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code OAuth token from `claude setup-token`; required for Claude Code local auth. |
-| `CLAUDE_AUTH_JSON` | Optional Claude account metadata, not sufficient for Claude Code local auth by itself. |
-| `CLAUDE_CREDENTIALS_JSON` | Legacy Claude portable credentials, when available. |
+| `CLAUDE_CREDENTIALS_JSON` | Claude Code Linux credentials file reconstruction. |
 
 Then enable only the providers you intend to use:
 
@@ -152,6 +150,10 @@ Codex auth, Claude pods receive only Claude auth, and Amp receives none. If a
 local auth payload is missing, the entrypoint preserves the normal API-key
 fallback path. Do not put these payloads in `centaur-infra-env`; the API pod
 imports that Secret with `envFrom`.
+
+Claude Code subscription credentials contain a rotating refresh token, so they
+are best treated as a narrow opt-in path rather than fleet auth. Prefer Console
+API keys, `ANTHROPIC_AUTH_TOKEN`, or an auth helper/gateway for concurrent pods.
 
 Durable provider resume is separately opt-in:
 

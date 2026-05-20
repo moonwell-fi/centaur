@@ -142,14 +142,14 @@ def test_sandbox_entrypoint_reconstructs_local_auth_payloads(tmp_path: Path) -> 
     home = tmp_path / "home"
     harness_dir = _write_codex_harness_config(home)
     codex_auth = '{"tokens":{"id_token":"codex-secret"}}'
-    claude_auth = '{"oauthAccount":{"accessToken":"claude-secret"}}'
-    claude_credentials = '{"refreshToken":"claude-refresh-secret"}'
-    claude_oauth_token = "claude-oauth-token"
+    claude_credentials = (
+        '{"claudeAiOauth":{"accessToken":"claude-access",'
+        '"refreshToken":"claude-refresh","expiresAt":1748658860401,'
+        '"scopes":["user:inference","user:profile"]}}'
+    )
     auth_dir = tmp_path / "harness-auth"
     auth_dir.mkdir()
     (auth_dir / "codex-auth.json").write_text(codex_auth)
-    (auth_dir / "claude-code-oauth-token").write_text(claude_oauth_token)
-    (auth_dir / "claude-auth.json").write_text(claude_auth)
     (auth_dir / "claude-credentials.json").write_text(claude_credentials)
 
     result = subprocess.run(
@@ -159,12 +159,8 @@ def test_sandbox_entrypoint_reconstructs_local_auth_payloads(tmp_path: Path) -> 
             "sh",
             "-lc",
             (
-                'cat "$HOME/.codex/auth.json"; printf "\\n"; '
-                'cat "$HOME/.claude.json"; printf "\\n"; '
-                'cat "$HOME/.claude/.credentials.json"; printf "\\n"; '
-                'printf "%s/%s/%s/%s\\n" "${OPENAI_API_KEY-unset}" '
+                'printf "%s/%s/%s\\n" "${OPENAI_API_KEY-unset}" '
                 '"${CODEX_API_KEY-unset}" "${ANTHROPIC_API_KEY-unset}" '
-                '"${CLAUDE_CODE_OAUTH_TOKEN-unset}"'
             ),
         ],
         check=False,
@@ -177,13 +173,10 @@ def test_sandbox_entrypoint_reconstructs_local_auth_payloads(tmp_path: Path) -> 
             "CODEX_USE_LOCAL_AUTH": "yes",
             "CODEX_AUTH_JSON_FILE": str(auth_dir / "codex-auth.json"),
             "CLAUDE_USE_LOCAL_AUTH": "on",
-            "CLAUDE_CODE_OAUTH_TOKEN_FILE": str(
-                auth_dir / "claude-code-oauth-token"
-            ),
-            "CLAUDE_AUTH_JSON_FILE": str(auth_dir / "claude-auth.json"),
             "CLAUDE_CREDENTIALS_JSON_FILE": str(
                 auth_dir / "claude-credentials.json"
             ),
+            "CLAUDE_CONFIG_DIR": str(tmp_path / "claude-config"),
             "OPENAI_API_KEY": "OPENAI_API_KEY",
             "CODEX_API_KEY": "CODEX_API_KEY",
             "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
@@ -191,25 +184,27 @@ def test_sandbox_entrypoint_reconstructs_local_auth_payloads(tmp_path: Path) -> 
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
-    codex_line, claude_line, credentials_line, env_line = result.stdout.splitlines()
-    assert json.loads(codex_line) == {"tokens": {"id_token": "codex-secret"}}
-    assert json.loads(claude_line) == {
-        "oauthAccount": {"accessToken": "claude-secret"}
+    assert json.loads((home / ".codex" / "auth.json").read_text()) == {
+        "tokens": {"id_token": "codex-secret"}
     }
-    assert json.loads(credentials_line) == {"refreshToken": "claude-refresh-secret"}
-    assert env_line == "unset/unset/unset/claude-oauth-token"
+    claude_credentials_path = tmp_path / "claude-config" / ".credentials.json"
+    assert json.loads(claude_credentials_path.read_text()) == {
+        "claudeAiOauth": {
+            "accessToken": "claude-access",
+            "refreshToken": "claude-refresh",
+            "expiresAt": 1748658860401,
+            "scopes": ["user:inference", "user:profile"],
+        }
+    }
+    assert oct(claude_credentials_path.stat().st_mode & 0o777) == "0o600"
+    assert result.stdout.splitlines()[-1] == "unset/unset/unset"
 
 
-def test_sandbox_entrypoint_keeps_claude_api_key_without_oauth_token(
+def test_sandbox_entrypoint_keeps_claude_api_key_without_credentials(
     tmp_path: Path,
 ) -> None:
     home = tmp_path / "home"
     harness_dir = _write_codex_harness_config(home)
-    auth_dir = tmp_path / "harness-auth"
-    auth_dir.mkdir()
-    (auth_dir / "claude-auth.json").write_text(
-        '{"oauthAccount":{"accountUuid":"metadata-only"}}'
-    )
 
     result = subprocess.run(
         [
@@ -217,10 +212,7 @@ def test_sandbox_entrypoint_keeps_claude_api_key_without_oauth_token(
             str(ENTRYPOINT_SH),
             "sh",
             "-lc",
-            (
-                'cat "$HOME/.claude.json"; printf "\\n"; '
-                'printf "%s\\n" "$ANTHROPIC_API_KEY"'
-            ),
+            'printf "%s\\n" "$ANTHROPIC_API_KEY"',
         ],
         check=False,
         capture_output=True,
@@ -230,17 +222,12 @@ def test_sandbox_entrypoint_keeps_claude_api_key_without_oauth_token(
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "CENTAUR_HARNESS_CONFIG_DIR": str(harness_dir),
             "CLAUDE_USE_LOCAL_AUTH": "true",
-            "CLAUDE_AUTH_JSON_FILE": str(auth_dir / "claude-auth.json"),
             "ANTHROPIC_API_KEY": "ANTHROPIC_API_KEY",
         },
     )
 
     assert result.returncode == 0, result.stderr or result.stdout
-    claude_line, api_key_line = result.stdout.splitlines()
-    assert json.loads(claude_line) == {
-        "oauthAccount": {"accountUuid": "metadata-only"}
-    }
-    assert api_key_line == "ANTHROPIC_API_KEY"
+    assert result.stdout.strip() == "ANTHROPIC_API_KEY"
 
 
 def test_sandbox_entrypoint_preserves_api_keys_when_local_auth_missing(

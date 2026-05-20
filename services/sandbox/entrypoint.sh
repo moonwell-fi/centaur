@@ -219,7 +219,7 @@ if truthy_env "${CODEX_USE_LOCAL_AUTH:-}"; then
         echo "CODEX_USE_LOCAL_AUTH=true but Codex local auth file is missing; falling back to API-key auth. Run codex login --device-auth on the host, then bun run auth:bootstrap." >&2
     fi
 fi
-unset CODEX_AUTH_JSON CODEX_AUTH_PAYLOAD
+unset CODEX_AUTH_JSON
 
 # Codex reads its auth file when the app server starts. Complete this before
 # signaling readiness, otherwise warm pods can be claimed with no auth loaded.
@@ -231,29 +231,22 @@ if [ "$CODEX_LOCAL_AUTH_LOADED" != "1" ]; then
 fi
 
 if truthy_env "${CLAUDE_USE_LOCAL_AUTH:-}"; then
-    CLAUDE_CODE_OAUTH_TOKEN_LOADED=0
-    if [ -n "${CLAUDE_CODE_OAUTH_TOKEN_FILE:-}" ] && [ -s "$CLAUDE_CODE_OAUTH_TOKEN_FILE" ]; then
-        CLAUDE_CODE_OAUTH_TOKEN="$(cat "$CLAUDE_CODE_OAUTH_TOKEN_FILE")"
-        export CLAUDE_CODE_OAUTH_TOKEN
-        CLAUDE_CODE_OAUTH_TOKEN_LOADED=1
+    CLAUDE_LOCAL_AUTH_LOADED=0
+    CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME_DIR/.claude}"
+    export CLAUDE_CONFIG_DIR
+    if [ -n "${CLAUDE_CREDENTIALS_JSON_FILE:-}" ] && [ -s "$CLAUDE_CREDENTIALS_JSON_FILE" ]; then
+        mkdir -p "$CLAUDE_CONFIG_DIR"
+        cat "$CLAUDE_CREDENTIALS_JSON_FILE" > "$CLAUDE_CONFIG_DIR/.credentials.json"
+        chmod 600 "$CLAUDE_CONFIG_DIR/.credentials.json"
+        CLAUDE_LOCAL_AUTH_LOADED=1
     fi
-    if [ -n "${CLAUDE_AUTH_JSON_FILE:-}" ] && [ -r "$CLAUDE_AUTH_JSON_FILE" ]; then
-        cat "$CLAUDE_AUTH_JSON_FILE" > "$HOME_DIR/.claude.json"
-        chmod 600 "$HOME_DIR/.claude.json"
-    fi
-    if [ -n "${CLAUDE_CREDENTIALS_JSON_FILE:-}" ] && [ -r "$CLAUDE_CREDENTIALS_JSON_FILE" ]; then
-        mkdir -p "$HOME_DIR/.claude"
-        cat "$CLAUDE_CREDENTIALS_JSON_FILE" > "$HOME_DIR/.claude/.credentials.json"
-        chmod 600 "$HOME_DIR/.claude/.credentials.json"
-    fi
-    if [ "$CLAUDE_CODE_OAUTH_TOKEN_LOADED" = "1" ]; then
-        unset ANTHROPIC_API_KEY CLAUDE_API_KEY
+    if [ "$CLAUDE_LOCAL_AUTH_LOADED" = "1" ]; then
+        unset ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_API_KEY
     else
-        echo "CLAUDE_USE_LOCAL_AUTH=true but CLAUDE_CODE_OAUTH_TOKEN is missing; falling back to API-key auth. Run claude setup-token on the host, then bun run auth:bootstrap." >&2
+        echo "CLAUDE_USE_LOCAL_AUTH=true but Claude Code credentials are missing; falling back to API-key auth. Run claude auth login on the host, then bun run auth:bootstrap." >&2
     fi
 fi
-unset CLAUDE_AUTH_JSON CLAUDE_CREDENTIALS_JSON CLAUDE_AUTH_PAYLOAD CLAUDE_CREDENTIALS_PAYLOAD
-unset CLAUDE_CODE_OAUTH_TOKEN_FILE
+unset CLAUDE_CREDENTIALS_JSON CLAUDE_CREDENTIALS_JSON_FILE
 
 # Signal readiness
 touch "$HOME_DIR/.ready"

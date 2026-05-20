@@ -62,9 +62,7 @@ Optional payload keys:
 | Secret | Notes |
 |--------|-------|
 | `CODEX_AUTH_JSON` | Copied from `~/.codex/auth.json`. |
-| `CLAUDE_CODE_OAUTH_TOKEN` | Required for Claude Code local auth; emitted by `claude setup-token`. |
-| `CLAUDE_AUTH_JSON` | Optional Claude account metadata from `~/.claude.json`; not sufficient for Claude Code local auth by itself. |
-| `CLAUDE_CREDENTIALS_JSON` | Legacy portable Claude credentials from `~/.claude/.credentials.json`, when available. |
+| `CLAUDE_CREDENTIALS_JSON` | Claude Code subscription credentials from macOS Keychain, `$CLAUDE_CONFIG_DIR/.credentials.json`, or `~/.claude/.credentials.json`. |
 
 `just bootstrap-secrets` writes those payloads to `centaur-harness-auth`, not
 `centaur-infra-env`, so the API pod does not receive raw local OAuth payloads
@@ -74,6 +72,9 @@ Enable use with sandbox flags such as `CODEX_USE_LOCAL_AUTH=true` and
 `CLAUDE_USE_LOCAL_AUTH=true`. These payloads are intentionally available inside
 the selected provider's sandbox, unlike [iron-proxy](https://docs.iron.sh)
 API-key substitution.
+
+Claude Code subscription credentials contain a refresh token that can rotate.
+Use Console API keys or an auth helper/gateway for fleet-style concurrency.
 
 ## How tool secrets resolve
 

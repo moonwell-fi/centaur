@@ -84,8 +84,7 @@ bun run auth:bootstrap
 ```
 
 The command writes only secret payload values to `.env.local`. Source that file
-before `just bootstrap-secrets` so `CODEX_AUTH_JSON`,
-`CLAUDE_CODE_OAUTH_TOKEN`, `CLAUDE_AUTH_JSON`, and
+before `just bootstrap-secrets` so `CODEX_AUTH_JSON` and
 `CLAUDE_CREDENTIALS_JSON`, when present, are copied into the separate
 `centaur-harness-auth` Secret. They are not added to `centaur-infra-env`,
 which the API consumes with `envFrom`.
@@ -96,10 +95,10 @@ If local auth is missing, run the command it prints, or use:
 bun run auth:bootstrap -- --login
 ```
 
-That opt-in mode streams `codex login --device-auth`. For Claude, it captures
-`claude setup-token` output and writes only the redacted
-`CLAUDE_CODE_OAUTH_TOKEN` import message, then you rerun
-`bun run auth:bootstrap`.
+That opt-in mode streams `codex login --device-auth` or
+`claude auth login`. For Claude on macOS, bootstrap imports the Claude Code
+Keychain credential into `CLAUDE_CREDENTIALS_JSON`; on Linux, it imports
+`$CLAUDE_CONFIG_DIR/.credentials.json` or `~/.claude/.credentials.json`.
 
 Enable local auth only for deployments that need it:
 

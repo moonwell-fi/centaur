@@ -51,43 +51,51 @@ function codexPayload() {
   return { path, value: JSON.stringify(auth) };
 }
 
-function claudeAccountPayload() {
-  const path = resolve(home, ".claude.json");
-  const auth = readJson(path);
-  if (!auth || typeof auth.oauthAccount !== "object" || auth.oauthAccount === null) {
-    return null;
+function claudeCredentialsFromValue(path, value) {
+  const credentials = typeof value === "string" ? JSON.parse(value) : value;
+  const oauth = credentials?.claudeAiOauth;
+  if (
+    typeof oauth !== "object" ||
+    oauth === null ||
+    typeof oauth.accessToken !== "string" ||
+    typeof oauth.refreshToken !== "string"
+  ) {
+    throw new Error(`${path} does not look like Claude Code OAuth credentials`);
   }
-  const payload = { oauthAccount: auth.oauthAccount };
-  if (typeof auth.userID === "string" && auth.userID.trim()) {
-    payload.userID = auth.userID;
-  }
-  return { path, value: JSON.stringify(payload) };
-}
-
-function claudeCredentialsPayload() {
-  const path = resolve(home, ".claude", ".credentials.json");
-  const credentials = readJson(path);
-  if (!credentials) return null;
   return { path, value: JSON.stringify(credentials) };
 }
 
-function claudeCodeOauthTokenPayload() {
-  const token = (process.env.CLAUDE_CODE_OAUTH_TOKEN || "").trim();
-  return token ? { path: "CLAUDE_CODE_OAUTH_TOKEN", value: token } : null;
+function claudeCredentialsFromFile(path) {
+  if (!existsSync(path)) return null;
+  return claudeCredentialsFromValue(path, readFileSync(path, "utf8"));
 }
 
-function extractClaudeCodeOauthToken(output) {
-  const assignment = /CLAUDE_CODE_OAUTH_TOKEN\s*=\s*['"]?([^\s'"]+)['"]?/.exec(
-    output,
+function claudeCredentialsFromKeychain() {
+  if (process.platform !== "darwin") return null;
+  const result = spawnSync(
+    "security",
+    ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
-  if (assignment) return assignment[1];
+  if (result.status !== 0 || !result.stdout.trim()) return null;
+  return claudeCredentialsFromValue(
+    "macOS Keychain item Claude Code-credentials",
+    result.stdout.trim(),
+  );
+}
 
+function claudeCredentialsPayload() {
+  const envPayload = (process.env.CLAUDE_CREDENTIALS_JSON || "").trim();
+  if (envPayload) {
+    return claudeCredentialsFromValue("CLAUDE_CREDENTIALS_JSON", envPayload);
+  }
+
+  const configDir = process.env.CLAUDE_CONFIG_DIR
+    ? resolve(process.env.CLAUDE_CONFIG_DIR)
+    : resolve(home, ".claude");
   return (
-    output
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .reverse()
-      .find((line) => line.length > 50 && !/\s/.test(line)) || ""
+    claudeCredentialsFromFile(resolve(configDir, ".credentials.json")) ||
+    claudeCredentialsFromKeychain()
   );
 }
 
@@ -113,53 +121,23 @@ if (codex) {
   ]);
 }
 
-const claudeAccount = claudeAccountPayload();
 const claudeCredentials = claudeCredentialsPayload();
-const claudeCodeOauthToken = claudeCodeOauthTokenPayload();
-if (claudeCodeOauthToken) {
-  updates.CLAUDE_CODE_OAUTH_TOKEN = claudeCodeOauthToken.value;
-  imported.push([
-    "Claude OAuth token",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    claudeCodeOauthToken.path,
-  ]);
-  if (claudeAccount) {
-    updates.CLAUDE_AUTH_JSON = claudeAccount.value;
-    imported.push(["Claude account", "CLAUDE_AUTH_JSON", claudeAccount.path]);
-  }
-} else if (claudeCredentials) {
+if (claudeCredentials) {
   updates.CLAUDE_CREDENTIALS_JSON = claudeCredentials.value;
   imported.push([
-    "Claude credentials",
+    "Claude Code credentials",
     "CLAUDE_CREDENTIALS_JSON",
     claudeCredentials.path,
   ]);
-  if (claudeAccount) {
-    updates.CLAUDE_AUTH_JSON = claudeAccount.value;
-    imported.push(["Claude account", "CLAUDE_AUTH_JSON", claudeAccount.path]);
-  }
-} else if (claudeAccount) {
-  loginCommands.push(["Claude", "claude", ["setup-token"]]);
-  missing.push([
-    "Claude",
-    [
-      `Found ${claudeAccount.path}, but it only contains account metadata.`,
-      "Sandbox auth needs an OAuth token from `claude setup-token`.",
-      "Run `claude setup-token` on the host,",
-      "export the emitted CLAUDE_CODE_OAUTH_TOKEN,",
-      "or `bun run auth:bootstrap -- --login` to capture setup output.",
-      "Then rerun `bun run auth:bootstrap`.",
-    ].join(" "),
-  ]);
 } else {
-  loginCommands.push(["Claude", "claude", ["setup-token"]]);
+  loginCommands.push(["Claude", "claude", ["auth", "login"]]);
   missing.push([
     "Claude",
     [
-      "Run `claude setup-token` on the host,",
-      "export the emitted CLAUDE_CODE_OAUTH_TOKEN,",
-      "or `bun run auth:bootstrap -- --login` to capture setup output.",
-      "For SSH sessions, follow the browser URL printed by Claude Code,",
+      "Run `claude auth login` on the host,",
+      "or `bun run auth:bootstrap -- --login` to run Claude Code login.",
+      "On macOS, Centaur imports the Claude Code Keychain credential.",
+      "On Linux, Centaur imports $CLAUDE_CONFIG_DIR/.credentials.json or ~/.claude/.credentials.json.",
       "then rerun `bun run auth:bootstrap`.",
     ].join(" "),
   ]);
@@ -181,26 +159,23 @@ for (const [name, instruction] of missing) {
 if (loginRequested && loginCommands.length > 0) {
   for (const [name, command, args] of loginCommands) {
     console.log(`${name}: running ${[command, ...args].join(" ")}`);
-    const stdio =
-      command === "claude" && args[0] === "setup-token"
-        ? ["inherit", "pipe", "inherit"]
-        : "inherit";
-    const result = spawnSync(command, args, { encoding: "utf8", stdio });
+    const result = spawnSync(command, args, { encoding: "utf8", stdio: "inherit" });
     if (result.error) {
       console.error(`${name}: failed to run ${command}: ${result.error.message}`);
       process.exitCode = 1;
     } else if (result.status !== 0) {
       console.error(`${name}: ${command} exited with status ${result.status}`);
       process.exitCode = result.status ?? 1;
-    } else if (command === "claude" && args[0] === "setup-token") {
-      const output = result.stdout || "";
-      const token = extractClaudeCodeOauthToken(output);
-      if (token) {
-        upsertEnvValues(envFile, { CLAUDE_CODE_OAUTH_TOKEN: token });
+    } else if (command === "claude" && args[0] === "auth") {
+      const credentials = claudeCredentialsPayload();
+      if (credentials) {
+        upsertEnvValues(envFile, { CLAUDE_CREDENTIALS_JSON: credentials.value });
         console.log(`Wrote ${envFile}`);
-        console.log("Claude OAuth token: imported setup-token output into CLAUDE_CODE_OAUTH_TOKEN=[redacted]");
+        console.log(
+          `Claude Code credentials: imported ${credentials.path} into CLAUDE_CREDENTIALS_JSON=[redacted]`,
+        );
       } else {
-        console.error("Claude: setup-token completed but no CLAUDE_CODE_OAUTH_TOKEN was found in output.");
+        console.error("Claude: login completed but Claude Code credentials were not found.");
         process.exitCode = 1;
       }
     }

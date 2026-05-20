@@ -154,7 +154,7 @@ bun run auth:bootstrap
 
 If a login is missing, run the printed command yourself or use
 `bun run auth:bootstrap -- --login` to stream the Codex device flow or Claude
-setup-token flow. Then `source .env.local` before `just bootstrap-secrets` and
+Code login flow. Then `source .env.local` before `just bootstrap-secrets` and
 `just bootstrap-secrets` will create or patch a separate
 `centaur-harness-auth` Secret for those payloads. Enable the matching sandbox
 flags, such as `CODEX_USE_LOCAL_AUTH=true` or `CLAUDE_USE_LOCAL_AUTH=true`,
