@@ -514,7 +514,12 @@ async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
   if (!normalized) return
   if (!normalized.is_mention) return
 
-  const result = await handoff.emit(normalized)
+  const result = isStopCommand(normalized.parts)
+    ? await handoff.cancelThread({
+        thread_key: normalized.thread_key,
+        message_id: normalized.message_id
+      })
+    : await handoff.emit(normalized)
   if (!result.ok) {
     if (result.status === 409) {
       logWarn('centaur_slack_handoff_conflict', result.body)
@@ -522,6 +527,19 @@ async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
     }
     throw new Error(`Centaur Slack handoff failed: ${result.status}`)
   }
+}
+
+function isStopCommand(parts: Array<{ type: string; text?: string }>): boolean {
+  const text = parts
+    .filter(part => part.type === 'text')
+    .map(part => part.text ?? '')
+    .join('\n')
+    .replace(/<@[A-Z0-9]+>/g, ' ')
+    .replace(/@U[A-Z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase()
+  return /^(?:stop|cancel)(?:\s+(?:stop|cancel))*$/.test(text)
 }
 
 function slackApiErrorResponse(c: Context, error: unknown) {

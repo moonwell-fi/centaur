@@ -5,6 +5,11 @@ export type CentaurHandoffResult =
   | { ok: true; status: number; body: unknown }
   | { ok: false; status: number; body: unknown }
 
+export type CentaurCancelThreadInput = {
+  thread_key: string
+  message_id: string
+}
+
 export class CentaurHandoff {
   readonly config: AppConfig
 
@@ -49,6 +54,29 @@ export class CentaurHandoff {
             recipient_team_id: event.recipient_team_id ?? event.team_id
           }
         }
+      })
+    })
+
+    const body = await readResponseBody(response)
+    return { ok: response.ok, status: response.status, body }
+  }
+
+  async cancelThread(input: CentaurCancelThreadInput): Promise<CentaurHandoffResult> {
+    const url = new URL(
+      `/agent/threads/${encodeURIComponent(input.thread_key)}/release`,
+      this.config.CENTAUR_API_URL
+    )
+    const apiKey = centaurApiKey(this.config)
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {})
+      },
+      body: JSON.stringify({
+        release_id: `slack-stop:${input.message_id}`,
+        cancel_inflight: true,
+        clear_resume_state: true
       })
     })
 

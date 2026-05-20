@@ -184,6 +184,43 @@ describe(`Slack Emulate E2E (${IMPLEMENTATION})`, () => {
     )
   })
 
+  it('cancels the active thread instead of handing stop to the agent', async () => {
+    const parent = await postUserMessage(`<@${BOT_USER_ID}> write a long answer`)
+    const stop = await postUserMessage(`<@${BOT_USER_ID}> stop`, parent.ts)
+    const waits: Promise<unknown>[] = []
+
+    const response = await app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-emulate-stop',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          ts: stop.ts,
+          thread_ts: parent.ts,
+          text: `<@${BOT_USER_ID}> stop`
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    expect(centaur.workflowRuns).toHaveLength(0)
+    expect(centaur.releases).toEqual([
+      {
+        threadKey: `slack:${TEAM_ID}:${CHANNEL_ID}:${parent.ts}`,
+        body: {
+          release_id: `slack-stop:slack:${TEAM_ID}:${CHANNEL_ID}:${stop.ts}`,
+          cancel_inflight: true,
+          clear_resume_state: true
+        }
+      }
+    ])
+  })
+
   it('ignores bot-originated events and duplicate Slack event IDs', async () => {
     const botMessage = await postBotMessage(`<@${BOT_USER_ID}> bot echo`)
     const waits: Promise<unknown>[] = []
@@ -448,6 +485,7 @@ function waitUntilContext(waits: Promise<unknown>[]): any {
 
 async function createFakeCentaur() {
   const workflowRuns: WorkflowRunRequest[] = []
+  const releases: Array<{ threadKey: string; body: any }> = []
   const deliveries: FakeDelivery[] = []
   const delivered: string[] = []
   const failed: string[] = []
@@ -459,6 +497,14 @@ async function createFakeCentaur() {
       if (url.pathname === '/workflows/runs') {
         workflowRuns.push((await request.json()) as WorkflowRunRequest)
         return Response.json({ ok: true, run_id: `wfr-${workflowRuns.length}` })
+      }
+      const releaseMatch = /^\/agent\/threads\/([^/]+)\/release$/.exec(url.pathname)
+      if (releaseMatch) {
+        releases.push({
+          threadKey: decodeURIComponent(releaseMatch[1] ?? ''),
+          body: await request.json()
+        })
+        return Response.json({ ok: true, released: true })
       }
       if (url.pathname === '/agent/final-deliveries/claim') {
         return Response.json({ deliveries: deliveries.splice(0) })
@@ -479,11 +525,13 @@ async function createFakeCentaur() {
   return {
     url: `http://localhost:${server.port}`,
     workflowRuns,
+    releases,
     deliveries,
     delivered,
     failed,
     reset() {
       workflowRuns.length = 0
+      releases.length = 0
       deliveries.length = 0
       delivered.length = 0
       failed.length = 0

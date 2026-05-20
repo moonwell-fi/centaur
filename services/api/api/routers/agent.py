@@ -960,6 +960,7 @@ async def thread_events(
 class ReleaseRequest(BaseModel):
     release_id: str | None = None
     cancel_inflight: bool = False
+    clear_resume_state: bool = False
 
 
 @router.post("/threads/{thread_key}/release", dependencies=[Depends(require_scope("agent:execute"))])
@@ -973,6 +974,7 @@ async def release_thread(request: Request, thread_key: str, body: ReleaseRequest
             thread_key=thread_key,
             release_id=release_id,
             cancel_inflight=body.cancel_inflight,
+            clear_resume_state=body.clear_resume_state,
         )
     except ControlPlaneError as exc:
         return _json_error(exc.code, exc.message, exc.status_code)

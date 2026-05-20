@@ -1605,11 +1605,13 @@ async def release_assignment(
     cancel_inflight: bool,
     stop_runtime: bool = True,
     stop_runtime_background: bool = False,
+    clear_resume_state: bool = False,
 ) -> dict[str, Any]:
     payload = {
         "thread_key": thread_key,
         "release_id": release_id,
         "cancel_inflight": cancel_inflight,
+        "clear_resume_state": clear_resume_state,
     }
     req_hash = request_hash(payload)
 
@@ -1659,6 +1661,15 @@ async def release_assignment(
                         "UPDATE agent_execution_requests SET status = 'cancelled', terminal_reason = 'released', "
                         "completed_at = NOW(), updated_at = NOW() "
                         "WHERE thread_key = $1 AND status IN ('queued', 'running', 'cancel_requested', 'retry_wait')",
+                        thread_key,
+                    )
+                if clear_resume_state:
+                    await conn.execute(
+                        "UPDATE sandbox_sessions SET "
+                        "agent_thread_id = NULL, last_delivered_id = NULL, "
+                        "inflight_turn_id = NULL, inflight_turn_input = NULL, inflight_attempts = 0, "
+                        "last_result = NULL, last_result_at = NULL, updated_at = NOW() "
+                        "WHERE thread_key = $1",
                         thread_key,
                     )
                 response = {
@@ -1711,6 +1722,7 @@ async def release_assignment(
         assignment_generation=response.get("assignment_generation"),
         runtime_id=response.get("runtime_id"),
         cancel_inflight=cancel_inflight,
+        clear_resume_state=clear_resume_state,
     )
     return response
 
