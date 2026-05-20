@@ -149,18 +149,66 @@ def api_stdin_reader() -> None:
     INPUTS.put(None)
 
 
+_BINARY_BLOCK_TYPES = frozenset({"image", "document", "file"})
+_INLINE_BLOCK_BYTE_BUDGET = 16_384
+
+
+def _safe_basename(name: str) -> str:
+    base = os.path.basename(name.strip()) if name else ""
+    return base if base not in ("", ".", "..") else ""
+
+
+def _describe_binary_block(block: dict[str, Any]) -> str:
+    btype = str(block.get("type") or "attachment")
+    name = _safe_basename(str(block.get("name") or block.get("filename") or ""))
+    media_type = str(block.get("mime_type") or "").strip()
+    if not media_type:
+        source = block.get("source") if isinstance(block.get("source"), dict) else {}
+        media_type = str(source.get("media_type") or "").strip()
+    size = block.get("size") or block.get("byte_size")
+    pieces: list[str] = [btype]
+    if name:
+        pieces.append(name)
+    if media_type:
+        pieces.append(media_type)
+    if isinstance(size, int) and size > 0:
+        pieces.append(f"{size}B")
+    descriptor = " · ".join(pieces)
+    hint = name or f"{btype}-attachment"
+    return (
+        f"[Attached {descriptor}; binary data stripped from prompt. "
+        f"If you need it, fetch it from /home/agent/uploads/{hint} or look it up in the attachments table.]"
+    )
+
+
+def _describe_oversize_block(block: dict[str, Any]) -> str:
+    btype = str(block.get("type") or "attachment")
+    return f"[{btype} block omitted from prompt: exceeds inline byte budget]"
+
+
 def text_from_blocks(blocks: list[dict[str, Any]]) -> str:
     parts: list[str] = []
     for block in blocks:
+        if not isinstance(block, dict):
+            continue
         btype = block.get("type")
         if btype == "text":
             parts.append(str(block.get("text") or ""))
-        elif btype == "image":
+        elif btype in _BINARY_BLOCK_TYPES:
+            parts.append(_describe_binary_block(block))
+        elif btype == "attachment_ref":
+            ref = block.get("attachment_id") or block.get("id") or "unknown"
+            name = _safe_basename(str(block.get("name") or block.get("filename") or "")) or "attachment"
             parts.append(
-                "[User sent an image attachment; if needed, ask them to upload it as a file reference.]"
+                f"[attachment_ref id={ref} name={name}; fetch via "
+                f"`curl http://api:8000/agent/attachments/{ref}/download -o /home/agent/uploads/{name}`]"
             )
         else:
-            parts.append(json.dumps(block, ensure_ascii=False))
+            encoded = json.dumps(block, ensure_ascii=False)
+            if len(encoded) > _INLINE_BLOCK_BYTE_BUDGET:
+                parts.append(_describe_oversize_block(block))
+            else:
+                parts.append(encoded)
     return "\n".join(p for p in parts if p).strip()
 
 

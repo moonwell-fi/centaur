@@ -227,3 +227,104 @@ def test_main_lazy_starts_app_server_after_input(monkeypatch) -> None:
     )
     assert {"type": "thread.started", "thread_id": "thread-123"} in emitted
     assert {"type": "turn.completed"} in emitted
+
+
+def test_text_from_blocks_strips_inline_binary_blobs() -> None:
+    wrapper = _load_wrapper()
+    big_pdf_b64 = "A" * 2_000_000
+    blocks = [
+        {"type": "text", "text": "Summarize this report:"},
+        {
+            "type": "document",
+            "name": "report.pdf",
+            "mime_type": "application/pdf",
+            "size": 1_400_000,
+            "source": {
+                "type": "base64",
+                "media_type": "application/pdf",
+                "data": big_pdf_b64,
+            },
+        },
+        {
+            "type": "image",
+            "name": "diagram.png",
+            "source": {"type": "base64", "media_type": "image/png", "data": "AAA"},
+        },
+        {
+            "type": "attachment_ref",
+            "attachment_id": "att_42",
+            "name": "deck.pdf",
+        },
+    ]
+    text = wrapper.text_from_blocks(blocks)
+    assert "Summarize this report" in text
+    assert big_pdf_b64 not in text
+    assert "report.pdf" in text
+    assert "diagram.png" in text
+    assert "att_42" in text
+    assert "/home/agent/uploads/" in text
+    assert len(text) < 4_000
+
+
+def test_text_from_blocks_keeps_small_unknown_blocks_intact() -> None:
+    wrapper = _load_wrapper()
+    blocks = [
+        {"type": "text", "text": "Use this tool result:"},
+        {"type": "tool_result", "tool_use_id": "tu_1", "content": "ok"},
+    ]
+    text = wrapper.text_from_blocks(blocks)
+    assert '"tool_use_id": "tu_1"' in text
+
+
+def test_text_from_blocks_collapses_oversize_non_binary_blocks_with_omitted_message() -> None:
+    wrapper = _load_wrapper()
+    huge = {"type": "tool_result", "content": "x" * 100_000}
+    text = wrapper.text_from_blocks([{"type": "text", "text": "go"}, huge])
+    assert "x" * 1000 not in text
+    # Oversize non-binary blocks should NOT say "binary data stripped"; that
+    # phrasing is reserved for image/document/file blocks.
+    assert "binary data stripped" not in text
+    assert "exceeds inline byte budget" in text
+
+
+def test_text_from_blocks_basenames_attachment_paths_for_path_safety() -> None:
+    wrapper = _load_wrapper()
+    blocks = [
+        {
+            "type": "image",
+            "name": "../../etc/passwd",
+            "source": {"type": "base64", "media_type": "image/png", "data": "AA=="},
+        },
+        {
+            "type": "attachment_ref",
+            "attachment_id": "att_99",
+            "name": "/etc/shadow",
+        },
+    ]
+    text = wrapper.text_from_blocks(blocks)
+    assert "../../etc/passwd" not in text
+    assert "/etc/shadow" not in text
+    assert "/home/agent/uploads/passwd" in text
+    assert "/home/agent/uploads/shadow" in text
+
+
+def test_text_from_blocks_prefers_attachment_id_over_stray_id() -> None:
+    wrapper = _load_wrapper()
+    blocks = [
+        {
+            "type": "attachment_ref",
+            "id": "msg_42",
+            "attachment_id": "att_42",
+            "name": "deck.pdf",
+        }
+    ]
+    text = wrapper.text_from_blocks(blocks)
+    assert "id=att_42" in text
+    assert "msg_42" not in text
+
+
+def test_text_from_blocks_ignores_non_dict_entries() -> None:
+    wrapper = _load_wrapper()
+    blocks = [{"type": "text", "text": "go"}, None, "stray", 7]
+    text = wrapper.text_from_blocks(blocks)
+    assert text == "go"
