@@ -515,9 +515,9 @@ describe('AgentSessionRenderer', () => {
       blocks.some(
         (block: any) =>
           block.type === 'context' &&
-          String(block.elements?.[0]?.text ?? '').includes('Planning the tool calls.')
+          String(block.elements?.[0]?.text ?? '').includes('*Thinking*')
       )
-    ).toBe(true)
+    ).toBe(false)
     expect(
       blocks.some(
         (block: any) =>
@@ -530,6 +530,70 @@ describe('AgentSessionRenderer', () => {
           block.type === 'markdown' && String(block.text).includes('> streamed thinking')
       )
     ).toBe(false)
+  })
+
+  it('never emits a standalone Thinking context block on finalize', async () => {
+    const calls: Array<{ method: string; params: any }> = []
+    const client = {
+      assistant: { threads: { setStatus: async () => ({ ok: true }) } },
+      chat: {
+        startStream: async (params: any) => {
+          calls.push({ method: 'chat.startStream', params })
+          return { ok: true, ts: '1778866940.295499' }
+        },
+        appendStream: async (params: any) => {
+          calls.push({ method: 'chat.appendStream', params })
+          return { ok: true }
+        },
+        stopStream: async (params: any) => {
+          calls.push({ method: 'chat.stopStream', params })
+          return { ok: true }
+        },
+        update: async () => ({ ok: true })
+      }
+    }
+
+    const renderer = new AgentSessionRenderer(client as any)
+    const { sessionId } = await renderer.open({
+      channel: 'C123',
+      parentTs: '1778866921.505479',
+      recipientTeamId: 'T123',
+      recipientUserId: 'U123',
+      title: 'Centaur execution'
+    })
+
+    await renderer.step(sessionId, {
+      id: 'cmd-1',
+      title: 'Run command: pnpm test',
+      status: 'complete',
+      output: '```text\nok\n```'
+    })
+    await renderer.done(sessionId, {
+      commentaryMarkdown: 'Picking the smallest reproducer first.',
+      answerMarkdown: 'All tests pass.'
+    })
+
+    const stop = calls.find(call => call.method === 'chat.stopStream')
+    const blocks = stop?.params.blocks ?? []
+    expect(
+      blocks.some(
+        (block: any) =>
+          block.type === 'context' &&
+          String(block.elements?.[0]?.text ?? '').includes('*Thinking*')
+      )
+    ).toBe(false)
+    expect(
+      blocks.some(
+        (block: any) =>
+          block.type === 'markdown' && String(block.text).includes('Picking the smallest reproducer')
+      )
+    ).toBe(false)
+    expect(
+      blocks.some(
+        (block: any) =>
+          block.type === 'markdown' && String(block.text).includes('All tests pass.')
+      )
+    ).toBe(true)
   })
 
   it('uses clipped final answer content for fallback text on long replies', async () => {

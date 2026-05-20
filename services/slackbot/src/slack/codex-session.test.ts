@@ -1,16 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { shouldShowThinkingBlock } from './render'
 import { AgentSessionRenderer } from './agent-session'
 import { CodexSessionRenderer } from './codex-session'
-
-describe('assistant message sections', () => {
-  it('skips Thinking when commentary is duplicated in the answer', () => {
-    const prose = 'I will call five tools and report results.'
-    expect(shouldShowThinkingBlock(prose, prose)).toBe(false)
-    expect(shouldShowThinkingBlock(prose, `${prose}\n\nTool results follow.`)).toBe(false)
-    expect(shouldShowThinkingBlock('Planning only.', 'Final answer only.')).toBe(true)
-  })
-})
 
 describe('CodexSessionRenderer', () => {
   it('accumulates command output deltas into the same task update', async () => {

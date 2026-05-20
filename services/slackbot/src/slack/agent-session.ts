@@ -15,12 +15,7 @@ import {
   type StreamTaskStatus
 } from './streaming'
 import { buildFinalFallbackText, sanitizeFinalMessagePayload } from './final-message'
-import {
-  markdownToStreamChunks,
-  renderMarkdownBlocks,
-  shouldShowThinkingBlock,
-  thinkingContextBlock
-} from './render'
+import { markdownToStreamChunks, renderMarkdownBlocks } from './render'
 import { clipLines } from './streaming'
 
 type Segment = {
@@ -296,28 +291,25 @@ export class AgentSessionRenderer {
     if (!segment.streamTs) return
     const originalTasks = finalTaskSnapshot(segment)
     const tasks = compactFinalTasks(originalTasks)
-    const commentaryMarkdown = state.finalCommentaryMarkdown?.trim() ?? ''
     const answerSource =
       state.finalAnswerMarkdown?.trim() || segment.streamedText.trim() || segment.textParts.join('')
     const answerMarkdown = finalMarkdownForBlocks(answerSource)
     const streamedTextLive =
       Boolean(segment.streamedText.trim()) && segment.streamedText.length < MAX_LIVE_TEXT_CHARS
-    const showThinking =
-      !streamedTextLive && shouldShowThinkingBlock(commentaryMarkdown, answerMarkdown)
-    const thinkingBlock = showThinking ? thinkingContextBlock(commentaryMarkdown) : null
-    // Slack accumulates appendStream chunks; stopStream blocks are the composed final layout.
-    // Only add blocks for content that was not streamed live; live task_update chunks carry
-    // fenced details/output, and the header has already been streamed as the first chunk.
+    const commentaryMarkdown = state.finalCommentaryMarkdown?.trim() ?? ''
+    // Composed final layout. The "Thinking" context block was removed; in
+    // sessions with a plan, commentary already lives in task details. The
+    // fallback text below still carries commentary so non-block surfaces
+    // (mobile push, notifications) keep the reasoning preview.
     const blocks = sanitizeFinalMessagePayload([
       ...(tasks.length && !segment.planStarted
         ? [planBlock(planTitle(state.title, originalTasks), tasks, EXECUTION_PLAN_ID)]
         : []),
-      ...(thinkingBlock ? [thinkingBlock] : []),
       ...(!streamedTextLive && answerMarkdown ? renderMarkdownBlocks(answerMarkdown) : [])
     ] as AnyBlock[])
     const fallbackText = buildFinalFallbackText({
       title: state.title,
-      commentaryMarkdown: showThinking ? commentaryMarkdown : '',
+      commentaryMarkdown: streamedTextLive ? '' : commentaryMarkdown,
       answerMarkdown
     })
     const stopResponse = await this.client.chat.stopStream({
