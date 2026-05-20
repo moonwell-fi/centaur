@@ -9,7 +9,7 @@ import { CentaurHandoff } from './centaur/handoff'
 import { loadConfig } from './config'
 import { logError, logWarn, sanitizeLogValue } from './logging'
 import { AgentSessionRenderer, withAgentSessionLock } from './slack/agent-session'
-import { authorizeSlackOrg } from './slack/authorization'
+import { authorizeSlackOrg, slackEventUserId } from './slack/authorization'
 import { CodexSessionRenderer, hasActiveCodexSession } from './slack/codex-session'
 import { EventDeduper, slackDedupKey } from './slack/dedup'
 import { duplicateSlackAlertText, type DuplicateSlackEventDetails } from './slack/duplicate-alert'
@@ -19,6 +19,7 @@ import { markdownToStreamChunks } from './slack/render'
 import { verifySlackSignature } from './slack/signature'
 import type { SlackEnvelope } from './slack/types'
 import type { AnyBlock, AnyChunk } from '@slack/types'
+import type { WebClient } from '@slack/web-api'
 
 const config = loadConfig()
 // This is the existing deployments/runtime alert channel wired by the Helm
@@ -489,10 +490,26 @@ function codexThreadIdFromUnknown(value: unknown): string | undefined {
 }
 
 async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
-  const authorization = authorizeSlackOrg({
+  const { client, installation } = await resolver.resolve({
+    teamId: envelope.team_id,
+    enterpriseId: envelope.enterprise_id
+  })
+
+  let authorization = authorizeSlackOrg({
     envelope,
     allowedExternalTeamIds: config.SLACKBOT_EXTERNAL_ORG_ALLOWLIST
   })
+  const userId = slackEventUserId(envelope)
+  if (!authorization.ok && userId) {
+    const allowGuestUser = await isSlackGuestUser(client, userId)
+    if (allowGuestUser) {
+      authorization = authorizeSlackOrg({
+        envelope,
+        allowedExternalTeamIds: config.SLACKBOT_EXTERNAL_ORG_ALLOWLIST,
+        allowGuestUser
+      })
+    }
+  }
   if (!authorization.ok) {
     console.warn('slack_event_ignored_external_org_not_allowlisted', {
       external_team_id: authorization.externalTeamId,
@@ -502,10 +519,6 @@ async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
     return
   }
 
-  const { client, installation } = await resolver.resolve({
-    teamId: envelope.team_id,
-    enterpriseId: envelope.enterprise_id
-  })
   const normalized = await normalizeSlackEnvelope({
     envelope,
     botUserId: installation.botUserId,
@@ -521,6 +534,25 @@ async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
       return
     }
     throw new Error(`Centaur Slack handoff failed: ${result.status}`)
+  }
+}
+
+async function isSlackGuestUser(client: WebClient, userId: string): Promise<boolean> {
+  try {
+    const response = await client.users.info({ user: userId })
+    const user = response.user as
+      | {
+          is_restricted?: boolean
+          is_ultra_restricted?: boolean
+        }
+      | undefined
+    return Boolean(user?.is_restricted || user?.is_ultra_restricted)
+  } catch (error) {
+    logWarn('slack_guest_user_lookup_failed', {
+      user_id: userId,
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return false
   }
 }
 

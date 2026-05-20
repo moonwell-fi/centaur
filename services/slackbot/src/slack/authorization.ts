@@ -15,12 +15,14 @@ export type SlackOrgAuthorizationDecision = {
 export function authorizeSlackOrg(opts: {
   envelope: SlackEnvelope
   allowedExternalTeamIds: readonly string[]
+  allowGuestUser?: boolean
 }): SlackOrgAuthorizationDecision {
   const externalTeamId = externalSlackTeamId(opts.envelope)
   if (!externalTeamId) return { ok: true }
 
   const allowed = new Set(opts.allowedExternalTeamIds)
   if (allowed.has(externalTeamId)) return { ok: true, externalTeamId }
+  if (opts.allowGuestUser) return { ok: true, externalTeamId }
 
   return {
     ok: false,
@@ -41,6 +43,12 @@ function externalSlackTeamId(envelope: SlackEnvelope): string | undefined {
     }
   }
   return undefined
+}
+
+export function slackEventUserId(envelope: SlackEnvelope): string | undefined {
+  if (!isRecord(envelope.event)) return undefined
+  const user = envelope.event.user
+  return typeof user === 'string' && user.trim() ? user.trim() : undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

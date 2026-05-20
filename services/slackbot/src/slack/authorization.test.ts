@@ -23,7 +23,8 @@ describe('authorizeSlackOrg', () => {
           team_id: 'THOME',
           event: { type: 'app_mention', team: 'THOME', user_team: 'TEXTERNAL' }
         },
-        allowedExternalTeamIds: []
+        allowedExternalTeamIds: [],
+        allowGuestUser: false
       })
     ).toEqual({
       ok: false,
@@ -41,6 +42,20 @@ describe('authorizeSlackOrg', () => {
           event: { type: 'app_mention', team: 'THOME', user_team: 'TEXTERNAL' }
         },
         allowedExternalTeamIds: ['TEXTERNAL']
+      })
+    ).toEqual({ ok: true, externalTeamId: 'TEXTERNAL' })
+  })
+
+  it('allows Slack guest users from an external user_team', () => {
+    expect(
+      authorizeSlackOrg({
+        envelope: {
+          type: 'event_callback',
+          team_id: 'THOME',
+          event: { type: 'app_mention', team: 'THOME', user_team: 'TEXTERNAL' }
+        },
+        allowedExternalTeamIds: [],
+        allowGuestUser: true
       })
     ).toEqual({ ok: true, externalTeamId: 'TEXTERNAL' })
   })
