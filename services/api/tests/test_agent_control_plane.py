@@ -2351,11 +2351,102 @@ async def test_recover_stale_running_requeues_expired_execution(db_pool):
     await _recover_stale_running(db_pool)
 
     row = await db_pool.fetchrow(
-        "SELECT status FROM agent_execution_requests WHERE execution_id = $1",
+        "SELECT status, metadata FROM agent_execution_requests WHERE execution_id = $1",
         execution_id,
     )
     assert row is not None
     assert row["status"] == "queued"
+    metadata = json.loads(row["metadata"])
+    assert metadata["recovered_from_stale_lease"] is True
+    assert metadata["stale_lease_recovered_at"]
+
+
+@pytest.mark.asyncio
+async def test_worker_replays_logs_for_stale_lease_recovery(db_pool):
+    from api.runtime_control import _process_execution
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}"
+    execution_id = f"exe-{uuid.uuid4().hex[:12]}"
+    runtime_id = f"rt-recovered-{uuid.uuid4().hex[:8]}"
+    recovered_metadata = {"recovered_from_stale_lease": True}
+
+    await db_pool.execute(
+        "INSERT INTO agent_runtime_assignments ("
+        "thread_key, assignment_generation, runtime_id, harness, engine, "
+        "persona_id, prompt_ref, effective_agents_md_sha256, state"
+        ") VALUES ($1, 1, $2, 'amp', 'amp', NULL, 'harness:amp', 'sha', 'active')",
+        thread_key,
+        runtime_id,
+    )
+    await db_pool.execute(
+        "INSERT INTO agent_execution_requests ("
+        "execution_id, thread_key, assignment_generation, execute_id, request_hash, status, durable_turn_id, "
+        "delivery, metadata, silence_deadline_at, hard_deadline_at"
+        ") VALUES ($1, $2, 1, 'exec-recovered', 'hash-recovered', 'running', 'turn-existing', "
+        "'{}'::jsonb, $3::jsonb, NOW() + INTERVAL '10 minutes', NOW() + INTERVAL '30 minutes')",
+        execution_id,
+        thread_key,
+        json.dumps(recovered_metadata),
+    )
+
+    row = {
+        "execution_id": execution_id,
+        "thread_key": thread_key,
+        "assignment_generation": 1,
+        "status": "running",
+        "durable_turn_id": "turn-existing",
+        "delivery": {},
+        "metadata": recovered_metadata,
+        "silence_deadline_at": dt.datetime.now(dt.timezone.utc)
+        + dt.timedelta(minutes=10),
+        "hard_deadline_at": dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=30),
+        "created_at": dt.datetime.now(dt.timezone.utc),
+        "claimed_at": dt.datetime.now(dt.timezone.utc),
+    }
+    session = SandboxSession(
+        sandbox_id=runtime_id,
+        thread_key=thread_key,
+        harness="amp",
+        engine="amp",
+    )
+
+    async def _replayed_done_stream(*_args, **_kwargs):
+        yield {
+            "data": json.dumps(
+                {
+                    "type": "turn.done",
+                    "turn_id": 1,
+                    "result": "replayed final answer",
+                    "agent_thread_id": "",
+                }
+            )
+        }
+
+    backend = SimpleNamespace(
+        attach=AsyncMock(), status=AsyncMock(return_value="running")
+    )
+
+    with (
+        patch("api.runtime_control.get_or_spawn", new=AsyncMock(return_value=session)),
+        patch("api.runtime_control.inject_stdin", AsyncMock()),
+        patch("api.runtime_control.get_backend", return_value=backend),
+        patch(
+            "api.runtime_control._get_runtime",
+            return_value=SimpleNamespace(turn_counter=1),
+        ),
+        patch("api.runtime_control._stream_stdout", _replayed_done_stream),
+    ):
+        await _process_execution(db_pool, row)
+
+    backend.attach.assert_awaited_once_with(session, logs=True)
+    execution = await db_pool.fetchrow(
+        "SELECT status, terminal_reason, result_text FROM agent_execution_requests WHERE execution_id = $1",
+        execution_id,
+    )
+    assert execution is not None
+    assert execution["status"] == "completed"
+    assert execution["terminal_reason"] == "completed"
+    assert execution["result_text"] == "replayed final answer"
 
 
 @pytest.mark.asyncio

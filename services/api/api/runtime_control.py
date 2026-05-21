@@ -54,6 +54,7 @@ log = structlog.get_logger()
 
 _SLACKBOT_LIVE_DELIVERY_METADATA_KEY = "slackbot_live_delivery"
 _LEGACY_SLACKBOT_LIVE_DELIVERY_METADATA_KEY = "slackbot" + "_v" + "2_live_delivery"
+_STALE_LEASE_RECOVERY_METADATA_KEY = "recovered_from_stale_lease"
 
 EXECUTION_SILENCE_TIMEOUT_S = int(os.getenv("EXECUTION_SILENCE_TIMEOUT_S", "600"))
 EXECUTION_TOOL_SILENCE_TIMEOUT_S = int(
@@ -2489,13 +2490,16 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
     user_id: str | None = str(user_id_row) if user_id_row else None
 
     backend = get_backend()
-    await backend.attach(session)
+    replay_recovered_logs = bool(
+        durable_turn_id and execution_metadata.get(_STALE_LEASE_RECOVERY_METADATA_KEY)
+    )
+    await backend.attach(session, logs=replay_recovered_logs)
     rt = _get_runtime(session.sandbox_id)
     observations = ExecutionObservationAccumulator()
     started_at = claimed_at or row.get("created_at")
     first_token_at: dt.datetime | None = None
     slackbot_session_id = str(execution_metadata.get("slackbot_agent_session_id") or "")
-    slackbot_forward_live = True
+    slackbot_forward_live = not replay_recovered_logs
     slackbot_text_sent = False
     slackbot_done = False
     harness_thread_id = ""
@@ -3069,7 +3073,12 @@ async def _recover_stale_running(pool) -> int:
     result = await pool.execute(
         "UPDATE agent_execution_requests SET "
         "status = CASE WHEN status IN ('running', 'retry_wait') THEN 'queued' ELSE status END, "
-        "worker_id = NULL, worker_lease_expires_at = NULL, updated_at = NOW() "
+        "worker_id = NULL, worker_lease_expires_at = NULL, "
+        "metadata = COALESCE(metadata, '{}'::jsonb) || jsonb_build_object("
+        f"'{_STALE_LEASE_RECOVERY_METADATA_KEY}', TRUE, "
+        "'stale_lease_recovered_at', NOW()"
+        "), "
+        "updated_at = NOW() "
         "WHERE status IN ('running', 'retry_wait', 'cancel_requested') "
         "AND (worker_lease_expires_at IS NULL OR worker_lease_expires_at <= NOW())",
     )
