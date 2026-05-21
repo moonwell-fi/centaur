@@ -8,6 +8,8 @@ import { withLaminarSpan } from './laminar'
 const CONSUMER_ID = `slackbot-${process.pid}`
 const FINAL_DELIVERY_CHUNK_CHARS = slackReplyLimits.text.maxFallbackChars
 const FINAL_DELIVERY_CHUNK_EVENT = 'centaur_final_delivery_chunk'
+const FINAL_DELIVERY_POLL_ALERT_FAILURES = 3
+const FINAL_DELIVERY_POLL_ALERT_INTERVAL_MS = 5 * 60 * 1000
 const NON_RETRYABLE_SLACK_ERRORS = new Set([
   'msg_too_long',
   'msg_blocks_too_long',
@@ -23,15 +25,27 @@ const NON_RETRYABLE_SLACK_ERRORS = new Set([
 
 export function startFinalDeliveryPoller(config: AppConfig, client: WebClient): void {
   if (!centaurApiKey(config)) return
+  let consecutiveFailures = 0
+  let lastAlertAt = 0
   const tick = async () => {
     try {
       await pollFinalDeliveriesOnce(config, client)
+      consecutiveFailures = 0
     } catch (error) {
+      consecutiveFailures += 1
       logError('final_delivery_poll_failed', error)
-      await postRuntimeAlert(config, client, {
-        kind: 'final_delivery_poll_failed',
-        error
-      })
+      const now = Date.now()
+      if (
+        consecutiveFailures >= FINAL_DELIVERY_POLL_ALERT_FAILURES &&
+        now - lastAlertAt >= FINAL_DELIVERY_POLL_ALERT_INTERVAL_MS
+      ) {
+        lastAlertAt = now
+        await postRuntimeAlert(config, client, {
+          kind: 'final_delivery_poll_failed',
+          error,
+          text: finalDeliveryPollFailureText(config, consecutiveFailures, error)
+        })
+      }
     }
   }
   setInterval(tick, 2_000).unref?.()
@@ -288,6 +302,23 @@ function splitFinalDeliveryText(text: string): string[] {
 function slackDeliveryErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
+}
+
+function finalDeliveryPollFailureText(
+  config: AppConfig,
+  consecutiveFailures: number,
+  error: unknown
+): string {
+  const apiOrigin = apiUrlOrigin(config.CENTAUR_API_URL)
+  return `final delivery poll failed ${consecutiveFailures} times consecutively for ${apiOrigin}: ${slackDeliveryErrorMessage(error)}`
+}
+
+function apiUrlOrigin(value: string): string {
+  try {
+    return new URL(value).origin
+  } catch {
+    return 'configured Centaur API URL'
+  }
 }
 
 function slackDeliveryErrorClass(error: unknown): string | null {
