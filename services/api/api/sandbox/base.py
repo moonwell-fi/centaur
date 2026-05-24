@@ -61,6 +61,10 @@ class SandboxBackend(abc.ABC):
         """Whether this backend supports pre-warming sandboxes."""
         return False
 
+    def plan_sandbox_id(self, thread_key: str) -> str | None:
+        """Return a stable backend-specific ID for a pending sandbox, if supported."""
+        return None
+
     @abc.abstractmethod
     async def create(
         self,
@@ -74,6 +78,7 @@ class SandboxBackend(abc.ABC):
         model: str | None = None,
         resume_thread_id: str | None = None,
         trace_id: str | None = None,
+        sandbox_id: str | None = None,
     ) -> SandboxSession:
         """Create and start a new sandbox. Block until ready."""
 
@@ -146,4 +151,8 @@ class SandboxBackend(abc.ABC):
 
     async def recover_warm(self, pool_harness: str) -> list[SandboxSession]:
         """Discover warm (pre-created, unclaimed) sandboxes. Default: empty."""
+        return []
+
+    async def list_managed(self) -> list[dict[str, Any]]:
+        """List backend-managed sandboxes for reconciliation. Default: unavailable."""
         return []

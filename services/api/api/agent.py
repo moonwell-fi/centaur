@@ -101,6 +101,7 @@ _ENGINE_HARNESSES = {"amp", "claude-code", "codex", "pi-mono"}
 _REUSABLE_DB_STATES = {"running", "idle", "delivering", "error", "suspended"}
 
 IDLE_TTL_S = int(os.getenv("IDLE_TTL_S", "86400"))  # 24 hours
+CREATING_TTL_S = int(os.getenv("CREATING_TTL_S", "300"))  # 5 minutes
 SUSPENDED_RETENTION_S = int(os.getenv("SUSPENDED_RETENTION_S", str(7 * 24 * 60 * 60)))
 MAX_ACTIVE_SANDBOX_SESSIONS = int(os.getenv("MAX_ACTIVE_SANDBOX_SESSIONS", "45"))
 STREAM_EOF_REATTACH_MAX = int(os.getenv("STREAM_EOF_REATTACH_MAX", "6"))
@@ -277,6 +278,73 @@ async def _db_insert_session(
     return row is not None
 
 
+async def _db_reserve_session(
+    thread_key: str,
+    sandbox_id: str,
+    *,
+    harness: str,
+    engine: str,
+    agent_thread_id: str = "",
+    last_delivered_id: str = "",
+    inflight_turn_id: str = "",
+    inflight_turn_input: dict | None = None,
+    inflight_attempts: int = 0,
+    last_result: str = "",
+    trace_id: str = "",
+) -> str | None:
+    """Reserve a sandbox_sessions row before creating backend resources.
+
+    Returns the trace_id when the reservation wins, or None when another
+    request already owns the thread row.
+    """
+    pool = _get_pool()
+    thread_trace_id = await get_or_create_thread_trace_id(pool, thread_key)
+    resolved_trace_id = trace_id or thread_trace_id or str(uuid.uuid4())
+    row = await pool.fetchrow(
+        "INSERT INTO sandbox_sessions ("
+        "thread_key, sandbox_id, harness, engine, state, started_at, "
+        "agent_thread_id, last_delivered_id, inflight_turn_id, inflight_turn_input, "
+        "inflight_started_at, inflight_attempts, last_result, last_result_at, trace_id"
+        ") VALUES ($1, $2, $3, $4, 'creating', NOW(), $5, $6, $7::text, $8::jsonb, "
+        "CASE WHEN $7::text IS NULL THEN NULL ELSE NOW() END, $9, $10, "
+        "CASE WHEN $10::text = '' THEN NULL ELSE NOW() END, $11::uuid) "
+        "ON CONFLICT (thread_key) DO NOTHING "
+        "RETURNING trace_id",
+        thread_key,
+        sandbox_id,
+        harness,
+        engine,
+        agent_thread_id or None,
+        last_delivered_id or None,
+        inflight_turn_id or None,
+        json.dumps(inflight_turn_input) if inflight_turn_input is not None else None,
+        max(0, inflight_attempts),
+        last_result,
+        resolved_trace_id,
+    )
+    if row is None:
+        return None
+    return str(row["trace_id"] or resolved_trace_id)
+
+
+async def _db_activate_reserved_session(
+    session: SandboxSession,
+    *,
+    inflight_turn_id: str = "",
+) -> bool:
+    """Move a reserved creating row into its active state after backend readiness."""
+    pool = _get_pool()
+    active_state = "running" if inflight_turn_id else "idle"
+    result = await pool.execute(
+        "UPDATE sandbox_sessions SET state = $1, started_at = NOW(), updated_at = NOW() "
+        "WHERE thread_key = $2 AND sandbox_id = $3 AND state = 'creating'",
+        active_state,
+        session.thread_key,
+        session.sandbox_id,
+    )
+    return result.endswith(" 1")
+
+
 async def _db_set_inflight_turn(
     thread_key: str,
     turn_id: str,
@@ -357,7 +425,7 @@ async def _evict_idle_sessions_for_capacity(backend) -> int:
     pool = _get_pool()
     active_count = await pool.fetchval(
         "SELECT COUNT(*) FROM sandbox_sessions "
-        "WHERE state IN ('running', 'idle', 'delivering', 'error')"
+        "WHERE state IN ('creating', 'running', 'idle', 'delivering', 'error')"
     )
     overage = int(active_count or 0) - MAX_ACTIVE_SANDBOX_SESSIONS + 1
     if overage <= 0:
@@ -835,7 +903,27 @@ async def get_or_spawn(
     old_trace_id: str = ""
     session = await _db_get_session(thread_key)
     if session:
-        if session.db_state in _REUSABLE_DB_STATES:
+        if session.db_state == "creating":
+            deadline = time.monotonic() + min(CREATING_TTL_S, 30)
+            while time.monotonic() < deadline:
+                await asyncio.sleep(0.5)
+                refreshed = await _db_get_session(thread_key)
+                if refreshed is None:
+                    session = None
+                    break
+                session = refreshed
+                if session.db_state != "creating":
+                    break
+            if session and session.db_state == "creating":
+                backend = get_backend()
+                with contextlib.suppress(Exception):
+                    await backend.stop_by_id(session.sandbox_id)
+                await _db_delete_session(thread_key)
+                _drop_runtime(session.sandbox_id)
+                session = None
+        if session is None:
+            pass
+        elif session.db_state in _REUSABLE_DB_STATES:
             backend = get_backend()
             st = await backend.status(session)
             if st == "running":
@@ -910,6 +998,81 @@ async def get_or_spawn(
     backend = get_backend()
     await _evict_idle_sessions_for_capacity(backend)
     trace_id = old_trace_id or thread_trace_id or str(uuid.uuid4())
+
+    planned_sandbox_id = backend.plan_sandbox_id(thread_key)
+    if planned_sandbox_id:
+        reserved_trace_id = await _db_reserve_session(
+            thread_key,
+            planned_sandbox_id,
+            harness=harness,
+            engine=resolved_engine,
+            agent_thread_id=old_agent_thread_id,
+            last_delivered_id=old_last_delivered_id,
+            inflight_turn_id=old_inflight_turn_id,
+            inflight_turn_input=old_inflight_turn_input,
+            inflight_attempts=old_inflight_attempts,
+            last_result=old_last_result,
+            trace_id=trace_id,
+        )
+        if reserved_trace_id is None:
+            winner = await _db_get_session(thread_key)
+            if winner is None:
+                raise RuntimeError(f"spawn reservation race: winner row vanished for {thread_key}")
+            _get_runtime(winner.sandbox_id)
+            return winner
+        trace_id = reserved_trace_id
+        try:
+            session = await backend.create(
+                thread_key,
+                harness,
+                resolved_engine,
+                persona=resolved_persona,
+                repo=repo,
+                resume_thread_id=old_agent_thread_id or None,
+                trace_id=trace_id,
+                sandbox_id=planned_sandbox_id,
+            )
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await backend.stop_by_id(planned_sandbox_id)
+            with contextlib.suppress(Exception):
+                await _db_update_state(thread_key, "gone")
+            raise
+
+        if session.sandbox_id != planned_sandbox_id:
+            with contextlib.suppress(Exception):
+                await backend.stop_by_id(session.sandbox_id)
+            with contextlib.suppress(Exception):
+                await backend.stop_by_id(planned_sandbox_id)
+            await _db_update_state(thread_key, "gone")
+            raise RuntimeError(
+                f"backend returned sandbox_id {session.sandbox_id!r}, expected {planned_sandbox_id!r}"
+            )
+        session.trace_id = trace_id
+        session.agent_thread_id = old_agent_thread_id
+        _get_runtime(session.sandbox_id)
+        activated = await _db_activate_reserved_session(
+            session,
+            inflight_turn_id=old_inflight_turn_id,
+        )
+        if not activated:
+            log.warning(
+                "spawn_reservation_lost",
+                thread_key=thread_key,
+                sandbox=session.sandbox_id[:12],
+            )
+            await backend.stop_by_id(session.sandbox_id)
+            _drop_runtime(session.sandbox_id)
+            winner = await _db_get_session(thread_key)
+            if winner is None:
+                raise RuntimeError(f"spawn reservation: row vanished for {thread_key}")
+            _get_runtime(winner.sandbox_id)
+            return winner
+        log.info(
+            "pipe_session_spawned", thread_key=thread_key, sandbox=session.sandbox_id[:12]
+        )
+        return session
+
     session = await backend.create(
         thread_key,
         harness,
@@ -1813,7 +1976,36 @@ async def reconcile_tick() -> None:
                     thread_key,
                 )
 
-        # Step A: Reconcile DB sessions against the active sandbox backend.
+        # Step A: Reap stale reservations that never completed backend creation.
+        creating_rows = await pool.fetch(
+            "SELECT thread_key, sandbox_id "
+            "FROM sandbox_sessions "
+            "WHERE state = 'creating' "
+            "AND updated_at < NOW() - make_interval(secs => $1::double precision)",
+            float(CREATING_TTL_S),
+        )
+        for row in creating_rows:
+            thread_key = row["thread_key"]
+            sandbox_id = row["sandbox_id"]
+            try:
+                log.warning(
+                    "creating_ttl_expired",
+                    thread_key=thread_key,
+                    sandbox=sandbox_id[:12],
+                )
+                with contextlib.suppress(Exception):
+                    await backend.stop_by_id(sandbox_id)
+                await _mark_inactive(thread_key)
+                _drop_runtime(sandbox_id)
+            except Exception:
+                log.warning(
+                    "reconcile_creating_row_error",
+                    thread_key=thread_key,
+                    sandbox=sandbox_id[:12],
+                    exc_info=True,
+                )
+
+        # Step B: Reconcile DB sessions against the active sandbox backend.
         rows = await pool.fetch(
             "SELECT thread_key, sandbox_id, state "
             "FROM sandbox_sessions "
@@ -1846,7 +2038,7 @@ async def reconcile_tick() -> None:
                     exc_info=True,
                 )
 
-        # Step B: Idle TTL enforcement
+        # Step C: Idle TTL enforcement
         idle_rows = await pool.fetch(
             "SELECT ss.thread_key, ss.sandbox_id FROM sandbox_sessions ss "
             "WHERE ss.state = 'idle' "
@@ -1883,7 +2075,7 @@ async def reconcile_tick() -> None:
                     exc_info=True,
                 )
 
-        # Step C: Reap old rows that are still marked running but have no live
+        # Step D: Reap old rows that are still marked running but have no live
         # wire, turn, or execution activity left to drive them.
         stale_running_rows = await pool.fetch(
             "SELECT ss.thread_key, ss.sandbox_id, ss.state "
@@ -1927,7 +2119,7 @@ async def reconcile_tick() -> None:
                     exc_info=True,
                 )
 
-        # Step D: Reap stale rows that still have an inflight turn recorded but no
+        # Step E: Reap stale rows that still have an inflight turn recorded but no
         # execution remains to complete or replay it.
         stale_inflight_rows = await pool.fetch(
             "SELECT ss.thread_key, ss.sandbox_id, ss.state, ss.inflight_turn_id "
@@ -1973,7 +2165,7 @@ async def reconcile_tick() -> None:
                     exc_info=True,
                 )
 
-        # Step E: Clean old terminated rows
+        # Step F: Clean old terminated rows
         await pool.execute(
             "DELETE FROM sandbox_sessions "
             "WHERE state IN ('gone', 'stopped') "
@@ -1986,7 +2178,7 @@ async def reconcile_tick() -> None:
             float(SUSPENDED_RETENTION_S),
         )
 
-        # Step E: Release active assignment rows whose runtime has disappeared.
+        # Step G: Release active assignment rows whose runtime has disappeared.
         # This keeps spawn gating and operator views from being poisoned by
         # historical assignment rows while leaving live executions to the
         # execution watchdog.
@@ -1996,6 +2188,37 @@ async def reconcile_tick() -> None:
                 log.info("runtime_assignment_gc_completed", released=released)
         except Exception:
             log.warning("runtime_assignment_gc_failed", exc_info=True)
+
+        # Step H: Reap backend-managed non-warm sandboxes that no longer have a
+        # live DB row. This closes the pod-first crash/delete-failure gap where
+        # Kubernetes remains the only source of truth for a Centaur-created pod.
+        try:
+            managed = await backend.list_managed()
+            if isinstance(managed, list) and managed:
+                rows = await pool.fetch(
+                    "SELECT sandbox_id FROM sandbox_sessions "
+                    "WHERE state IN ('creating', 'running', 'idle', 'delivering', 'error')"
+                )
+                tracked_ids = {row["sandbox_id"] for row in rows}
+                for item in managed:
+                    sandbox_id = str(item.get("sandbox_id") or "")
+                    if (
+                        not sandbox_id
+                        or item.get("warm")
+                        or item.get("deleting")
+                        or sandbox_id in tracked_ids
+                    ):
+                        continue
+                    with contextlib.suppress(Exception):
+                        await backend.stop_by_id(sandbox_id)
+                    log.warning(
+                        "orphan_sandbox_reaped",
+                        thread_key=item.get("thread_key") or None,
+                        sandbox=sandbox_id[:12],
+                    )
+                    _drop_runtime(sandbox_id)
+        except Exception:
+            log.warning("orphan_sandbox_reconcile_failed", exc_info=True)
 
     except Exception:
         log.warning("reconcile_tick_error", exc_info=True)

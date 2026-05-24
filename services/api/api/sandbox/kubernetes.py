@@ -418,6 +418,10 @@ class KubernetesExecutorBackend(SandboxBackend):
     def supports_warm_pool(self) -> bool:
         return True
 
+    def plan_sandbox_id(self, thread_key: str) -> str:
+        runtime_key = f"{thread_key}:{uuid.uuid4().hex[:8]}"
+        return _resource_name("centaur-centaur-sandbox", runtime_key)
+
     async def _ensure_clients(self) -> None:
         ready = (
             self._core is not None
@@ -1038,6 +1042,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         model: str | None = None,
         resume_thread_id: str | None = None,
         trace_id: str | None = None,
+        sandbox_id: str | None = None,
     ) -> SandboxSession:
         _ensure_kubernetes_env()
         await self._ensure_clients()
@@ -1046,8 +1051,7 @@ class KubernetesExecutorBackend(SandboxBackend):
         if repo and not repos_path:
             raise ValueError("REPOS_PATH is required when AGENT_REPO is set")
 
-        runtime_key = f"{thread_key}:{uuid.uuid4().hex[:8]}"
-        pod_name = _resource_name("centaur-centaur-sandbox", runtime_key)
+        pod_name = sandbox_id or self.plan_sandbox_id(thread_key)
         secret_name = _prompt_secret_name(pod_name)
         firewall_host = _proxy_service_name(pod_name)
 
@@ -1571,6 +1575,36 @@ class KubernetesExecutorBackend(SandboxBackend):
                 )
             )
         return sessions
+
+    async def list_managed(self) -> list[dict[str, Any]]:
+        await self._ensure_clients()
+        try:
+            pod_list = await self._core_api().list_namespaced_pod(
+                _namespace(),
+                label_selector="centaur.ai/managed=true",
+            )
+        except Exception:
+            return []
+
+        sandboxes: list[dict[str, Any]] = []
+        for pod in getattr(pod_list, "items", []) or []:
+            metadata = getattr(pod, "metadata", None)
+            labels = getattr(metadata, "labels", None) or {}
+            annotations = getattr(metadata, "annotations", None) or {}
+            pod_name = getattr(metadata, "name", "") or ""
+            sandbox_id = labels.get("centaur.ai/sandbox-id", pod_name)
+            if not pod_name or sandbox_id != pod_name:
+                continue
+            sandboxes.append(
+                {
+                    "sandbox_id": sandbox_id,
+                    "thread_key": annotations.get("centaur.ai/thread-key", ""),
+                    "warm": labels.get("centaur.ai/warm") == "true",
+                    "deleting": getattr(metadata, "deletion_timestamp", None)
+                    is not None,
+                }
+            )
+        return sandboxes
 
     async def _wait_deployment_ready(self, name: str) -> float:
         deadline = time.monotonic() + _READY_TIMEOUT_S

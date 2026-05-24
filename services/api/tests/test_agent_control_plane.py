@@ -210,6 +210,97 @@ async def test_db_insert_session_initial_state_tracks_inflight_turn(db_pool):
 
 
 @pytest.mark.asyncio
+async def test_get_or_spawn_reserves_session_before_backend_create(db_pool):
+    from api.agent import get_or_spawn
+
+    thread_key = f"slack:C-test:{uuid.uuid4().hex}:reserve-before-create"
+    planned_sandbox_id = f"rt-{uuid.uuid4().hex[:8]}"
+
+    class ReservingBackend:
+        name = "test"
+        supports_warm_pool = False
+
+        def plan_sandbox_id(self, _thread_key: str) -> str:
+            return planned_sandbox_id
+
+        async def create(self, thread_key, harness, engine, **kwargs):
+            reserved = await db_pool.fetchrow(
+                "SELECT sandbox_id, state FROM sandbox_sessions WHERE thread_key = $1",
+                thread_key,
+            )
+            assert reserved is not None
+            assert reserved["sandbox_id"] == planned_sandbox_id
+            assert reserved["state"] == "creating"
+            assert kwargs["sandbox_id"] == planned_sandbox_id
+            return SandboxSession(
+                sandbox_id=planned_sandbox_id,
+                thread_key=thread_key,
+                harness=harness,
+                engine=engine,
+                trace_id=kwargs["trace_id"],
+            )
+
+        async def stop_by_id(self, _sandbox_id: str) -> None:
+            raise AssertionError("stop_by_id should not be called")
+
+    backend = ReservingBackend()
+
+    with patch("api.agent.get_backend", return_value=backend):
+        session = await get_or_spawn(thread_key, "codex", engine="codex")
+
+    assert session.sandbox_id == planned_sandbox_id
+    row = await db_pool.fetchrow(
+        "SELECT sandbox_id, state, trace_id FROM sandbox_sessions WHERE thread_key = $1",
+        thread_key,
+    )
+    assert row is not None
+    assert row["sandbox_id"] == planned_sandbox_id
+    assert row["state"] == "idle"
+    assert str(row["trace_id"]) == session.trace_id
+
+
+@pytest.mark.asyncio
+async def test_reconcile_tick_reaps_backend_managed_orphan_sandboxes(db_pool):
+    from api.agent import reconcile_tick
+
+    tracked_thread_key = f"slack:C-test:{uuid.uuid4().hex}:tracked"
+    tracked_runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+    orphan_runtime_id = f"rt-{uuid.uuid4().hex[:8]}"
+
+    await db_pool.execute(
+        "INSERT INTO sandbox_sessions (thread_key, sandbox_id, harness, engine, state) "
+        "VALUES ($1, $2, 'codex', 'codex', 'idle')",
+        tracked_thread_key,
+        tracked_runtime_id,
+    )
+
+    backend = SimpleNamespace(
+        status_by_id=AsyncMock(return_value="running"),
+        stop=AsyncMock(),
+        stop_by_id=AsyncMock(),
+        list_managed=AsyncMock(
+            return_value=[
+                {"sandbox_id": tracked_runtime_id, "thread_key": tracked_thread_key},
+                {
+                    "sandbox_id": orphan_runtime_id,
+                    "thread_key": "slack:C-test:orphan",
+                },
+                {
+                    "sandbox_id": f"rt-{uuid.uuid4().hex[:8]}",
+                    "thread_key": "warm-thread",
+                    "warm": True,
+                },
+            ]
+        ),
+    )
+
+    with patch("api.agent.get_backend", return_value=backend):
+        await reconcile_tick()
+
+    backend.stop_by_id.assert_awaited_once_with(orphan_runtime_id)
+
+
+@pytest.mark.asyncio
 async def test_reconcile_tick_reaps_only_stale_running_sessions_without_activity(
     db_pool,
 ):
