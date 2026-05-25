@@ -13,6 +13,10 @@ import { authorizeSlackOrg } from './slack/authorization'
 import { CodexSessionRenderer, hasActiveCodexSession } from './slack/codex-session'
 import { EventDeduper, slackDedupKey } from './slack/dedup'
 import { duplicateSlackAlertText, type DuplicateSlackEventDetails } from './slack/duplicate-alert'
+import {
+  buildSlackFeedbackWebhookPayload,
+  type SlackFeedbackCommandPayload
+} from './slack/feedback'
 import { EnvSlackInstallationStore, SlackClientResolver } from './slack/installations'
 import { normalizeSlackEnvelope } from './slack/normalize'
 import { markdownToStreamChunks } from './slack/render'
@@ -561,14 +565,10 @@ function slackApiErrorResponse(c: Context, error: unknown) {
   )
 }
 
-type SlackCommandPayload = {
-  command?: string
-  text?: string
-  user_id?: string
-  user_name?: string
-  channel_id?: string
-  channel_name?: string
-  team_id?: string
+type SlackCommandPayload = SlackFeedbackCommandPayload & {
+  thread_ts?: string
+  response_url?: string
+  trigger_id?: string
 }
 
 async function slackCommandHandler(c: Context<{ Variables: Variables }>) {
@@ -587,10 +587,10 @@ async function slackCommandHandler(c: Context<{ Variables: Variables }>) {
       text: 'This feedback command is not enabled in this channel.'
     })
   }
-  if (!config.LINEAR_API_KEY) {
+  if (!config.LINEAR_API_KEY && !config.SLACK_FEEDBACK_WEBHOOK_URL) {
     return c.json({
       response_type: 'ephemeral',
-      text: 'Linear feedback is not configured: missing LINEAR_API_KEY.'
+      text: 'Feedback is not configured: missing LINEAR_API_KEY or SLACK_FEEDBACK_WEBHOOK_URL.'
     })
   }
 
@@ -603,20 +603,76 @@ async function slackCommandHandler(c: Context<{ Variables: Variables }>) {
   }
 
   try {
-    const issue = await createLinearFeedbackIssue(payload, text)
+    const [issue, webhook] = await Promise.all([
+      config.LINEAR_API_KEY ? createLinearFeedbackIssue(payload, text) : Promise.resolve(null),
+      config.SLACK_FEEDBACK_WEBHOOK_URL ? sendFeedbackWebhook(payload, text) : Promise.resolve(null)
+    ])
+    const destinations = [
+      issue ? `${issue.identifier}: ${issue.url}` : null,
+      webhook ? 'debug workflow notified' : null
+    ].filter(Boolean)
     return c.json({
       response_type: 'ephemeral',
-      text: `Created ${issue.identifier}: ${issue.url}`
+      text: `Feedback sent (${destinations.join('; ')})`
     })
   } catch (error) {
-    logError('linear_feedback_issue_create_failed', error)
+    logError('slack_feedback_dispatch_failed', error)
     return c.json(
       {
         response_type: 'ephemeral',
-        text: 'Could not create the Linear issue. The error was logged for follow-up.'
+        text: 'Could not send feedback. The error was logged for follow-up.'
       },
       200
     )
+  }
+}
+
+async function sendFeedbackWebhook(
+  payload: SlackCommandPayload,
+  text: string
+): Promise<{ ok: true }> {
+  if (!config.SLACK_FEEDBACK_WEBHOOK_URL)
+    throw new Error('SLACK_FEEDBACK_WEBHOOK_URL is not configured')
+  const transcript = await collectFeedbackTranscript(payload)
+  const response = await fetch(config.SLACK_FEEDBACK_WEBHOOK_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(config.SLACK_FEEDBACK_WEBHOOK_TOKEN
+        ? { Authorization: `Bearer ${config.SLACK_FEEDBACK_WEBHOOK_TOKEN}` }
+        : {})
+    },
+    body: JSON.stringify(buildSlackFeedbackWebhookPayload(payload, text, transcript))
+  })
+  if (!response.ok) throw new Error(`feedback webhook returned ${response.status}`)
+  return { ok: true }
+}
+
+async function collectFeedbackTranscript(
+  payload: SlackCommandPayload
+): Promise<Array<{ ts: string; user: string | null; bot_id: string | null; text: string }>> {
+  if (!payload.channel_id || !payload.thread_ts) return []
+  try {
+    const { client } = await resolver.resolve({ teamId: payload.team_id })
+    const response = await client.conversations.replies({
+      channel: payload.channel_id,
+      ts: payload.thread_ts,
+      limit: 100,
+      inclusive: true
+    })
+    return (response.messages ?? []).map(message => ({
+      ts: message.ts ?? '',
+      user: message.user ?? null,
+      bot_id: message.bot_id ?? null,
+      text: typeof message.text === 'string' ? message.text : ''
+    }))
+  } catch (error) {
+    logWarn('slack_feedback_transcript_fetch_failed', {
+      channel_id: payload.channel_id,
+      thread_ts: payload.thread_ts,
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return []
   }
 }
 

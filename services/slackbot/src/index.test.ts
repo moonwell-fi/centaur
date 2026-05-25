@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto'
 import { afterEach, describe, expect, it, mock } from 'bun:test'
+import { buildSlackFeedbackWebhookPayload } from './slack/feedback'
 
 const originalEnv = { ...process.env }
 
@@ -44,7 +45,7 @@ describe('Slack event HTTP dedupe', () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch
 
     try {
-      const { app } = await import('./index')
+      const { app } = await import(`./index?feedback-webhook-${Date.now()}`)
       const body = new URLSearchParams({
         command: '/website-feedback',
         text: 'Button copy is confusing\nThe submit button should mention Linear.',
@@ -61,12 +62,49 @@ describe('Slack event HTTP dedupe', () => {
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({
         response_type: 'ephemeral',
-        text: 'Created DSGN-123: https://linear.app/paradigmxyz/issue/DSGN-123'
+        text: 'Feedback sent (DSGN-123: https://linear.app/paradigmxyz/issue/DSGN-123)'
       })
       expect(fetchMock).toHaveBeenCalledTimes(1)
     } finally {
       globalThis.fetch = originalFetch
     }
+  })
+
+  it('builds feedback webhook payloads with deployment metadata and thread transcript', () => {
+    const payload = buildSlackFeedbackWebhookPayload(
+      {
+        command: '/website-feedback',
+        user_id: 'U123',
+        team_id: 'T123',
+        team_domain: 'acme',
+        channel_id: 'C123',
+        channel_name: 'bot-debug',
+        thread_ts: '1779629014.647819'
+      },
+      'please fix this',
+      [
+        { ts: '1779629014.647819', user: 'U123', bot_id: null, text: 'please fix this' },
+        { ts: '1779629020.000000', user: null, bot_id: 'B123', text: 'I failed with error' }
+      ],
+      { CENTAUR_IMAGE_TAG: 'sha-abc123' }
+    )
+
+    expect(payload).toMatchObject({
+      type: 'centaur.slack_feedback',
+      version: 1,
+      feedback: { text: 'please fix this', submitted_by: '<@U123>' },
+      slack: {
+        team_id: 'T123',
+        channel_id: 'C123',
+        thread_ts: '1779629014.647819',
+        permalink: 'https://slack.com/archives/C123/p1779629014647819'
+      },
+      deployment: { image_tag: 'sha-abc123' },
+      transcript: [
+        { ts: '1779629014.647819', user: 'U123', bot_id: null, text: 'please fix this' },
+        { ts: '1779629020.000000', user: null, bot_id: 'B123', text: 'I failed with error' }
+      ]
+    })
   })
 
   it('acks duplicate Slack envelopes without scheduling duplicate processing', async () => {
