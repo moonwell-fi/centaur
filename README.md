@@ -149,7 +149,7 @@ just up
 
 After `just up` finishes, use Slack or the API examples in the [Developer Guide](AGENTS.md#e2e-testing-without-slack).
 
-For a more explicit path, see [Running Centaur on a Mac Mini-style setup](docs/pages/mac-mini-setup.mdx).
+For a more explicit path, see [Running Centaur on a Mac mini-style setup](docs/pages/mac-mini-setup.mdx).
 It covers k3s on a small VPS, DigitalOcean droplet, Linux box, or Mac
 Mini-style host.
 
