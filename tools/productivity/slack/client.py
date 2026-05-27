@@ -1655,7 +1655,7 @@ class SlackClient:
             path = f"/agent/attachments/{attachment_id}/download"
         if not path:
             raise ValueError("attachment_id or attachment_url is required")
-        base_url = secret("CENTAUR_API_URL", "http://api:8000").rstrip("/")
+        base_url = (os.environ.get("CENTAUR_API_URL") or "http://api:8000").rstrip("/")
         base_parts = urlparse(base_url)
         if path.startswith(("http://", "https://")):
             url_parts = urlparse(path)

@@ -620,6 +620,39 @@ def test_download_file_stores_attachment(monkeypatch: pytest.MonkeyPatch) -> Non
     assert base64.b64decode(posted["body"]["data"]) == b"%PDF-1.4 report"
 
 
+def test_download_file_uses_default_api_url_when_env_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import urllib.request
+
+    client, _ = _make_client()
+    client.token = "SLACK_BOT_TOKEN"
+    monkeypatch.delenv("CENTAUR_API_URL", raising=False)
+    seen_urls: list[str] = []
+
+    def fake_urlopen(req, *args, **kwargs):
+        seen_urls.append(req.full_url)
+        if "files.slack.com" in req.full_url:
+            return _FakeHTTPResponse(b"report", "application/pdf")
+        if req.full_url == "http://api:8000/agent/attachments/upload":
+            return _FakeHTTPResponse(
+                json.dumps({"id": "att-default"}).encode(),
+                "application/json",
+            )
+        raise AssertionError(f"unexpected url {req.full_url}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    token = set_tool_context(ToolContext(name="slack", thread_key="slack:C1:1.2"))
+    try:
+        result = client.download_file("https://files.slack.com/files-pri/T1-F1/report.pdf")
+    finally:
+        reset_tool_context(token)
+
+    assert result["attachment_id"] == "att-default"
+    assert "CENTAUR_API_URL/agent/attachments/upload" not in seen_urls
+
+
 def test_download_file_requires_thread_context(monkeypatch: pytest.MonkeyPatch) -> None:
     import urllib.request
 

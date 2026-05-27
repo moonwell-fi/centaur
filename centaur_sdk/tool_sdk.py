@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import mimetypes
+import os
 import urllib.request
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -101,7 +102,7 @@ def save_attachment(
     thread_key = current_thread_key()
     safe_name = Path(name).name or "attachment"
     resolved_mime = mime_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream"
-    base_url = secret("CENTAUR_API_URL", "http://api:8000").rstrip("/")
+    base_url = (os.environ.get("CENTAUR_API_URL") or "http://api:8000").rstrip("/")
     payload = json.dumps(
         {
             "thread_key": thread_key,
