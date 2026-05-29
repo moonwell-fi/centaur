@@ -1242,6 +1242,101 @@ describe('secret backends', () => {
     }
   })
 
+  it('reports missing secret inputs immediately when masked prompts are unavailable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'centaur-cli-missing-tty-'))
+    const overlayPath = join(root, 'org')
+    const keys = [
+      'SLACK_BOT_TOKEN',
+      'SLACK_SIGNING_SECRET',
+      'SLACK_APP_TOKEN',
+      'OPENAI_API_KEY',
+    ]
+    const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]))
+    for (const key of keys) delete process.env[key]
+
+    try {
+      const { stdout, exitCode } = await runCliWithExit([
+        'secrets',
+        'collect',
+        '--backend',
+        'local-env',
+        '--install-mode',
+        'local',
+        '--harness',
+        'codex',
+        '--auth-mode',
+        'api_key',
+        '--overlay-path',
+        overlayPath,
+        '--json',
+      ])
+      const output = JSON.parse(stdout)
+
+      expect(exitCode).toBe(1)
+      expect(output.code).toBe('TTY_REQUIRED')
+      expect(output.missing.map((item: { env: string }) => item.env)).toEqual([
+        'SLACK_BOT_TOKEN',
+        'SLACK_SIGNING_SECRET',
+        'SLACK_APP_TOKEN',
+        'OPENAI_API_KEY',
+      ])
+      expect(output.cta.commands[0].command).toContain('--from-env')
+      expect(output.cta.commands[1].command).not.toContain('--from-env')
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  })
+
+  it('uses environment secrets automatically when masked prompts are unavailable', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'centaur-cli-auto-env-'))
+    const overlayPath = join(root, 'org')
+    const localEnvPath = join(root, 'secrets.env')
+    const env = {
+      SLACK_BOT_TOKEN: 'xoxb-secret',
+      SLACK_SIGNING_SECRET: 'signing-secret',
+      SLACK_APP_TOKEN: 'xapp-secret',
+      OPENAI_API_KEY: 'sk-secret',
+    }
+    const previous = Object.fromEntries(Object.keys(env).map(key => [key, process.env[key]]))
+    Object.assign(process.env, env)
+
+    try {
+      const { stdout, exitCode } = await runCliWithExit([
+        'secrets',
+        'collect',
+        '--backend',
+        'local-env',
+        '--install-mode',
+        'local',
+        '--harness',
+        'codex',
+        '--auth-mode',
+        'api_key',
+        '--local-env-path',
+        localEnvPath,
+        '--overlay-path',
+        overlayPath,
+        '--json',
+      ])
+      const output = JSON.parse(stdout)
+      const written = readFileSync(localEnvPath, 'utf8')
+
+      expect(exitCode).toBe(0)
+      expect(output.backend).toBe('local-env')
+      expect(output.target).toBe(localEnvPath)
+      expect(written).toContain('SLACK_BOT_TOKEN=xoxb-secret')
+      expect(written).toContain('OPENAI_API_KEY=sk-secret')
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  })
+
   it('preserves JSON values for kubectl env-file secrets', () => {
     const text = kubernetesEnvFile({
       OPENAI_CODEX_BLOB: '{"refresh_token":"secret"}',

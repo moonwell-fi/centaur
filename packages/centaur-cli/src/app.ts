@@ -1997,29 +1997,36 @@ const secrets = Cli.create('secrets', {
       sopsPath: c.options.sopsPath,
       vaultPath: c.options.vaultPath,
     }
-    const promptUser = !c.options.fromEnv
-    if (promptUser && (!input.isTTY || !output.isTTY || typeof input.setRawMode !== 'function')) {
-      return c.error({
+    const hasSecretTty = Boolean(input.isTTY && output.isTTY && typeof input.setRawMode === 'function')
+    const missingFromEnv = missingSecretInputsFromEnv(state)
+    const collectFromEnv = c.options.fromEnv || (!hasSecretTty && missingFromEnv.length === 0)
+    const promptUser = !collectFromEnv
+    if (promptUser && !hasSecretTty) {
+      setFailedExit(false)
+      return c.ok({
+        ok: false,
         code: 'TTY_REQUIRED',
         message: 'secrets collect needs an interactive terminal so secret prompts can be masked',
         retryable: true,
+        missing: missingFromEnv,
+      }, {
         cta: {
-          description: 'Run one of these:',
+          description: 'Provide the missing values, then run one of these:',
           commands: [
+            {
+              command: commandLine(secretsCollectCommandParts({ ...collectCommandOptions, fromEnv: true })),
+              description: 'retry non-interactively from environment variables and local harness auth state',
+            },
             {
               command: commandLine(secretsCollectCommandParts(collectCommandOptions)),
               description: 'run in a real terminal and type secrets into masked prompts',
-            },
-            {
-              command: commandLine(secretsCollectCommandParts({ ...collectCommandOptions, fromEnv: true })),
-              description: 'let an agent populate required environment variables first',
             },
           ],
         },
       })
     }
-    if (c.options.fromEnv) {
-      const missing = missingSecretInputsFromEnv(state)
+    if (collectFromEnv) {
+      const missing = missingFromEnv
       if (missing.length > 0) {
         setFailedExit(false)
         return c.ok({
@@ -2045,8 +2052,8 @@ const secrets = Cli.create('secrets', {
         })
       }
     }
-    const secrets = c.options.fromEnv ? collectSecretsFromEnv(state) : await collectWizardSecrets(state, promptUser)
-    const promptedBackendOptions = c.options.fromEnv
+    const secrets = collectFromEnv ? collectSecretsFromEnv(state) : await collectWizardSecrets(state, promptUser)
+    const promptedBackendOptions = collectFromEnv
       ? {}
       : await collectBackendOptions(c.options.backend, c.options.overlayPath, true)
     const backendOptions = {
