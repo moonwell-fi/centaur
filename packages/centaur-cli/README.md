@@ -29,8 +29,8 @@ The quickest agent-readable plan is:
 centaur setup --org acme --assistant-name centaur --domain centaur.acme.com --backend local-env --install-mode local --harness codex --auth-mode api_key
 ```
 
-It returns the exact command chain from overlay creation through a deployed
-smoke test. The expanded local happy path is:
+It returns the exact command chain from overlay creation through verified local
+CLI and Slackbot runs. The expanded local happy path is:
 
 ```bash
 centaur init --org acme --assistant-name centaur --domain centaur.acme.com --harness codex --auth-mode api_key
@@ -38,7 +38,7 @@ centaur integrations slack-manifest --domain centaur.acme.com --app-name centaur
 centaur secrets collect --backend local-env --install-mode local --harness codex --auth-mode api_key --overlay-path org
 centaur doctor --deep --harness codex --auth-mode api_key --secret-backend local-env --install-mode local
 centaur deploy k3s --apply --secrets-file org/secrets.local.env
-centaur smoke --harness codex
+centaur run "Reply with exactly PONG and nothing else." --local --harness codex --expect PONG --release-thread
 centaur slackbot smoke
 ```
 
@@ -59,11 +59,12 @@ thread runtime, persists the user message, enqueues execution, pipes every SSE
 event as a structured chunk, and reads final execution state. It does not
 dedupe or repair stream events; use `--format jsonl` when an agent needs exact
 event-by-event output. Set `CENTAUR_API_URL` and `CENTAUR_API_KEY`, or pass
-`--api-url` and `--api-key`.
+`--api-url` and `--api-key`. For a freshly deployed local cluster, use
+`--local` to run through the API pod without a port-forward or external API
+key.
 
-`centaur smoke` is for freshly deployed local clusters. It runs the same
-spawn/message/execute path through `kubectl exec` inside the API deployment, so
-it does not need a public API URL, port-forward, or external API key.
+`centaur smoke` remains available as a focused PONG verifier for freshly
+deployed local clusters.
 
 `centaur slackbot smoke` sends a signed synthetic Slack mention through the
 deployed Slackbot pod, waits for the resulting `slack_thread_turn` workflow and

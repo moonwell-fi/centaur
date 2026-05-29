@@ -148,6 +148,8 @@ function generatedSecret(bytes = 32) {
 }
 
 const DEFAULT_POSTGRES_PASSWORD = 'tempo_dev_change_me'
+const DEFAULT_SMOKE_PROMPT = 'Reply with exactly PONG and nothing else.'
+const DEFAULT_SMOKE_EXPECT = 'PONG'
 
 function defaultDatabaseUrl(postgresPassword: string) {
   return `postgres://tempo:${encodeURIComponent(postgresPassword)}@centaur-centaur-postgres:5432/ai_v2`
@@ -354,6 +356,19 @@ function deploymentCommandForInstallMode(
   return commandLine(deployCommandPartsForInstallMode(installMode, options))
 }
 
+function localRunVerificationCommand(harness: Harness) {
+  return commandLine([
+    'run',
+    DEFAULT_SMOKE_PROMPT,
+    '--local',
+    '--harness',
+    harness,
+    '--expect',
+    DEFAULT_SMOKE_EXPECT,
+    '--release-thread',
+  ])
+}
+
 function deploySecretsFileForBackend(secretBackend: string, overlayPath: string) {
   return secretBackend === 'local-env' ? join(overlayPath, 'secrets.local.env') : undefined
 }
@@ -447,12 +462,12 @@ function setupPlan(options: SetupPlanOptions) {
         options.installMode,
       ])),
       centaurCommand(deployCommand),
-      centaurCommand(commandLine(['smoke', '--harness', options.harness])),
+      centaurCommand(localRunVerificationCommand(options.harness)),
       centaurCommand(commandLine(['slackbot', 'smoke'])),
     ],
     harness: options.harness,
     authMode: options.authMode,
-    note: 'Use exactly one default harness for the deployment: codex or claude-code. The smoke commands run through the API and Slackbot pods and do not need a port-forward or external API key.',
+    note: 'Use exactly one default harness for the deployment: codex or claude-code. The local run and Slackbot smoke commands run through the Kubernetes pods and do not need a port-forward or external API key.',
   }
 }
 
@@ -538,6 +553,20 @@ type ClusterSmokeOptions = {
   timeoutSeconds?: number
   pollMs?: number
   releaseThread?: boolean
+}
+
+type ClusterTurnOptions = {
+  namespace: string
+  release: string
+  prompt: string
+  harness?: string
+  engine?: string
+  personaId?: string
+  threadKey?: string
+  timeoutSeconds?: number
+  pollMs?: number
+  releaseThread?: boolean
+  platform?: string
 }
 
 type SlackbotSmokeOptions = {
@@ -642,11 +671,12 @@ function kubectlApiJson<T>(
   return JSON.parse(runner(kubectlApiCurlCommand(options))) as T
 }
 
-export function runClusterSmoke(
-  options: ClusterSmokeOptions,
+export function runClusterTurn(
+  options: ClusterTurnOptions,
   runner: SmokeRunner = runCommand,
 ) {
-  const threadKey = options.threadKey || `cli:smoke:${Date.now()}`
+  const threadPrefix = options.platform === 'cli-smoke' ? 'cli:smoke' : 'cli:run'
+  const threadKey = options.threadKey || `${threadPrefix}:${Date.now()}`
   const phases: Record<string, unknown>[] = []
   const base = { namespace: options.namespace, release: options.release }
   const push = (phase: Record<string, unknown>) => {
@@ -654,11 +684,15 @@ export function runClusterSmoke(
     return phase
   }
 
+  const spawnBody: Record<string, unknown> = { thread_key: threadKey }
+  if (options.harness) spawnBody.harness = options.harness
+  if (options.engine) spawnBody.engine = options.engine
+  if (options.personaId) spawnBody.persona_id = options.personaId
   const spawn = kubectlApiJson<Record<string, unknown>>(runner, {
     ...base,
     method: 'POST',
     path: '/agent/spawn',
-    body: { thread_key: threadKey, harness: options.harness },
+    body: spawnBody,
   })
   const assignmentGeneration = Number(spawn.assignment_generation)
   push({
@@ -677,22 +711,23 @@ export function runClusterSmoke(
       assignment_generation: assignmentGeneration,
       role: 'user',
       parts: [{ type: 'text', text: options.prompt }],
-      metadata: { platform: 'cli-smoke' },
+      metadata: { platform: options.platform || 'cli-local' },
     },
   })
   push({ phase: 'message_persisted', messageId: message.message_id })
 
+  const executeBody: Record<string, unknown> = {
+    thread_key: threadKey,
+    assignment_generation: assignmentGeneration,
+    delivery: { platform: options.platform || 'cli-local' },
+    metadata: { platform: options.platform || 'cli-local' },
+  }
+  if (options.harness) executeBody.harness = options.harness
   const execute = kubectlApiJson<Record<string, unknown>>(runner, {
     ...base,
     method: 'POST',
     path: '/agent/execute',
-    body: {
-      thread_key: threadKey,
-      assignment_generation: assignmentGeneration,
-      harness: options.harness,
-      delivery: { platform: 'cli-smoke' },
-      metadata: { platform: 'cli-smoke' },
-    },
+    body: executeBody,
   })
   const executionId = String(execute.execution_id)
   push({ phase: 'execution_queued', executionId, status: execute.status })
@@ -720,9 +755,10 @@ export function runClusterSmoke(
     }
     sleepMs(pollMs)
   }
+  push({ phase: 'final_state', executionId, state: finalState })
 
   let release: Record<string, unknown> | undefined
-  if (options.releaseThread !== false) {
+  if (options.releaseThread) {
     release = kubectlApiJson<Record<string, unknown>>(runner, {
       ...base,
       method: 'POST',
@@ -734,18 +770,38 @@ export function runClusterSmoke(
 
   const status = String(finalState.status || '')
   const resultText = String(finalState.result_text || '')
-  const ok = status === 'completed' && resultText.includes(options.expectText)
   return {
-    ok,
     threadKey,
     assignmentGeneration,
     executionId,
     status,
     resultText,
-    expectedText: options.expectText,
     finalState,
     release,
     phases,
+  }
+}
+
+export function runClusterSmoke(
+  options: ClusterSmokeOptions,
+  runner: SmokeRunner = runCommand,
+) {
+  const result = runClusterTurn({
+    namespace: options.namespace,
+    release: options.release,
+    harness: options.harness,
+    prompt: options.prompt,
+    threadKey: options.threadKey,
+    timeoutSeconds: options.timeoutSeconds,
+    pollMs: options.pollMs,
+    releaseThread: options.releaseThread !== false,
+    platform: 'cli-smoke',
+  }, runner)
+  const ok = result.status === 'completed' && result.resultText.includes(options.expectText)
+  return {
+    ok,
+    ...result,
+    expectedText: options.expectText,
   }
 }
 
@@ -1446,8 +1502,8 @@ const secrets = Cli.create('secrets', {
               description: 'apply local secrets when needed and deploy Centaur with Helm',
             },
             {
-              command: commandLine(['smoke', '--harness', c.options.harness]),
-              description: 'prove the deployed API can complete one agent turn',
+              command: localRunVerificationCommand(c.options.harness),
+              description: 'run one verified Centaur turn through the local API pod',
             },
             {
               command: commandLine(['slackbot', 'smoke']),
@@ -1559,8 +1615,8 @@ const slackbot = Cli.create('slackbot', {
   options: z.object({
     namespace: z.string().default('centaur'),
     release: z.string().default('centaur'),
-    prompt: z.string().default('Reply with exactly PONG and nothing else.').describe('Synthetic Slack mention text'),
-    expect: z.string().default('PONG').describe('Text expected in the final result'),
+    prompt: z.string().default(DEFAULT_SMOKE_PROMPT).describe('Synthetic Slack mention text'),
+    expect: z.string().default(DEFAULT_SMOKE_EXPECT).describe('Text expected in the final result'),
     teamId: z.string().default('TCLI').describe('Synthetic Slack team id'),
     channelId: z.string().default('CCLI').describe('Synthetic Slack channel id'),
     userId: z.string().default('UCLI').describe('Synthetic Slack user id'),
@@ -1629,7 +1685,7 @@ export const app = Cli.create('centaur', {
     depth: 2,
     suggestions: [
       'install Centaur CLI, inspect centaur --llms, then run the next CTA command',
-      'drive Centaur onboarding with setup, init, integrations slack-manifest, secrets collect, doctor, deploy, smoke, and slackbot smoke',
+      'drive Centaur onboarding with setup, init, integrations slack-manifest, secrets collect, doctor, deploy, run --local, and slackbot smoke',
       'run a one-shot Centaur agent turn with centaur run --format jsonl',
     ],
   },
@@ -1639,7 +1695,7 @@ export const app = Cli.create('centaur', {
   },
 })
   .command('setup', {
-    description: 'Return the agent-driven setup command chain from install to deployed smoke test.',
+    description: 'Return the agent-driven setup command chain from install to verified CLI and Slackbot runs.',
     options: z.object({
       org: z.string().default('acme').describe('Organization name'),
       assistantName: z.string().default('centaur').describe('Assistant display name'),
@@ -1664,31 +1720,94 @@ export const app = Cli.create('centaur', {
       harness: z.string().optional().describe('Harness to run, for example codex, amp, or claude-code'),
       engine: z.string().optional().describe('Optional harness engine/model override'),
       persona: z.string().optional().describe('Optional Centaur persona id'),
+      local: z.boolean().default(false).describe('Use kubectl exec into the deployed local API pod'),
+      namespace: z.string().default('centaur').describe('Kubernetes namespace for --local'),
+      release: z.string().default('centaur').describe('Helm release name for --local'),
       apiUrl: z
         .string()
         .optional()
         .describe('Centaur API URL. Defaults to CENTAUR_API_URL or http://127.0.0.1:8000.'),
       apiKey: z.string().optional().describe('Centaur API key. Defaults to CENTAUR_API_KEY.'),
+      expect: z.string().optional().describe('Set a failing exit code unless the final result contains this text'),
+      releaseThread: z.boolean().default(false).describe('Release the assigned runtime after the run completes'),
       noStream: z.boolean().default(false).describe('Skip SSE streaming and poll final state only'),
       pollMs: z.number().int().positive().optional().describe('Server stream polling interval in milliseconds'),
+      timeoutSeconds: z.number().int().positive().default(300).describe('Maximum wait for --local execution polling'),
     }),
     env: z.object({
       CENTAUR_API_URL: z.string().optional().describe('Default Centaur API URL'),
       CENTAUR_API_KEY: z.string().optional().describe('Centaur API key'),
     }),
     async *run(c) {
-      const apiUrl = c.options.apiUrl || c.env.CENTAUR_API_URL || 'http://127.0.0.1:8000'
       const apiKey = c.options.apiKey || c.env.CENTAUR_API_KEY
+      const hasExplicitApiTarget = Boolean(c.options.apiUrl || c.env.CENTAUR_API_URL)
+      const useLocal = c.options.local || (!apiKey && !hasExplicitApiTarget)
+
+      if (useLocal) {
+        const result = runClusterTurn({
+          namespace: c.options.namespace,
+          release: c.options.release,
+          harness: c.options.harness,
+          engine: c.options.engine,
+          personaId: c.options.persona,
+          prompt: c.args.prompt,
+          threadKey: c.options.thread,
+          timeoutSeconds: c.options.timeoutSeconds,
+          pollMs: c.options.pollMs,
+          releaseThread: c.options.releaseThread,
+          platform: 'cli-local',
+        })
+        for (const phase of result.phases) yield phase
+
+        const expectationMet =
+          result.status === 'completed' && (!c.options.expect || result.resultText.includes(c.options.expect))
+        setFailedExit(expectationMet)
+        return c.ok(
+          {
+            ...result,
+            mode: 'local',
+            ok: expectationMet,
+            expectedText: c.options.expect || undefined,
+          },
+          {
+            cta: {
+              commands: [
+                {
+                  command: commandLine([
+                    'run',
+                    c.args.prompt,
+                    '--local',
+                    '--thread',
+                    result.threadKey,
+                    '--namespace',
+                    c.options.namespace,
+                    '--release',
+                    c.options.release,
+                    ...(c.options.harness ? ['--harness', c.options.harness] : []),
+                  ]),
+                  description: 'continue this same Centaur thread through the local API pod',
+                },
+              ],
+            },
+          },
+        )
+      }
+
+      const apiUrl = c.options.apiUrl || c.env.CENTAUR_API_URL || 'http://127.0.0.1:8000'
       if (!apiKey) {
         return c.error({
           code: 'MISSING_API_KEY',
-          message: 'Set CENTAUR_API_KEY or pass --api-key.',
+          message: 'Set CENTAUR_API_KEY, pass --api-key, or use --local for a deployed local cluster.',
           retryable: true,
           cta: {
             commands: [
               {
                 command: 'export CENTAUR_API_KEY=<api-key>',
                 description: 'set the API key for subsequent CLI runs',
+              },
+              {
+                command: commandLine(['run', c.args.prompt, '--local']),
+                description: 'run through the local Kubernetes API pod without a port-forward or external API key',
               },
             ],
           },
@@ -1705,6 +1824,7 @@ export const app = Cli.create('centaur', {
         personaId: c.options.persona,
         stream: !c.options.noStream,
         pollMs: c.options.pollMs,
+        releaseThread: c.options.releaseThread,
       })
 
       let next = await stream.next()
@@ -1713,7 +1833,10 @@ export const app = Cli.create('centaur', {
         next = await stream.next()
       }
 
-      return c.ok(next.value, {
+      const expectationMet =
+        next.value.status === 'completed' && (!c.options.expect || next.value.resultText.includes(c.options.expect))
+      setFailedExit(expectationMet)
+      return c.ok({ ...next.value, ok: expectationMet, expectedText: c.options.expect || undefined }, {
         cta: {
           commands: [
             {
@@ -1857,8 +1980,8 @@ export const app = Cli.create('centaur', {
                 description: 'apply local secrets when needed and deploy Centaur with Helm',
               },
               {
-                command: commandLine(['smoke', '--harness', state.harness]),
-                description: 'prove the deployed API can complete one agent turn',
+                command: localRunVerificationCommand(state.harness),
+                description: 'run one verified Centaur turn through the local API pod',
               },
               {
                 command: commandLine(['slackbot', 'smoke']),
@@ -1946,8 +2069,8 @@ export const app = Cli.create('centaur', {
                 description: 'for an existing cluster, deploy with Helm',
               },
               {
-                command: commandLine(['smoke', '--harness', c.options.harness]),
-                description: 'prove the deployed API can complete one agent turn',
+                command: localRunVerificationCommand(c.options.harness),
+                description: 'run one verified Centaur turn through the local API pod',
               },
               {
                 command: commandLine(['slackbot', 'smoke']),
@@ -1974,8 +2097,8 @@ export const app = Cli.create('centaur', {
       namespace: z.string().default('centaur'),
       release: z.string().default('centaur'),
       harness: harnessSchema.default('codex').describe('Harness to verify'),
-      prompt: z.string().default('Reply with exactly PONG and nothing else.').describe('Smoke-test prompt'),
-      expect: z.string().default('PONG').describe('Text expected in the final result'),
+      prompt: z.string().default(DEFAULT_SMOKE_PROMPT).describe('Smoke-test prompt'),
+      expect: z.string().default(DEFAULT_SMOKE_EXPECT).describe('Text expected in the final result'),
       thread: z.string().optional().describe('Optional thread key to reuse'),
       timeoutSeconds: z.number().int().positive().default(300).describe('Maximum wait for the execution'),
       pollMs: z.number().int().positive().default(1000).describe('Poll interval while waiting'),

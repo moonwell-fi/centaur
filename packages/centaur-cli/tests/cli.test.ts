@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { app, k3sDeploymentCommands, runClusterSmoke, runSlackbotSmoke } from '../src/app.js'
+import { app, k3sDeploymentCommands, runClusterSmoke, runClusterTurn, runSlackbotSmoke } from '../src/app.js'
 import { envChecks } from '../src/checks.js'
 import { CentaurClient, parseSse } from '../src/client.js'
 import { runAgent } from '../src/run.js'
@@ -178,7 +178,7 @@ describe('overlay scaffolding', () => {
     expect(ctaCommands[2]).toContain('--harness codex')
     expect(ctaCommands[2]).toContain('--auth-mode access_token')
     expect(ctaCommands[3]).toContain('centaur deploy k3s --apply')
-    expect(ctaCommands[4]).toContain('centaur smoke --harness codex')
+    expect(ctaCommands[4]).toContain("centaur run 'Reply with exactly PONG and nothing else.' --local --harness codex --expect PONG --release-thread")
     expect(ctaCommands[5]).toContain('centaur slackbot smoke')
 
     const state = JSON.parse(readFileSync(join(home, 'onboarding-state.json'), 'utf8'))
@@ -232,7 +232,7 @@ describe('overlay scaffolding', () => {
     expect(output.cta.commands[0].command).toContain('centaur secrets collect --backend kubernetes')
   })
 
-  it('top-level setup returns the full agent command chain through smoke', async () => {
+  it('top-level setup returns the full agent command chain through local run and Slackbot smoke', async () => {
     const stdout = await runCli([
       'setup',
       '--org',
@@ -261,7 +261,7 @@ describe('overlay scaffolding', () => {
       'centaur secrets collect --backend local-env --install-mode local --harness codex --auth-mode api_key --overlay-path org',
       'centaur doctor --deep --overlay-path org --harness codex --auth-mode api_key --secret-backend local-env --install-mode local',
       'centaur deploy k3s --apply --secrets-file org/secrets.local.env',
-      'centaur smoke --harness codex',
+      "centaur run 'Reply with exactly PONG and nothing else.' --local --harness codex --expect PONG --release-thread",
       'centaur slackbot smoke',
     ])
   })
@@ -382,6 +382,49 @@ describe('deploy plans', () => {
 })
 
 describe('cluster smoke', () => {
+  it('runs an arbitrary CLI prompt through the local API deployment without external auth', () => {
+    const calls: string[][] = []
+    const runner = (command: string[]) => {
+      calls.push(command)
+      const joined = command.join(' ')
+      if (joined.includes('/agent/spawn')) {
+        return JSON.stringify({ runtime_id: 'rtm-1', assignment_generation: 4 })
+      }
+      if (joined.includes('/agent/message')) {
+        return JSON.stringify({ ok: true, message_id: 'msg-run' })
+      }
+      if (joined.includes('/agent/execute')) {
+        return JSON.stringify({ execution_id: 'exe-run', status: 'queued' })
+      }
+      if (joined.includes('/agent/executions/exe-run')) {
+        return JSON.stringify({ status: 'completed', result_text: 'hello from local pod' })
+      }
+      throw new Error(`unexpected command ${joined}`)
+    }
+
+    const result = runClusterTurn({
+      namespace: 'centaur',
+      release: 'centaur',
+      harness: 'codex',
+      engine: 'gpt-5',
+      personaId: 'operator',
+      prompt: 'Say hello',
+      threadKey: 'cli:run:test',
+      pollMs: 1,
+    }, runner)
+
+    expect(result.status).toBe('completed')
+    expect(result.resultText).toBe('hello from local pod')
+    expect(result.release).toBeUndefined()
+    expect(calls[0]?.[8]).toContain(JSON.stringify({
+      thread_key: 'cli:run:test',
+      harness: 'codex',
+      engine: 'gpt-5',
+      persona_id: 'operator',
+    }))
+    expect(calls.some(call => call.join(' ').includes('/release'))).toBe(false)
+  })
+
   it('runs spawn/message/execute through the API deployment and releases the thread', () => {
     const calls: string[][] = []
     const runner = (command: string[]) => {

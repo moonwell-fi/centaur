@@ -12,6 +12,7 @@ export interface RunAgentOptions {
   personaId?: string
   stream?: boolean
   pollMs?: number
+  releaseThread?: boolean
   fetchImpl?: typeof fetch
 }
 
@@ -46,6 +47,10 @@ export type RunAgentEvent =
       phase: 'final_state'
       executionId: string
       state: Record<string, unknown>
+    }
+  | {
+      phase: 'thread_released'
+      released?: boolean
     }
 
 export async function* runAgent(
@@ -113,6 +118,14 @@ export async function* runAgent(
     phase: 'final_state',
     executionId: execute.execution_id,
     state: finalState,
+  }
+
+  if (options.releaseThread) {
+    const released = await client.releaseThread(threadKey)
+    yield {
+      phase: 'thread_released',
+      released: Boolean(released.released),
+    }
   }
 
   const summary = {

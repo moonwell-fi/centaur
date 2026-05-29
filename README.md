@@ -122,7 +122,7 @@ centaur --llms
 From a local checkout, `packages/centaur-cli/install.sh` installs the same
 `centaur` command.
 
-For an agent-driven install-to-smoke path, start with:
+For an agent-driven install-to-run path, start with:
 
 ```bash
 centaur setup --org acme --assistant-name centaur --domain centaur.example.com --backend local-env --install-mode local --harness codex --auth-mode api_key
@@ -130,7 +130,7 @@ centaur setup --org acme --assistant-name centaur --domain centaur.example.com -
 
 The returned commands create the overlay, copy the Slack manifest to your
 clipboard, collect masked secrets, deploy to the current k3s-compatible
-Kubernetes context, run `centaur smoke` through the API pod, and run
+Kubernetes context, run `centaur run --local` through the API pod, and run
 `centaur slackbot smoke` through the Slackbot pod.
 
 Install the local command runner:

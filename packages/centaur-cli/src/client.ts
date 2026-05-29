@@ -91,6 +91,13 @@ export class CentaurClient {
     return this.request(`/agent/executions/${encodeURIComponent(executionId)}`)
   }
 
+  async releaseThread(threadKey: string, cancelInflight = false): Promise<Record<string, unknown>> {
+    return this.request(`/agent/threads/${encodeURIComponent(threadKey)}/release`, {
+      method: 'POST',
+      body: { cancel_inflight: cancelInflight },
+    })
+  }
+
   async *streamEvents(options: {
     threadKey: string
     executionId?: string

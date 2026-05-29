@@ -31,7 +31,7 @@ centaur integrations slack-manifest --domain centaur.example.com --app-name cent
 centaur secrets collect --backend local-env --install-mode local --harness codex --auth-mode api_key --overlay-path org
 centaur doctor --deep --harness codex --auth-mode api_key --secret-backend local-env --install-mode local
 centaur deploy k3s --apply --secrets-file org/secrets.local.env
-centaur smoke --harness codex
+centaur run "Reply with exactly PONG and nothing else." --local --harness codex --expect PONG --release-thread
 centaur slackbot smoke
 ```
 
@@ -41,13 +41,12 @@ dedicated ChatGPT or Claude.ai subscription account. The Slack manifest command
 copies JSON to your clipboard for paste-in-place setup, and `secrets collect`
 prompts for secret values with masked input before writing them to the selected
 backend. `centaur deploy ... --apply` creates the Kubernetes Secret from the
-local secrets file when needed and runs Helm. `centaur smoke` verifies one
-durable agent turn through the API pod without requiring a port-forward or API
-key.
-`centaur slackbot smoke` then sends a signed synthetic Slack mention through
-the deployed Slackbot pod and waits for the resulting Slack workflow execution
-to complete. After both smoke tests pass, send a real mention in a test Slack
-channel to verify workspace delivery.
+local secrets file when needed and runs Helm. `centaur run --local` verifies a
+real durable agent turn through the API pod without requiring a port-forward or
+external API key. `centaur slackbot smoke` then sends a signed synthetic Slack
+mention through the deployed Slackbot pod and waits for the resulting Slack
+workflow execution to complete. After both checks pass, send a real mention in
+a test Slack channel to verify workspace delivery.
 
 From the repo root:
 
@@ -147,12 +146,12 @@ Expected shape:
 
 ## 5. Run an agent turn
 
-Before testing Slack, run the local smoke test. It uses the same durable agent
-API that Slackbot uses: spawn or reuse a runtime, persist a message, enqueue an
+Before testing Slack, run a local CLI turn. It uses the same durable agent API
+that Slackbot uses: spawn or reuse a runtime, persist a message, enqueue an
 execution, and poll the execution state until the result contains `PONG`.
 
 ```bash
-just smoke
+centaur run "Reply with exactly PONG and nothing else." --local --harness codex --expect PONG --release-thread
 ```
 
 The successful result includes the terminal execution row. The important fields
@@ -173,9 +172,8 @@ just logs api
 kubectl get pods -n centaur -l centaur.ai/managed=true
 ```
 
-If you changed the namespace or release name, set `CENTAUR_NAMESPACE` and
-`CENTAUR_RELEASE` before running `just smoke` so the recipe targets the right
-deployment.
+If you changed the namespace or release name, pass `--namespace` and `--release`
+so the CLI targets the right deployment.
 
 ## 6. Try Slack after the API works
 
