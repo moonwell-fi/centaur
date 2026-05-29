@@ -2190,63 +2190,13 @@ export const app = Cli.create('centaur', {
       CENTAUR_API_URL: z.string().optional().describe('Default Centaur API URL'),
       CENTAUR_API_KEY: z.string().optional().describe('Centaur API key'),
     }),
-    async *run(c) {
+    run(c) {
       const apiKey = c.options.apiKey || c.env.CENTAUR_API_KEY
       const hasExplicitApiTarget = Boolean(c.options.apiUrl || c.env.CENTAUR_API_URL)
       const useLocal = c.options.local || (!apiKey && !hasExplicitApiTarget)
-
-      if (useLocal) {
-        const result = runClusterTurn({
-          namespace: c.options.namespace,
-          release: c.options.release,
-          harness: c.options.harness,
-          engine: c.options.engine,
-          personaId: c.options.persona,
-          prompt: c.args.prompt,
-          threadKey: c.options.thread,
-          timeoutSeconds: c.options.timeoutSeconds,
-          pollMs: c.options.pollMs,
-          releaseThread: c.options.releaseThread,
-          platform: 'cli-local',
-        })
-        for (const phase of result.phases) yield phase
-
-        const expectationMet =
-          result.status === 'completed' && (!c.options.expect || result.resultText.includes(c.options.expect))
-        setFailedExit(expectationMet)
-        return c.ok(
-          {
-            ...result,
-            mode: 'local',
-            ok: expectationMet,
-            expectedText: c.options.expect || undefined,
-          },
-          {
-            cta: {
-              commands: [
-                {
-                  command: commandLine([
-                    'run',
-                    c.args.prompt,
-                    '--local',
-                    '--thread',
-                    result.threadKey,
-                    '--namespace',
-                    c.options.namespace,
-                    '--release',
-                    c.options.release,
-                    ...(c.options.harness ? ['--harness', c.options.harness] : []),
-                  ]),
-                  description: 'continue this same Centaur thread through the local API pod',
-                },
-              ],
-            },
-          },
-        )
-      }
-
       const apiUrl = c.options.apiUrl || c.env.CENTAUR_API_URL || 'http://127.0.0.1:8000'
-      if (!apiKey) {
+
+      if (!useLocal && !apiKey) {
         return c.error({
           code: 'MISSING_API_KEY',
           message: 'Set CENTAUR_API_KEY, pass --api-key, or use --local for a deployed local cluster.',
@@ -2254,50 +2204,103 @@ export const app = Cli.create('centaur', {
           cta: {
             commands: [
               {
-                command: 'export CENTAUR_API_KEY=<api-key>',
-                description: 'set the API key for subsequent CLI runs',
-              },
-              {
                 command: commandLine(['run', c.args.prompt, '--local']),
                 description: 'run through the local Kubernetes API pod without a port-forward or external API key',
+              },
+              {
+                command: commandLine(['run', c.args.prompt, '--api-url', apiUrl, '--api-key', '<api-key>']),
+                description: 'retry against the explicit API URL with a Centaur API key',
               },
             ],
           },
         })
       }
 
-      const stream = runAgent({
-        apiUrl,
-        apiKey,
-        prompt: c.args.prompt,
-        threadKey: c.options.thread,
-        harness: c.options.harness,
-        engine: c.options.engine,
-        personaId: c.options.persona,
-        stream: !c.options.noStream,
-        pollMs: c.options.pollMs,
-        releaseThread: c.options.releaseThread,
-      })
+      return (async function* () {
+        if (useLocal) {
+          const result = runClusterTurn({
+            namespace: c.options.namespace,
+            release: c.options.release,
+            harness: c.options.harness,
+            engine: c.options.engine,
+            personaId: c.options.persona,
+            prompt: c.args.prompt,
+            threadKey: c.options.thread,
+            timeoutSeconds: c.options.timeoutSeconds,
+            pollMs: c.options.pollMs,
+            releaseThread: c.options.releaseThread,
+            platform: 'cli-local',
+          })
+          for (const phase of result.phases) yield phase
 
-      let next = await stream.next()
-      while (!next.done) {
-        yield next.value
-        next = await stream.next()
-      }
-
-      const expectationMet =
-        next.value.status === 'completed' && (!c.options.expect || next.value.resultText.includes(c.options.expect))
-      setFailedExit(expectationMet)
-      return c.ok({ ...next.value, ok: expectationMet, expectedText: c.options.expect || undefined }, {
-        cta: {
-          commands: [
+          const expectationMet =
+            result.status === 'completed' && (!c.options.expect || result.resultText.includes(c.options.expect))
+          setFailedExit(expectationMet)
+          return c.ok(
             {
-              command: commandLine(['run', c.args.prompt, '--thread', next.value.threadKey]),
-              description: 'continue this same Centaur thread',
+              ...result,
+              mode: 'local',
+              ok: expectationMet,
+              expectedText: c.options.expect || undefined,
             },
-          ],
-        },
-      })
+            {
+              cta: {
+                commands: [
+                  {
+                    command: commandLine([
+                      'run',
+                      c.args.prompt,
+                      '--local',
+                      '--thread',
+                      result.threadKey,
+                      '--namespace',
+                      c.options.namespace,
+                      '--release',
+                      c.options.release,
+                      ...(c.options.harness ? ['--harness', c.options.harness] : []),
+                    ]),
+                    description: 'continue this same Centaur thread through the local API pod',
+                  },
+                ],
+              },
+            },
+          )
+        }
+
+        if (!apiKey) throw new Error('missing API key')
+        const stream = runAgent({
+          apiUrl,
+          apiKey,
+          prompt: c.args.prompt,
+          threadKey: c.options.thread,
+          harness: c.options.harness,
+          engine: c.options.engine,
+          personaId: c.options.persona,
+          stream: !c.options.noStream,
+          pollMs: c.options.pollMs,
+          releaseThread: c.options.releaseThread,
+        })
+
+        let next = await stream.next()
+        while (!next.done) {
+          yield next.value
+          next = await stream.next()
+        }
+
+        const expectationMet =
+          next.value.status === 'completed' && (!c.options.expect || next.value.resultText.includes(c.options.expect))
+        setFailedExit(expectationMet)
+        return c.ok({ ...next.value, ok: expectationMet, expectedText: c.options.expect || undefined }, {
+          cta: {
+            commands: [
+              {
+                command: commandLine(['run', c.args.prompt, '--thread', next.value.threadKey]),
+                description: 'continue this same Centaur thread',
+              },
+            ],
+          },
+        })
+      })()
     },
   })
   .command('init', {

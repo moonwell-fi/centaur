@@ -1069,6 +1069,25 @@ describe('secret backends', () => {
 })
 
 describe('agent run client', () => {
+  it('returns executable retry CTAs when an explicit API target lacks a key', async () => {
+    const { stdout, exitCode } = await runCliWithExit([
+      'run',
+      'hello',
+      '--api-url',
+      'http://api.test',
+      '--json',
+    ])
+    const output = JSON.parse(stdout)
+
+    expect(exitCode).toBe(1)
+    expect(output.code).toBe('MISSING_API_KEY')
+    expect(output.retryable).toBe(true)
+    expect(output.cta.commands.map((command: { command: string }) => command.command)).toEqual([
+      "centaur run hello --local",
+      "centaur run hello --api-url http://api.test --api-key '<api-key>'",
+    ])
+  })
+
   it('posts spawn, message, and execute payloads', async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = []
     const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
