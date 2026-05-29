@@ -1,4 +1,4 @@
-FROM ironsh/iron-proxy:0.38.0@sha256:724c075e22e962e3452a95cd0680a195a42082033bb830b1eed0d4b7911b5626
+FROM ironsh/iron-proxy:0.42.0-rc.2@sha256:b8ee863804c90369344db9399f3deaed15173b952c1bc631070681b70428fae5
 
 USER root
 RUN apk add --no-cache curl jq

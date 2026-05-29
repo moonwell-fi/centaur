@@ -26,6 +26,7 @@ from typing import Any
 import yaml
 
 from api.tool_manager import (
+    BrokeredTokenSecret,
     GcpAuthSecret,
     HmacSignSecret,
     HttpSecret,
@@ -72,6 +73,17 @@ def _secret_ttl() -> str:
     return os.environ.get("FIREWALL_MANAGER_SECRET_TTL", "10m").strip()
 
 
+def _token_broker_ttl() -> str:
+    """How long iron-proxy may cache a broker-issued token before re-fetching.
+
+    Independent of ``FIREWALL_MANAGER_SECRET_TTL`` because the broker already
+    expires tokens server-side; this controls only the proxy-side cache. Must
+    be strictly less than the broker's token lifetime or iron-proxy rejects
+    the response (its remaining lifetime must exceed the cache TTL).
+    """
+    return os.environ.get("FIREWALL_MANAGER_TOKEN_BROKER_TTL", "1m").strip()
+
+
 def _op_vault() -> str:
     return os.environ.get("OP_VAULT", "ai-agents").strip()
 
@@ -85,6 +97,30 @@ def _build_source(secret_ref: str) -> dict[str, str]:
             "ttl": _secret_ttl(),
         }
     return {"type": "env", "var": secret_ref}
+
+
+# Per-sandbox listener that lets a co-located tool-server sidecar reach the
+# core Centaur DB through the proxy (sandboxes are denied direct Postgres
+# egress). Unlike tool ``pg_dsn`` listeners, its upstream is always resolved
+# from an env var: the proxy already has the core DSN via ``envFrom`` the infra
+# secret, so this is robust regardless of the configured secret source.
+CENTAUR_CORE_PG_LISTENER = "centaur_core"
+
+
+def core_pg_listen_port(pg_listen_ports: dict[str, int]) -> int:
+    """Port for the core-DB listener: just past the tool ``pg_dsn`` listeners."""
+    return PG_LISTEN_PORT_BASE + len(pg_listen_ports)
+
+
+def _build_core_pg_listener(
+    *, port: int, dsn_env_var: str, password_env: str
+) -> dict[str, Any]:
+    return {
+        "name": CENTAUR_CORE_PG_LISTENER,
+        "listen": f"0.0.0.0:{port}",
+        "upstream": {"dsn": {"type": "env", "var": dsn_env_var}},
+        "client": {"user": "app_user", "password_env": password_env},
+    }
 
 
 def assign_pg_listen_ports(secrets: list[SecretDef]) -> dict[str, int]:
@@ -132,6 +168,10 @@ def _build_secret_transform(
     Entries are keyed by the ``HttpSecret`` minus its hosts, so two
     declarations of the same secret on different hosts get their rules merged,
     while genuinely distinct secrets stay separate.
+
+    ``BrokeredTokenSecret`` entries also land here — each becomes an
+    inject-mode entry sourced from ``token_broker`` so the broker mints the
+    access token and iron-proxy injects it as ``Authorization: Bearer``.
     """
     by_secret: dict[HttpSecret, set[str]] = {}
     for secret in secrets:
@@ -140,10 +180,7 @@ def _build_secret_transform(
         key = replace(secret, hosts=())
         by_secret.setdefault(key, set()).update(secret.hosts)
 
-    if not by_secret:
-        return None
-
-    entries = []
+    entries: list[dict[str, Any]] = []
     for secret, host_set in sorted(by_secret.items(), key=lambda kv: astuple(kv[0])):
         action, block = _secret_action_block(secret)
         entries.append(
@@ -153,7 +190,49 @@ def _build_secret_transform(
                 "rules": [{"host": h} for h in sorted(host_set)],
             }
         )
+
+    entries.extend(_build_token_broker_entries(secrets))
+
+    if not entries:
+        return None
     return {"name": "secrets", "config": {"secrets": entries}}
+
+
+def _build_token_broker_entries(
+    secrets: list[SecretDef],
+) -> list[dict[str, Any]]:
+    """One ``secrets`` entry per ``BrokeredTokenSecret``.
+
+    Hosts declared across multiple secrets with the same name are unioned
+    into a single entry so the broker only sees one ``credential_id`` per
+    refresh family.
+    """
+    by_name: dict[str, set[str]] = {}
+    for secret in secrets:
+        if isinstance(secret, BrokeredTokenSecret):
+            by_name.setdefault(secret.name, set()).update(secret.hosts)
+
+    ttl = _token_broker_ttl()
+    entries: list[dict[str, Any]] = []
+    for name in sorted(by_name):
+        entries.append(
+            {
+                "source": {
+                    "type": "token_broker",
+                    "credential_id": name,
+                    "ttl": ttl,
+                },
+                # Double-brace template is what iron-proxy's secrets transform
+                # expects; the broker resolver exposes ``.Value`` as the
+                # current access token.
+                "inject": {
+                    "header": "Authorization",
+                    "formatter": "Bearer {{.Value}}",
+                },
+                "rules": [{"host": h} for h in sorted(by_name[name])],
+            }
+        )
+    return entries
 
 
 def _build_gcp_auth_transforms(
@@ -221,6 +300,7 @@ def _build_oauth_token_transform(
             tuple[tuple[str, OAuthFieldSource], ...],
             str | None,
             tuple[tuple[str, OAuthFieldSource], ...],
+            str | None,
         ],
         dict[str, set[str]],
     ] = {}
@@ -232,6 +312,7 @@ def _build_oauth_token_transform(
             secret.fields,
             secret.token_endpoint,
             secret.token_endpoint_headers,
+            secret.audience,
         )
         agg = by_token.setdefault(key, {"hosts": set(), "scopes": set()})
         agg["hosts"].update(secret.hosts)
@@ -246,21 +327,23 @@ def _build_oauth_token_transform(
             tuple[tuple[str, OAuthFieldSource], ...],
             str | None,
             tuple[tuple[str, OAuthFieldSource], ...],
+            str | None,
         ],
     ) -> tuple[str, ...]:
-        grant, fields, token_endpoint, endpoint_headers = k
+        grant, fields, token_endpoint, endpoint_headers, audience = k
         # None sorts before any string; normalize None to "" so mixed
         # None/str keys stay comparable.
         return (
             grant,
             token_endpoint or "",
+            audience or "",
             tuple(name for name, _ in fields),
             tuple(name for name, _ in endpoint_headers),
         )
 
     tokens: list[dict[str, Any]] = []
     for key in sorted(by_token, key=_sort_key):
-        grant, fields, token_endpoint, endpoint_headers = key
+        grant, fields, token_endpoint, endpoint_headers, audience = key
         agg = by_token[key]
         entry: dict[str, Any] = {"grant": grant}
         for field_name, field_source in fields:
@@ -270,6 +353,8 @@ def _build_oauth_token_transform(
             entry["scopes"] = sorted(agg["scopes"])
         if token_endpoint is not None:
             entry["token_endpoint"] = token_endpoint
+        if audience is not None:
+            entry["audience"] = audience
         if endpoint_headers:
             entry["token_endpoint_headers"] = {
                 header_name: _build_field_source(source)
@@ -388,6 +473,7 @@ def render_proxy_yaml(
     base_config: str | None = None,
     *,
     pg_listen_ports: dict[str, int] | None = None,
+    core_pg: dict[str, Any] | None = None,
 ) -> str:
     """Splice managed transforms + postgres listeners into ``base_config`` YAML.
 
@@ -424,6 +510,8 @@ def render_proxy_yaml(
     cfg["transforms"] = transforms
 
     listeners = _build_postgres_listeners(secrets, pg_listen_ports)
+    if core_pg is not None:
+        listeners.append(_build_core_pg_listener(**core_pg))
     if listeners:
         cfg["postgres"] = listeners
     else:

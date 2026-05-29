@@ -26,6 +26,13 @@ import ThreadPanel from '../components/ThreadPanel'
         <a className="home-button" href="https://github.com/paradigmxyz/centaur">GitHub</a>
       </div>
 
+      <div className="home-agent-prompt-mini" aria-label="Copy this prompt into a local coding agent">
+
+```text
+Onboard me to Centaur locally. Use https://centaur.run/llms-full.txt and follow https://centaur.run/md/extend/acme-example.md.
+```
+      </div>
+
       <div className="home-built-with" aria-label="Built by">
         <span>Built by</span>
         <div className="home-logo-row" aria-label="Paradigm and Tempo">
@@ -41,6 +48,7 @@ import ThreadPanel from '../components/ThreadPanel'
 
     <div className="home-thread-demo" aria-label="Centaur thread preview">
       <ThreadPanel />
+      <div className="home-thread-demo-caption">transcripts from the Paradigm & Tempo Slacks</div>
     </div>
   </section>
 
@@ -91,16 +99,16 @@ import ThreadPanel from '../components/ThreadPanel'
     </a>
   </section>
 
-  <section className="home-feature home-feature-copy-right" aria-labelledby="home-architecture-title">
-    <a className="home-feature-visual" href="/architecture" aria-labelledby="home-architecture-title">
-      <figure className="home-architecture-diagram">
-        <img src="/brand/architecture.svg" alt="Centaur architecture: ingress, durable control plane, isolated execution, capabilities, secrets, and controlled egress." />
-      </figure>
-    </a>
+  <section className="home-feature home-feature-copy-left" aria-labelledby="home-architecture-title">
     <div className="home-feature-copy">
       <h2 id="home-architecture-title">Modular Architecture</h2>
       <p>Durable control plane, isolated execution, and credential-safe egress. Each layer is independently observable, replaceable, and self-hosted inside your boundary.</p>
       <a className="home-feature-cta" href="/architecture">View the architecture →</a>
     </div>
+    <a className="home-feature-visual" href="/architecture" aria-labelledby="home-architecture-title">
+      <figure className="home-architecture-diagram">
+        <img src="/brand/architecture.svg" alt="Centaur architecture: ingress, durable control plane, isolated execution, capabilities, secrets, and controlled egress." />
+      </figure>
+    </a>
   </section>
 </main>

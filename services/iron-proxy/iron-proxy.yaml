@@ -34,6 +34,7 @@ transforms:
         - "anthropic-beta"
         - "openai-organization"
         - "openai-project"
+        - "chatgpt-account-id"
         - "x-request-id"
         - "x-stainless-arch"
         - "x-stainless-os"
@@ -74,6 +75,9 @@ transforms:
         - "x-cb-access-timestamp"
         - "addepar-firm"
         - "clientid"
+        - "x-as-user-email"
+        - "/^x-codex-.*$/"
+        - "/^x-openai-.*$/"
         - "/^x-[a-z0-9-]*(api-key|apikey|secret|token|auth|key)$/"
 
 log:
