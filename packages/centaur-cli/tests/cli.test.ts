@@ -263,7 +263,7 @@ describe('overlay scaffolding', () => {
       'centaur integrations slack-manifest --domain centaur.acme.com --app-name centaur --output org/slack-app-manifest.json --copy --backend local-env --install-mode local --image-source ghcr --harness codex --auth-mode api_key --overlay-path org',
       'centaur secrets collect --backend local-env --install-mode local --image-source ghcr --harness codex --auth-mode api_key --overlay-path org',
       'centaur doctor --deep --overlay-path org --harness codex --auth-mode api_key --secret-backend local-env --install-mode local --image-source ghcr',
-      'centaur deploy k3s --apply --image-source ghcr --secrets-file org/secrets.local.env',
+      'centaur deploy k3s --apply --image-source ghcr --wait --timeout 10m --secrets-file org/secrets.local.env',
       "centaur run 'Reply with exactly PONG and nothing else.' --local --harness codex --expect PONG --release-thread",
       'centaur slackbot smoke',
     ])
@@ -359,6 +359,9 @@ describe('deploy plans', () => {
       'slackbot.image.repository=ghcr.io/paradigmxyz/centaur/centaur-slackbot',
       '--set',
       'sandbox.image.repository=ghcr.io/paradigmxyz/centaur/centaur-agent',
+      '--wait',
+      '--timeout',
+      '10m',
     ])
   })
 
@@ -380,7 +383,21 @@ describe('deploy plans', () => {
       'slackbot.image.pullPolicy=IfNotPresent',
       '--set',
       'sandbox.image.pullPolicy=IfNotPresent',
+      '--wait',
+      '--timeout',
+      '10m',
     ])
+  })
+
+  it('can print a deploy plan without Helm readiness waiting', async () => {
+    const stdout = await runCli([
+      'deploy',
+      'k3s',
+      '--no-wait',
+      '--json',
+    ])
+    const output = JSON.parse(stdout)
+    expect(output.commands.at(-1)).not.toContain('--wait')
   })
 
   it('can include a local env secret apply before Helm', async () => {

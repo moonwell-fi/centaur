@@ -268,6 +268,8 @@ type DeploymentCommandOptions = {
   secretsFile?: string
   secretName?: string
   imageSource?: ImageSource
+  wait?: boolean
+  timeout?: string
 }
 
 function secretApplyCommands(namespace: string, options: DeploymentCommandOptions = {}) {
@@ -316,6 +318,29 @@ function imageSourceHelmArgs(imageSource: ImageSource = 'ghcr') {
   ]
 }
 
+function helmUpgradeCommand(
+  release: string,
+  chartPath: string,
+  namespace: string,
+  values: string,
+  options: DeploymentCommandOptions = {},
+) {
+  const command = [
+    'helm',
+    'upgrade',
+    '--install',
+    release,
+    chartPath,
+    '-n',
+    namespace,
+    '-f',
+    values,
+    ...imageSourceHelmArgs(options.imageSource),
+  ]
+  if (options.wait !== false) command.push('--wait', '--timeout', options.timeout || '10m')
+  return command
+}
+
 export function kindDeploymentCommands(
   clusterName: string,
   namespace: string,
@@ -331,7 +356,7 @@ export function kindDeploymentCommands(
     ['kubectl', 'apply', '-f', '-'],
     ...secretApplyCommands(namespace, options),
     ['helm', 'dependency', 'update', chartPath],
-    ['helm', 'upgrade', '--install', release, chartPath, '-n', namespace, '-f', values, ...imageSourceHelmArgs(options.imageSource)],
+    helmUpgradeCommand(release, chartPath, namespace, values, options),
   ]
 }
 
@@ -348,7 +373,7 @@ export function k3sDeploymentCommands(
     ['kubectl', 'apply', '-f', '-'],
     ...secretApplyCommands(namespace, options),
     ['helm', 'dependency', 'update', chartPath],
-    ['helm', 'upgrade', '--install', release, chartPath, '-n', namespace, '-f', values, ...imageSourceHelmArgs(options.imageSource)],
+    helmUpgradeCommand(release, chartPath, namespace, values, options),
   ]
 }
 
@@ -364,24 +389,37 @@ export function k8sDeploymentCommands(
     ['kubectl', 'apply', '-f', '-'],
     ...secretApplyCommands(namespace, options),
     ['helm', 'dependency', 'update', chartPath],
-    ['helm', 'upgrade', '--install', release, chartPath, '-n', namespace, '-f', values, ...imageSourceHelmArgs(options.imageSource)],
+    helmUpgradeCommand(release, chartPath, namespace, values, options),
   ]
 }
 
 function deployCommandPartsForInstallMode(
   installMode: string,
-  options: { apply?: boolean; secretsFile?: string; imageSource?: ImageSource } = {},
+  options: {
+    apply?: boolean
+    secretsFile?: string
+    imageSource?: ImageSource
+    wait?: boolean
+    timeout?: string
+  } = {},
 ) {
   const parts = ['deploy', installMode === 'local' || installMode === 'k3s' ? 'k3s' : 'k8s']
   if (options.apply) parts.push('--apply')
   if (options.imageSource) parts.push('--image-source', options.imageSource)
+  if (options.wait !== false) parts.push('--wait', '--timeout', options.timeout || '10m')
   if (options.secretsFile) parts.push('--secrets-file', options.secretsFile)
   return parts
 }
 
 function deploymentCommandForInstallMode(
   installMode: string,
-  options: { apply?: boolean; secretsFile?: string; imageSource?: ImageSource } = {},
+  options: {
+    apply?: boolean
+    secretsFile?: string
+    imageSource?: ImageSource
+    wait?: boolean
+    timeout?: string
+  } = {},
 ) {
   return commandLine(deployCommandPartsForInstallMode(installMode, options))
 }
@@ -1582,6 +1620,8 @@ const deploy = Cli.create('deploy', {
       imageSource: imageSourceSchema.default('ghcr').describe('Use published GHCR images or local image names'),
       secretsFile: z.string().optional().describe('Optional dotenv file to apply as the infra Kubernetes Secret'),
       secretName: z.string().default('centaur-infra-env').describe('Kubernetes Secret name for --secrets-file'),
+      wait: z.boolean().default(true).describe('Wait for Kubernetes resources to become ready'),
+      timeout: z.string().default('10m').describe('Helm wait timeout'),
       apply: z.boolean().default(false).describe('Run the commands instead of printing them'),
     }),
     run(c) {
@@ -1589,6 +1629,8 @@ const deploy = Cli.create('deploy', {
         imageSource: c.options.imageSource,
         secretsFile: c.options.secretsFile,
         secretName: c.options.secretName,
+        wait: c.options.wait,
+        timeout: c.options.timeout,
       })
       if (c.options.apply) runDeploymentCommands(commands)
       return {
@@ -1606,6 +1648,8 @@ const deploy = Cli.create('deploy', {
       imageSource: imageSourceSchema.default('ghcr').describe('Use published GHCR images or local image names'),
       secretsFile: z.string().optional().describe('Optional dotenv file to apply as the infra Kubernetes Secret'),
       secretName: z.string().default('centaur-infra-env').describe('Kubernetes Secret name for --secrets-file'),
+      wait: z.boolean().default(true).describe('Wait for Kubernetes resources to become ready'),
+      timeout: z.string().default('10m').describe('Helm wait timeout'),
       apply: z.boolean().default(false).describe('Run the commands instead of printing them'),
     }),
     run(c) {
@@ -1613,6 +1657,8 @@ const deploy = Cli.create('deploy', {
         imageSource: c.options.imageSource,
         secretsFile: c.options.secretsFile,
         secretName: c.options.secretName,
+        wait: c.options.wait,
+        timeout: c.options.timeout,
       })
       if (c.options.apply) runDeploymentCommands(commands)
       return {
@@ -1631,6 +1677,8 @@ const deploy = Cli.create('deploy', {
       imageSource: imageSourceSchema.default('ghcr').describe('Use published GHCR images or local image names'),
       secretsFile: z.string().optional().describe('Optional dotenv file to apply as the infra Kubernetes Secret'),
       secretName: z.string().default('centaur-infra-env').describe('Kubernetes Secret name for --secrets-file'),
+      wait: z.boolean().default(true).describe('Wait for Kubernetes resources to become ready'),
+      timeout: z.string().default('10m').describe('Helm wait timeout'),
       apply: z.boolean().default(false).describe('Run the commands instead of printing them'),
     }),
     run(c) {
@@ -1638,6 +1686,8 @@ const deploy = Cli.create('deploy', {
         imageSource: c.options.imageSource,
         secretsFile: c.options.secretsFile,
         secretName: c.options.secretName,
+        wait: c.options.wait,
+        timeout: c.options.timeout,
       })
       if (c.options.apply) runDeploymentCommands(commands)
       return {
