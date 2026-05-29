@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { describe, expect, it } from 'vitest'
 
-import { app, k3sDeploymentCommands, runClusterSmoke } from '../src/app.js'
+import { app, k3sDeploymentCommands, runClusterSmoke, runSlackbotSmoke } from '../src/app.js'
 import { envChecks } from '../src/checks.js'
 import { CentaurClient, parseSse } from '../src/client.js'
 import { runAgent } from '../src/run.js'
@@ -179,6 +179,7 @@ describe('overlay scaffolding', () => {
     expect(ctaCommands[2]).toContain('--auth-mode access_token')
     expect(ctaCommands[3]).toContain('centaur deploy k3s --apply')
     expect(ctaCommands[4]).toContain('centaur smoke --harness codex')
+    expect(ctaCommands[5]).toContain('centaur slackbot smoke')
 
     const state = JSON.parse(readFileSync(join(home, 'onboarding-state.json'), 'utf8'))
     expect(state.org).toBe('acme')
@@ -261,6 +262,7 @@ describe('overlay scaffolding', () => {
       'centaur doctor --deep --overlay-path org --harness codex --auth-mode api_key --secret-backend local-env --install-mode local',
       'centaur deploy k3s --apply --secrets-file org/secrets.local.env',
       'centaur smoke --harness codex',
+      'centaur slackbot smoke',
     ])
   })
 
@@ -430,6 +432,74 @@ describe('cluster smoke', () => {
     expect(calls[0]?.[8]).toContain('http://localhost:8000/agent/spawn')
     expect(calls[0]?.[8]).toContain(JSON.stringify({ thread_key: 'cli:test', harness: 'codex' }))
     expect(calls[0]?.[8]).not.toContain('aiv2_')
+  })
+})
+
+describe('slackbot smoke', () => {
+  it('sends a signed synthetic Slack mention and waits for the workflow execution', () => {
+    const calls: string[][] = []
+    let workflowPolls = 0
+    let executionPolls = 0
+    const runner = (command: string[]) => {
+      calls.push(command)
+      const joined = command.join(' ')
+      if (joined.includes('deploy/centaur-centaur-slackbot')) {
+        return JSON.stringify({ status: 504, text: 'Gateway Timeout' })
+      }
+      if (joined.includes('/workflows/runs?thread_key=slack%3ATCLI%3ACCLI%3A1770000000.000001')) {
+        workflowPolls += 1
+        return JSON.stringify({
+          ok: true,
+          items: [
+            workflowPolls === 1
+              ? { run_id: 'wfr-1', status: 'running' }
+              : { run_id: 'wfr-1', status: 'waiting', execution_id: 'exe-1' },
+          ],
+        })
+      }
+      if (joined.includes('/agent/executions/exe-1')) {
+        executionPolls += 1
+        return JSON.stringify(
+          executionPolls === 1
+            ? { status: 'running', result_text: null }
+            : { status: 'completed', result_text: 'PONG' },
+        )
+      }
+      if (joined.includes('/agent/threads/slack%3ATCLI%3ACCLI%3A1770000000.000001/release')) {
+        return JSON.stringify({ ok: true, released: true })
+      }
+      throw new Error(`unexpected command ${joined}`)
+    }
+
+    const result = runSlackbotSmoke({
+      namespace: 'centaur',
+      release: 'centaur',
+      prompt: 'Reply PONG',
+      expectText: 'PONG',
+      threadTs: '1770000000.000001',
+      pollMs: 1,
+    }, runner)
+
+    expect(result.ok).toBe(true)
+    expect(result.webhookAccepted).toBe(false)
+    expect(result.threadKey).toBe('slack:TCLI:CCLI:1770000000.000001')
+    expect(result.workflowRunId).toBe('wfr-1')
+    expect(result.executionId).toBe('exe-1')
+    expect(result.resultText).toBe('PONG')
+    expect(calls[0]?.slice(0, 8)).toEqual([
+      'kubectl',
+      'exec',
+      '-n',
+      'centaur',
+      'deploy/centaur-centaur-slackbot',
+      '--',
+      'bun',
+      '-e',
+    ])
+    expect(calls[0]?.[8]).toContain('SLACK_SIGNING_SECRET')
+    expect(calls[0]?.[8]).toContain('/api/webhooks/slack')
+    expect(calls[0]?.[8]).toContain('Reply PONG')
+    expect(calls[0]?.[8]).not.toContain('local-dev')
   })
 })
 

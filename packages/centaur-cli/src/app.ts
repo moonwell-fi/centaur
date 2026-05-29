@@ -448,10 +448,11 @@ function setupPlan(options: SetupPlanOptions) {
       ])),
       centaurCommand(deployCommand),
       centaurCommand(commandLine(['smoke', '--harness', options.harness])),
+      centaurCommand(commandLine(['slackbot', 'smoke'])),
     ],
     harness: options.harness,
     authMode: options.authMode,
-    note: 'Use exactly one default harness for the deployment: codex or claude-code. The smoke command runs through the API pod and does not need an external API key.',
+    note: 'Use exactly one default harness for the deployment: codex or claude-code. The smoke commands run through the API and Slackbot pods and do not need a port-forward or external API key.',
   }
 }
 
@@ -539,6 +540,21 @@ type ClusterSmokeOptions = {
   releaseThread?: boolean
 }
 
+type SlackbotSmokeOptions = {
+  namespace: string
+  release: string
+  prompt: string
+  expectText: string
+  teamId?: string
+  channelId?: string
+  userId?: string
+  botUserId?: string
+  threadTs?: string
+  timeoutSeconds?: number
+  pollMs?: number
+  releaseThread?: boolean
+}
+
 function kubectlApiCurlCommand(
   options: { namespace: string; release: string; method: string; path: string; body?: Record<string, unknown> },
 ) {
@@ -570,6 +586,47 @@ function kubectlApiCurlCommand(
     '--',
     'sh',
     '-lc',
+    script,
+  ]
+}
+
+function kubectlSlackbotSignedEventCommand(options: {
+  namespace: string
+  release: string
+  payload: Record<string, unknown>
+  path?: string
+}) {
+  const body = JSON.stringify(options.payload)
+  const script = `
+const crypto = require('node:crypto')
+const secret = process.env.SLACK_SIGNING_SECRET || ''
+if (!secret) {
+  console.error('SLACK_SIGNING_SECRET is missing in the Slackbot pod')
+  process.exit(64)
+}
+const timestamp = Math.floor(Date.now() / 1000).toString()
+const body = ${JSON.stringify(body)}
+const signature = 'v0=' + crypto.createHmac('sha256', secret).update('v0:' + timestamp + ':' + body).digest('hex')
+const response = await fetch('http://localhost:3001${options.path || '/api/webhooks/slack'}', {
+  method: 'POST',
+  headers: {
+    'content-type': 'application/json',
+    'x-slack-request-timestamp': timestamp,
+    'x-slack-signature': signature
+  },
+  body
+})
+console.log(JSON.stringify({ status: response.status, text: await response.text() }))
+`.trim()
+  return [
+    'kubectl',
+    'exec',
+    '-n',
+    options.namespace,
+    `deploy/${options.release}-centaur-slackbot`,
+    '--',
+    'bun',
+    '-e',
     script,
   ]
 }
@@ -689,6 +746,157 @@ export function runClusterSmoke(
     finalState,
     release,
     phases,
+  }
+}
+
+function timestampLike() {
+  const seconds = Math.floor(Date.now() / 1000)
+  const micros = randomBytes(3).readUIntBE(0, 3) % 1_000_000
+  return `${seconds}.${micros.toString().padStart(6, '0')}`
+}
+
+function workflowExecutionId(run: Record<string, unknown>) {
+  if (typeof run.execution_id === 'string' && run.execution_id) return run.execution_id
+  const waitingOn = run.waiting_on
+  if (waitingOn && typeof waitingOn === 'object' && !Array.isArray(waitingOn)) {
+    const executionId = (waitingOn as Record<string, unknown>).execution_id
+    if (typeof executionId === 'string' && executionId) return executionId
+  }
+  return ''
+}
+
+export function runSlackbotSmoke(
+  options: SlackbotSmokeOptions,
+  runner: SmokeRunner = runCommand,
+) {
+  const teamId = options.teamId || 'TCLI'
+  const channelId = options.channelId || 'CCLI'
+  const userId = options.userId || 'UCLI'
+  const botUserId = options.botUserId || 'UCENTAUR'
+  const threadTs = options.threadTs || timestampLike()
+  const eventId = `Ev-centaur-cli-${threadTs.replace(/\W/g, '')}`
+  const threadKey = `slack:${teamId}:${channelId}:${threadTs}`
+  const promptText = `<@${botUserId}> ${options.prompt}`
+  const payload = {
+    type: 'event_callback',
+    token: 'centaur-cli-smoke',
+    team_id: teamId,
+    api_app_id: 'ACENTAURCLI',
+    event_id: eventId,
+    event_time: Math.floor(Date.now() / 1000),
+    event: {
+      type: 'app_mention',
+      user: userId,
+      channel: channelId,
+      ts: threadTs,
+      text: promptText,
+    },
+  }
+  const phases: Record<string, unknown>[] = []
+  const push = (phase: Record<string, unknown>) => {
+    phases.push(phase)
+    return phase
+  }
+
+  const webhook = JSON.parse(runner(kubectlSlackbotSignedEventCommand({
+    namespace: options.namespace,
+    release: options.release,
+    payload,
+  }))) as { status: number; text: string }
+  push({
+    phase: 'slackbot_webhook',
+    status: webhook.status,
+    accepted: webhook.status >= 200 && webhook.status < 300,
+  })
+
+  const deadline = Date.now() + (options.timeoutSeconds || 300) * 1000
+  const pollMs = options.pollMs || 1000
+  let workflowRun: Record<string, unknown> | undefined
+  let executionId = ''
+  let finalState: Record<string, unknown> = {}
+
+  for (;;) {
+    const runs = kubectlApiJson<{ items?: Record<string, unknown>[] }>(runner, {
+      namespace: options.namespace,
+      release: options.release,
+      method: 'GET',
+      path: `/workflows/runs?thread_key=${encodeURIComponent(threadKey)}&limit=5`,
+    })
+    workflowRun = runs.items?.[0]
+    if (workflowRun) {
+      executionId = workflowExecutionId(workflowRun)
+      push({
+        phase: 'workflow_state',
+        runId: workflowRun.run_id,
+        status: workflowRun.status,
+        executionId: executionId || undefined,
+      })
+      if (executionId) break
+      if (['completed', 'failed', 'cancelled'].includes(String(workflowRun.status || ''))) break
+    }
+    if (Date.now() >= deadline) break
+    sleepMs(pollMs)
+  }
+
+  if (executionId) {
+    for (;;) {
+      finalState = kubectlApiJson<Record<string, unknown>>(runner, {
+        namespace: options.namespace,
+        release: options.release,
+        method: 'GET',
+        path: `/agent/executions/${encodeURIComponent(executionId)}`,
+      })
+      const status = String(finalState.status || '')
+      push({
+        phase: 'execution_state',
+        executionId,
+        status,
+        resultText: finalState.result_text,
+      })
+      if (['completed', 'failed', 'cancelled', 'timed_out'].includes(status)) break
+      if (Date.now() >= deadline) {
+        finalState = { ...finalState, status: status || 'timeout', error: 'timed out waiting for execution' }
+        break
+      }
+      sleepMs(pollMs)
+    }
+  }
+
+  let release: Record<string, unknown> | undefined
+  if (executionId && options.releaseThread !== false) {
+    release = kubectlApiJson<Record<string, unknown>>(runner, {
+      namespace: options.namespace,
+      release: options.release,
+      method: 'POST',
+      path: `/agent/threads/${encodeURIComponent(threadKey)}/release`,
+      body: { cancel_inflight: false },
+    })
+    push({ phase: 'thread_released', released: release.released })
+  }
+
+  const status = String(finalState.status || workflowRun?.status || '')
+  const resultText = String(finalState.result_text || '')
+  const ok = Boolean(executionId) && status === 'completed' && resultText.includes(options.expectText)
+  return {
+    ok,
+    webhook,
+    webhookAccepted: webhook.status >= 200 && webhook.status < 300,
+    threadKey,
+    messageId: `slack:${teamId}:${channelId}:${threadTs}`,
+    eventId,
+    workflowRunId: workflowRun?.run_id,
+    workflowStatus: workflowRun?.status,
+    executionId,
+    status,
+    resultText,
+    expectedText: options.expectText,
+    finalState,
+    release,
+    phases,
+    note:
+      webhook.status >= 200 && webhook.status < 300
+        ? 'Slackbot webhook acknowledged the synthetic signed Slack event.'
+        : 'The webhook did not acknowledge before timeout, but the workflow/execution result still proves Slackbot processed the event. Check Slack credentials if Slack delivery also needs verification.',
   }
 }
 
@@ -1241,6 +1449,10 @@ const secrets = Cli.create('secrets', {
               command: commandLine(['smoke', '--harness', c.options.harness]),
               description: 'prove the deployed API can complete one agent turn',
             },
+            {
+              command: commandLine(['slackbot', 'smoke']),
+              description: 'prove Slackbot can turn a signed Slack mention into a completed Centaur execution',
+            },
           ],
         },
       },
@@ -1340,6 +1552,76 @@ const deploy = Cli.create('deploy', {
     },
   })
 
+const slackbot = Cli.create('slackbot', {
+  description: 'Verify deployed Slackbot setup',
+}).command('smoke', {
+  description: 'Send a signed synthetic Slack mention through Slackbot and wait for a completed Centaur execution.',
+  options: z.object({
+    namespace: z.string().default('centaur'),
+    release: z.string().default('centaur'),
+    prompt: z.string().default('Reply with exactly PONG and nothing else.').describe('Synthetic Slack mention text'),
+    expect: z.string().default('PONG').describe('Text expected in the final result'),
+    teamId: z.string().default('TCLI').describe('Synthetic Slack team id'),
+    channelId: z.string().default('CCLI').describe('Synthetic Slack channel id'),
+    userId: z.string().default('UCLI').describe('Synthetic Slack user id'),
+    botUserId: z.string().default('UCENTAUR').describe('Mentioned bot user id in the synthetic event'),
+    threadTs: z.string().optional().describe('Optional Slack timestamp/thread id to reuse'),
+    timeoutSeconds: z.number().int().positive().default(300).describe('Maximum wait for the execution'),
+    pollMs: z.number().int().positive().default(1000).describe('Poll interval while waiting'),
+    noRelease: z.boolean().default(false).describe('Leave the runtime assigned after the smoke test'),
+  }),
+  run(c) {
+    const result = runSlackbotSmoke({
+      namespace: c.options.namespace,
+      release: c.options.release,
+      prompt: c.options.prompt,
+      expectText: c.options.expect,
+      teamId: c.options.teamId,
+      channelId: c.options.channelId,
+      userId: c.options.userId,
+      botUserId: c.options.botUserId,
+      threadTs: c.options.threadTs,
+      timeoutSeconds: c.options.timeoutSeconds,
+      pollMs: c.options.pollMs,
+      releaseThread: !c.options.noRelease,
+    })
+    setFailedExit(result.ok)
+    return c.ok(result, {
+      cta: {
+        description: result.ok ? 'Next real Slack verification step:' : 'Slackbot smoke failed; inspect these logs:',
+        commands: [
+          ...(result.ok
+            ? []
+            : [{
+                command: commandLine([
+                  'logs',
+                  '--component',
+                  'api',
+                  '--namespace',
+                  c.options.namespace,
+                  '--release',
+                  c.options.release,
+                ]),
+                description: 'inspect API logs',
+              }]),
+          {
+            command: commandLine([
+              'logs',
+              '--component',
+              'slackbot',
+              '--namespace',
+              c.options.namespace,
+              '--release',
+              c.options.release,
+            ]),
+            description: 'watch Slackbot logs while sending a real Slack mention',
+          },
+        ],
+      },
+    })
+  },
+})
+
 export const app = Cli.create('centaur', {
   description: 'Centaur onboarding, deployment, and agent operations CLI',
   version: VERSION,
@@ -1347,7 +1629,7 @@ export const app = Cli.create('centaur', {
     depth: 2,
     suggestions: [
       'install Centaur CLI, inspect centaur --llms, then run the next CTA command',
-      'drive Centaur onboarding with init, integrations slack-manifest, secrets collect, doctor, and deploy',
+      'drive Centaur onboarding with setup, init, integrations slack-manifest, secrets collect, doctor, deploy, smoke, and slackbot smoke',
       'run a one-shot Centaur agent turn with centaur run --format jsonl',
     ],
   },
@@ -1578,6 +1860,10 @@ export const app = Cli.create('centaur', {
                 command: commandLine(['smoke', '--harness', state.harness]),
                 description: 'prove the deployed API can complete one agent turn',
               },
+              {
+                command: commandLine(['slackbot', 'smoke']),
+                description: 'prove Slackbot can turn a signed Slack mention into a completed Centaur execution',
+              },
             ],
           },
         },
@@ -1662,6 +1948,10 @@ export const app = Cli.create('centaur', {
               {
                 command: commandLine(['smoke', '--harness', c.options.harness]),
                 description: 'prove the deployed API can complete one agent turn',
+              },
+              {
+                command: commandLine(['slackbot', 'smoke']),
+                description: 'prove Slackbot can turn a signed Slack mention into a completed Centaur execution',
               },
             ],
           },
@@ -1761,6 +2051,7 @@ export const app = Cli.create('centaur', {
   .command(integrations)
   .command(secrets)
   .command(deploy)
+  .command(slackbot)
   .command('logs', {
     description: 'Print the kubectl log command for a Centaur component.',
     options: z.object({

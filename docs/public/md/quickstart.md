@@ -32,6 +32,7 @@ centaur secrets collect --backend local-env --install-mode local --harness codex
 centaur doctor --deep --harness codex --auth-mode api_key --secret-backend local-env --install-mode local
 centaur deploy k3s --apply --secrets-file org/secrets.local.env
 centaur smoke --harness codex
+centaur slackbot smoke
 ```
 
 Pick one default harness for the deployment: `codex` or `claude-code`. Use
@@ -43,6 +44,10 @@ backend. `centaur deploy ... --apply` creates the Kubernetes Secret from the
 local secrets file when needed and runs Helm. `centaur smoke` verifies one
 durable agent turn through the API pod without requiring a port-forward or API
 key.
+`centaur slackbot smoke` then sends a signed synthetic Slack mention through
+the deployed Slackbot pod and waits for the resulting Slack workflow execution
+to complete. After both smoke tests pass, send a real mention in a test Slack
+channel to verify workspace delivery.
 
 From the repo root:
 

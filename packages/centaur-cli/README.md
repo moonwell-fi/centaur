@@ -39,6 +39,7 @@ centaur secrets collect --backend local-env --install-mode local --harness codex
 centaur doctor --deep --harness codex --auth-mode api_key --secret-backend local-env --install-mode local
 centaur deploy k3s --apply --secrets-file org/secrets.local.env
 centaur smoke --harness codex
+centaur slackbot smoke
 ```
 
 `centaur init` returns CTAs for the next one-off commands, so an agent can keep
@@ -62,5 +63,10 @@ event-by-event output. Set `CENTAUR_API_URL` and `CENTAUR_API_KEY`, or pass
 
 `centaur smoke` is for freshly deployed local clusters. It runs the same
 spawn/message/execute path through `kubectl exec` inside the API deployment, so
-it does not need a public API URL, port-forward, or external API key. Once that
-passes, mention the Slack app in a test channel with the same prompt.
+it does not need a public API URL, port-forward, or external API key.
+
+`centaur slackbot smoke` sends a signed synthetic Slack mention through the
+deployed Slackbot pod, waits for the resulting `slack_thread_turn` workflow and
+agent execution to complete, and releases the runtime. Once that passes, send a
+real Slack mention in a test channel to verify Slack delivery with your actual
+workspace/channel.
