@@ -291,6 +291,7 @@ describe('overlay scaffolding', () => {
 
     const output = JSON.parse(stdout)
     const manifest = JSON.parse(readFileSync(outputPath, 'utf8'))
+    expect(output.socketMode).toBe(true)
     expect(output.manifest.settings.socket_mode_enabled).toBe(true)
     expect(manifest.settings.socket_mode_enabled).toBe(true)
     expect('request_url' in manifest.settings.event_subscriptions).toBe(false)

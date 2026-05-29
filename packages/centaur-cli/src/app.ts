@@ -1296,7 +1296,7 @@ const integrations = Cli.create('integrations', {
     options: z.object({
       domain: z.string().default('centaur.example.com').describe('Public Centaur domain'),
       appName: z.string().default('centaur').describe('Slack app name'),
-      socketMode: z.boolean().default(false).describe('Use Socket Mode instead of public request URLs'),
+      socketMode: z.boolean().default(false).describe('Use Socket Mode instead of public request URLs; automatically enabled for local install mode'),
       output: z.string().optional().describe('Write manifest to a file'),
       copy: z.boolean().default(false).describe('Copy manifest JSON to the system clipboard'),
       backend: secretBackendSchema.default('local-env').describe('Secret backend for the next secrets step'),
@@ -1317,6 +1317,7 @@ const integrations = Cli.create('integrations', {
       return c.ok(
         {
           manifest,
+          socketMode,
           outputPath,
           copied: clipboard?.ok ?? false,
           clipboardCommand: clipboard?.command || undefined,
