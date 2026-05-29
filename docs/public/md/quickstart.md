@@ -39,10 +39,11 @@ centaur slackbot smoke --json
 Pick one default harness for the deployment: `codex` or `claude-code`. Use
 `--auth-mode access_token` for the selected harness when routing through a
 dedicated ChatGPT or Claude.ai subscription account. The Slack manifest command
-copies JSON to your clipboard for paste-in-place setup, and `secrets collect`
-prompts for secret values with masked input before writing them to the selected
-backend. `centaur deploy ... --apply` creates the Kubernetes Secret from the
-local secrets file when needed and runs Helm with published
+copies JSON to your clipboard for paste-in-place setup and returns a structured
+`userAction` before the next secrets command. `secrets collect` prompts for
+secret values with masked input before writing them to the selected backend.
+`centaur deploy ... --apply` creates the Kubernetes Secret from the local
+secrets file when needed and runs Helm with published
 `ghcr.io/paradigmxyz/centaur/*` images, so fresh installs do not need a local
 Docker build. The deploy step waits for Kubernetes readiness before the next
 command runs. `centaur run --local` verifies a real durable agent turn through

@@ -53,10 +53,12 @@ deployment: `--harness codex` or `--harness claude-code`. Use
 dedicated ChatGPT or Claude.ai subscription account.
 
 `integrations slack-manifest --copy` copies the Slack app manifest JSON to the
-clipboard so you can alt-tab into Slack and paste it. `secrets collect` prompts
-for required values with masked input, runs the selected Codex or Claude Code
-login command when subscription auth is selected, and writes the collected
-values into the chosen secret backend.
+clipboard so you can alt-tab into Slack and paste it. Its JSON output includes
+a structured `userAction` and ordered `steps` before the next secrets command,
+so an agent can wait while you create and install the Slack app. `secrets
+collect` prompts for required values with masked input, runs the selected Codex
+or Claude Code login command when subscription auth is selected, and writes the
+collected values into the chosen secret backend.
 For non-interactive runs, `secrets collect --from-env --auth-mode access_token`
 can also build the broker blob from `OPENAI_CODEX_REFRESH_TOKEN` or
 `CLAUDE_CODE_REFRESH_TOKEN`, plus local Codex/Claude login metadata when

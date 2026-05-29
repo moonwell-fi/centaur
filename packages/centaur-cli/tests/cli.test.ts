@@ -294,6 +294,15 @@ describe('overlay scaffolding', () => {
     expect(output.nextCommand).toContain('--harness claude-code')
     expect(output.nextCommand).toContain('--auth-mode access_token')
     expect(output.cta.commands[0].command).toContain('centaur secrets collect --backend kubernetes')
+    expect(output.userAction).toMatchObject({
+      type: 'user_action',
+      url: 'https://api.slack.com/apps',
+      manifestSource: outputPath,
+      clipboard: false,
+      producesSecrets: ['SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET'],
+    })
+    expect(output.steps.map((step: { type: string }) => step.type)).toEqual(['user_action', 'command'])
+    expect(output.steps[1].command).toBe(output.nextCommand)
   })
 
   it('slack-manifest defaults local install mode to Socket Mode', async () => {
@@ -322,6 +331,12 @@ describe('overlay scaffolding', () => {
     expect('request_url' in manifest.settings.event_subscriptions).toBe(false)
     expect(output.requiredSecrets).toContain('SLACK_APP_TOKEN')
     expect(output.optionalSecrets).not.toContain('SLACK_APP_TOKEN')
+    expect(output.userAction).toMatchObject({
+      type: 'user_action',
+      url: 'https://api.slack.com/apps',
+      manifestSource: outputPath,
+      producesSecrets: ['SLACK_BOT_TOKEN', 'SLACK_SIGNING_SECRET', 'SLACK_APP_TOKEN'],
+    })
   })
 
   it('top-level setup returns the full agent command chain through local run and Slackbot smoke', async () => {
