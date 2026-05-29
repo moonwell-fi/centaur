@@ -1,4 +1,5 @@
 import base64
+from email import message_from_bytes
 
 import pytest
 
@@ -44,6 +45,46 @@ class _FakeDriveService:
 
     def files(self):
         return self.files_api
+
+
+class _FakeGmailMessagesApi:
+    def __init__(self):
+        self.send_calls: list[dict] = []
+
+    def get(self, **kwargs):
+        return _CreateRequest(
+            {
+                "id": kwargs["id"],
+                "threadId": "thread-123",
+                "payload": {
+                    "headers": [
+                        {"name": "Subject", "value": "Subject"},
+                        {"name": "From", "value": "Sender <sender@example.com>"},
+                    ],
+                    "body": {"data": base64.urlsafe_b64encode(b"hello").decode("ascii")},
+                },
+            }
+        )
+
+    def send(self, **kwargs):
+        self.send_calls.append(kwargs)
+        return _CreateRequest({"id": "reply-123", "threadId": kwargs["body"]["threadId"]})
+
+
+class _FakeGmailUsersApi:
+    def __init__(self):
+        self.messages_api = _FakeGmailMessagesApi()
+
+    def messages(self):
+        return self.messages_api
+
+
+class _FakeGmailService:
+    def __init__(self):
+        self.users_api = _FakeGmailUsersApi()
+
+    def users(self):
+        return self.users_api
 
 
 class _FakeSheetsValuesApi:
@@ -214,6 +255,37 @@ def test_drive_upload_accepts_attachment_id(monkeypatch):
     assert create_call["media_body"]["content"] == b"from-attachment"
     assert create_call["media_body"]["mimetype"] == "text/csv"
     assert result["id"] == "file-123"
+
+
+def test_gmail_reply_attaches_centaur_attachment(monkeypatch):
+    fake_service = _FakeGmailService()
+    monkeypatch.setattr(client, "get_gmail_service", lambda: fake_service)
+    monkeypatch.setattr(
+        client,
+        "_download_attachment_bytes",
+        lambda **kwargs: b"reply attachment" if kwargs["attachment_id"] == "att-123" else b"",
+    )
+
+    result = client.gmail_reply("msg-123", "Body", attachments=["att-123"])
+
+    send_call = fake_service.users_api.messages_api.send_calls[0]
+    raw = base64.urlsafe_b64decode(send_call["body"]["raw"])
+    message = message_from_bytes(raw)
+    attachment_part = next(
+        part for part in message.walk() if part.get_content_disposition() == "attachment"
+    )
+    assert result == {"id": "reply-123", "thread_id": "thread-123"}
+    assert send_call["body"]["threadId"] == "thread-123"
+    assert attachment_part.get_filename() == "att-123.bin"
+    assert attachment_part.get_payload(decode=True) == b"reply attachment"
+
+
+def test_gmail_reply_rejects_local_attachment_paths(monkeypatch):
+    fake_service = _FakeGmailService()
+    monkeypatch.setattr(client, "get_gmail_service", lambda: fake_service)
+
+    with pytest.raises(ValueError, match="Centaur attachment IDs or download URLs"):
+        client.gmail_reply("msg-123", "Body", attachments=["/tmp/secret.txt"])
 
 
 def test_drive_create_folder_uses_folder_mime_type(monkeypatch):

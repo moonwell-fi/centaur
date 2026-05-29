@@ -269,7 +269,7 @@ def gmail_reply(
     Args:
         message_id: The message ID to reply to
         body: Reply body (plain text)
-        attachments: Optional list of file paths to attach
+        attachments: Optional list of Centaur attachment IDs or download URLs to attach
 
     Returns:
         Dict with id, thread_id
@@ -295,26 +295,32 @@ def gmail_reply(
         message = MIMEMultipart()
         message.attach(MIMEText(body))
 
-        for file_path in attachments:
-            path = Path(file_path)
-            if not path.exists():
-                raise RuntimeError(f"Attachment not found: {file_path}")
+        for attachment_ref in attachments:
+            if attachment_ref.startswith(("/agent/attachments/", "http://", "https://")):
+                attachment_bytes = _download_attachment_bytes(attachment_url=attachment_ref)
+                filename = attachment_ref.rstrip("/").rsplit("/", 2)[-2]
+            elif "/" in attachment_ref or attachment_ref.startswith("."):
+                raise ValueError(
+                    "gmail_reply attachments must be Centaur attachment IDs or download URLs"
+                )
+            else:
+                attachment_bytes = _download_attachment_bytes(attachment_id=attachment_ref)
+                filename = f"{attachment_ref}.bin"
 
-            content_type, _ = mimetypes.guess_type(file_path)
+            content_type, _ = mimetypes.guess_type(filename)
             if content_type is None:
                 content_type = "application/octet-stream"
             main_type, sub_type = content_type.split("/", 1)
 
-            with open(file_path, "rb") as f:
-                attachment = MIMEBase(main_type, sub_type)
-                attachment.set_payload(f.read())
-                encoders.encode_base64(attachment)
-                attachment.add_header(
-                    "Content-Disposition",
-                    "attachment",
-                    filename=path.name,
-                )
-                message.attach(attachment)
+            attachment = MIMEBase(main_type, sub_type)
+            attachment.set_payload(attachment_bytes)
+            encoders.encode_base64(attachment)
+            attachment.add_header(
+                "Content-Disposition",
+                "attachment",
+                filename=filename,
+            )
+            message.attach(attachment)
     else:
         message = MIMEText(body)
 
@@ -2516,7 +2522,7 @@ class GSuiteClient:
         Args:
             message_id: The message ID to reply to
             body: Reply body (plain text)
-            attachments: Optional list of file paths to attach
+            attachments: Optional list of Centaur attachment IDs or download URLs to attach
 
         Returns:
             Dict with id, thread_id
