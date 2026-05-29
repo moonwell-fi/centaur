@@ -443,7 +443,7 @@ class TestResolveHarnessProfile:
             1. engine_override
             2. harness (when DIFFERENT from persona's declared engine)
             3. persona.engine
-            4. system default ("codex")
+            4. deployment default (CENTAUR_DEFAULT_HARNESS, falling back to "codex")
 
         Regression-locked: the previous resolver hardcoded engine="codex"
         for harness=="amp" regardless of persona, silently dropping the
@@ -487,7 +487,10 @@ class TestResolveHarnessProfile:
         # Rule 4: no override, no persona → harness if given, else system default.
         assert resolve("amp", persona=None)[0] == "amp"
         assert resolve("claude-code", persona=None)[0] == "claude-code"
+        monkeypatch.delenv("CENTAUR_DEFAULT_HARNESS", raising=False)
         assert resolve(None, persona=None)[0] == "codex"
+        monkeypatch.setenv("CENTAUR_DEFAULT_HARNESS", "claude")
+        assert resolve(None, persona=None)[0] == "claude-code"
 
     def test_unknown_harness_or_persona_is_rejected(self, monkeypatch):
         import sys
@@ -537,7 +540,8 @@ class TestBuildSessionContext:
 
         ctx = _build_session_context("test:1", platform="slack", user_id="U123")
         assert "Slack Formatting Rules" in ctx
-        assert "<@U123>" in ctx
+        assert "<@U123>" not in ctx
+        assert "Do not @-mention or tag the requester" in ctx
         assert "test:1" in ctx
 
     def test_no_platform(self):
@@ -552,7 +556,16 @@ class TestBuildSessionContext:
 
         ctx = _build_session_context("test:1", platform="slack")
         assert "Slack Formatting Rules" in ctx
-        assert "tag the requester" not in ctx
+        assert "their real Slack mention" not in ctx
+        assert "Do not @-mention or tag the requester" in ctx
+
+    def test_slack_bot_user_id_not_mentioned(self):
+        from api.agent import _build_session_context
+
+        ctx = _build_session_context("test:1", platform="slack", user_id="B123")
+        assert "Slack Formatting Rules" in ctx
+        assert "<@B123>" not in ctx
+        assert "Do not @-mention or tag the requester" in ctx
 
     def test_contains_timestamp(self):
         from api.agent import _build_session_context
@@ -579,6 +592,10 @@ class TestBuildSessionContext:
         assert "Requester Identity" in ctx
         assert "GitHub handle from Slack profile: @alice" in ctx
         assert "GitHub handle verified: yes" in ctx
+        assert "GitHub PR Attribution" in ctx
+        assert "Prompted by: @alice" in ctx
+        assert "Assign the PR to the requester when possible: `alice`" in ctx
+        assert "not a Slack response mention rule" in ctx
 
     def test_requester_identity_without_github_handle(self):
         from api.agent import _build_session_context
@@ -600,6 +617,9 @@ class TestBuildSessionContext:
         assert "GitHub handle from Slack profile: unavailable" in ctx
         assert "no GitHub custom field found on Slack profile" in ctx
         assert "GitHub handle verified: no" in ctx
+        assert "GitHub PR Attribution" in ctx
+        assert "do not infer a GitHub username" in ctx
+        assert "Omit the `Prompted by` line" in ctx
 
     def test_extract_github_handle_from_slack_profile(self):
         from api.agent import _extract_github_handle_from_slack_profile
@@ -759,6 +779,54 @@ class TestBuildSessionContext:
             parts = json.loads(parts)
         assert "Requester Identity" in parts[0]["text"]
         assert "Slack user ID: U123" in parts[0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_insert_system_message_preserves_created_at_on_refresh(
+        self, db_pool, monkeypatch
+    ):
+        from api import agent
+
+        thread_key = "test:requester-context-order"
+
+        async def fake_resolve_requester_identity(*, platform, user_id):
+            return {
+                "slack_user_id": user_id,
+                "slack_mention": f"<@{user_id}>",
+                "github_handle": "@alice",
+                "github_handle_source": 'Slack profile custom field "GitHub"',
+                "github_handle_verified": True,
+            }
+
+        monkeypatch.setattr(
+            agent,
+            "_resolve_requester_identity",
+            fake_resolve_requester_identity,
+        )
+
+        await agent._insert_system_message(thread_key, "slack", user_id="U123")
+        first_created_at = await db_pool.fetchval(
+            "SELECT created_at FROM chat_messages WHERE id = $1",
+            f"system-{thread_key}-slack",
+        )
+
+        await db_pool.execute(
+            "UPDATE chat_messages SET created_at = NOW() + INTERVAL '1 minute' "
+            "WHERE id = $1",
+            f"system-{thread_key}-slack",
+        )
+        expected_created_at = await db_pool.fetchval(
+            "SELECT created_at FROM chat_messages WHERE id = $1",
+            f"system-{thread_key}-slack",
+        )
+
+        await agent._insert_system_message(thread_key, "slack", user_id="U123")
+        refreshed_created_at = await db_pool.fetchval(
+            "SELECT created_at FROM chat_messages WHERE id = $1",
+            f"system-{thread_key}-slack",
+        )
+
+        assert first_created_at is not None
+        assert refreshed_created_at == expected_created_at
 
 
 # ── Test 7: Status endpoint ──────────────────────────────────────────────────

@@ -7,6 +7,13 @@ export type SlackEnvelopeEvent = {
   user_team?: string
   source_team?: string
   bot_id?: string
+  app_id?: string
+  bot_profile?: {
+    user_id?: string
+    app_id?: string
+    name?: string
+    team_id?: string
+  }
   channel?: string
   channel_type?: string
   team?: string
@@ -15,6 +22,19 @@ export type SlackEnvelopeEvent = {
   thread_ts?: string
   event_ts?: string
   blocks?: AnyBlock[]
+  attachments?: Array<{
+    fallback?: string
+    pretext?: string
+    title?: string
+    title_link?: string
+    text?: string
+    fields?: Array<{
+      title?: string
+      value?: string
+    }>
+    footer?: string
+    blocks?: AnyBlock[]
+  }>
   files?: SlackMessageFile[]
   codex_thread_id?: string
   agent_thread_id?: string
@@ -66,6 +86,9 @@ export type NormalizedSlackEvent = {
     enterprise_id?: string
     user_team?: string
     source_team?: string
+    bot_id?: string
+    app_id?: string
+    bot_user_id?: string
   }
 }
 
