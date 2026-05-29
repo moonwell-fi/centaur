@@ -528,6 +528,12 @@ function deploySecretsFileForBackend(secretBackend: string, overlayPath: string)
   return secretBackend === 'local-env' ? join(overlayPath, 'secrets.local.env') : undefined
 }
 
+function deploySecretsFileForDoctor(secretBackend: string, overlayPath: string, localEnvPath?: string) {
+  return secretBackend === 'local-env'
+    ? localEnvPath || deploySecretsFileForBackend(secretBackend, overlayPath)
+    : deploySecretsFileForBackend(secretBackend, overlayPath)
+}
+
 type SetupPlanOptions = {
   org: string
   assistantName: string
@@ -2462,43 +2468,35 @@ export const app = Cli.create('centaur', {
       }
       const ok = allOk(results)
       setFailedExit(ok)
+      const deployCommand = deploymentCommandForInstallMode(c.options.installMode, {
+        apply: true,
+        imageSource: c.options.imageSource,
+        secretsFile: deploySecretsFileForDoctor(
+          c.options.secretBackend,
+          c.options.overlayPath,
+          c.options.localEnvPath,
+        ),
+      })
       return c.ok(
         { ok, results },
         {
           cta: {
             commands: [
               {
-                command: commandLine([
-                  'secrets',
-                  'collect',
-                  '--backend',
-                  c.options.secretBackend,
-                  '--install-mode',
-                  c.options.installMode,
-                  '--harness',
-                  c.options.harness,
-                  '--auth-mode',
-                  c.options.authMode,
-                  '--overlay-path',
-                  c.options.overlayPath,
-                ]),
+                command: commandLine(secretsCollectCommandParts({
+                  backend: c.options.secretBackend,
+                  installMode: c.options.installMode,
+                  imageSource: c.options.imageSource,
+                  harness: c.options.harness,
+                  authMode: c.options.authMode,
+                  overlayPath: c.options.overlayPath,
+                  localEnvPath: c.options.localEnvPath,
+                })),
                 description: 'populate missing Slack, harness, and infra secrets',
               },
               {
-                command: commandLine([
-                  'deploy',
-                  'k3s',
-                  '--apply',
-                  '--image-source',
-                  c.options.imageSource,
-                  '--secrets-file',
-                  deploySecretsFileForBackend('local-env', c.options.overlayPath)!,
-                ]),
-                description: 'for local development, apply local secrets and deploy with Helm',
-              },
-              {
-                command: commandLine(['deploy', 'k8s', '--apply', '--image-source', c.options.imageSource]),
-                description: 'for an existing cluster, deploy with Helm',
+                command: deployCommand,
+                description: 'deploy with Helm using the selected install mode and secret backend',
               },
               {
                 command: localRunVerificationCommand(c.options.harness),

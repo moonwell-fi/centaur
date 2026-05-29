@@ -909,6 +909,59 @@ describe('secret backends', () => {
     }
   })
 
+  it('uses the selected backend and install mode in doctor deploy CTAs', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'centaur-cli-doctor-'))
+    const overlayPath = join(root, 'org')
+    const { stdout } = await runCliWithExit([
+      'doctor',
+      '--secret-backend',
+      'kubernetes',
+      '--install-mode',
+      'k8s',
+      '--image-source',
+      'ghcr',
+      '--overlay-path',
+      overlayPath,
+      '--json',
+    ])
+    const output = JSON.parse(stdout)
+    const deploy = output.cta.commands.find((command: { command: string }) =>
+      command.command.startsWith('centaur deploy '),
+    )
+
+    expect(deploy.command).toContain('centaur deploy k8s --apply --image-source ghcr')
+    expect(deploy.command).toContain('--wait --timeout 10m')
+    expect(deploy.command).not.toContain('--secrets-file')
+  })
+
+  it('preserves custom local-env paths in doctor deploy CTAs', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'centaur-cli-doctor-local-'))
+    const overlayPath = join(root, 'org')
+    const localEnvPath = join(root, 'custom.env')
+    const { stdout } = await runCliWithExit([
+      'doctor',
+      '--secret-backend',
+      'local-env',
+      '--install-mode',
+      'local',
+      '--image-source',
+      'ghcr',
+      '--overlay-path',
+      overlayPath,
+      '--local-env-path',
+      localEnvPath,
+      '--json',
+    ])
+    const output = JSON.parse(stdout)
+    const deploy = output.cta.commands.find((command: { command: string }) =>
+      command.command.startsWith('centaur deploy '),
+    )
+
+    expect(deploy.command).toContain('centaur deploy k3s --apply --image-source ghcr')
+    expect(deploy.command).toContain(`--secrets-file ${localEnvPath}`)
+    expect(deploy.command).not.toContain(join(overlayPath, 'secrets.local.env'))
+  })
+
   it('reports every missing from-env secret input with retry CTAs', async () => {
     const root = mkdtempSync(join(tmpdir(), 'centaur-cli-missing-env-'))
     const overlayPath = join(root, 'org')
