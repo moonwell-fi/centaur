@@ -44,6 +44,9 @@ struct Args {
 
     #[arg(long)]
     exit_on_terminal: bool,
+
+    #[arg(long)]
+    exit_on_output_type: Option<String>,
 }
 
 #[tokio::main]
@@ -62,7 +65,13 @@ async fn main() -> Result<()> {
 
     if attach_mode {
         let events_response = open_event_stream(&client, &session_url, args.after_event_id).await?;
-        return stream_output_lines(events_response, args.all_events, args.exit_on_terminal).await;
+        return stream_output_lines(
+            events_response,
+            args.all_events,
+            args.exit_on_terminal,
+            args.exit_on_output_type,
+        )
+        .await;
     }
 
     let input_lines = session_input_lines(&args)?;
@@ -107,8 +116,12 @@ async fn main() -> Result<()> {
         args.max_duration_ms,
     );
 
-    let stream_future =
-        stream_output_lines(events_response, args.all_events, args.exit_on_terminal);
+    let stream_future = stream_output_lines(
+        events_response,
+        args.all_events,
+        args.exit_on_terminal,
+        args.exit_on_output_type,
+    );
     tokio::pin!(stream_future);
 
     tokio::select! {
@@ -224,6 +237,7 @@ async fn stream_output_lines(
     response: reqwest::Response,
     all_events: bool,
     exit_on_terminal: bool,
+    exit_on_output_type: Option<String>,
 ) -> Result<()> {
     let mut chunks = response.bytes_stream();
     let mut buffer = String::new();
@@ -246,6 +260,9 @@ async fn stream_output_lines(
                     event.id.as_deref().unwrap_or("unknown"),
                     event.data
                 );
+                if output_type_matches(&event.data, exit_on_output_type.as_deref()) {
+                    return Ok(());
+                }
             } else if all_events {
                 let data = parse_json_or_string(&event.data);
                 println!(
@@ -265,6 +282,21 @@ async fn stream_output_lines(
     }
 
     Ok(())
+}
+
+fn output_type_matches(data: &str, expected_type: Option<&str>) -> bool {
+    let Some(expected_type) = expected_type else {
+        return false;
+    };
+    serde_json::from_str::<Value>(data)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("type")
+                .and_then(Value::as_str)
+                .map(|event_type| event_type == expected_type)
+        })
+        .unwrap_or(false)
 }
 
 fn session_input_lines(args: &Args) -> Result<Vec<String>> {
