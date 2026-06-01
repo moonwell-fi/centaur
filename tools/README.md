@@ -31,6 +31,50 @@ def _client() -> MyClient:
     return MyClient()
 ```
 
+## Packaging CLI tools
+
+Python CLIs must be real Python packages with console-script entrypoints. The
+sandbox runner does not import `cli.py` by path or scrape dependencies from
+`pyproject.toml`; it runs the package entrypoint with `uv tool run`.
+
+Use a collision-safe internal package name so tool commands like `slack` do not
+fight vendor packages that expose the same top-level import:
+
+```toml
+[project.scripts]
+my-tool = "centaur_tool_my_tool.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.hatch.build.targets.wheel.sources]
+"." = "centaur_tool_my_tool"
+```
+
+The command name should match the tool directory name. Keep `cli.py` as a Typer
+app named `app`.
+
+Rust CLIs can be mounted as a tool directory with `Cargo.toml`; `centaur-tools`
+runs them with `cargo run` and keeps `CARGO_TARGET_DIR` under its cache. Go CLIs
+can be mounted as a tool directory with `go.mod`; `centaur-tools` runs them with
+`go run -mod=readonly` and keeps `GOCACHE`/`GOMODCACHE` under its cache.
+
+## Dynamic mounting
+
+CLI tools do not need to be baked into the sandbox image. Mount one or more tool
+source roots read-only and expose them through `TOOL_DIRS`:
+
+```bash
+export TOOL_DIRS=/app/tools:/app/overlay/org/tools
+centaur-tools list
+centaur-tools run websearch search "latest account abstraction research"
+```
+
+`centaur-tools` also searches common workspace and `~/github/*/*/tools` roots,
+so a sandbox can use base or overlay tools that are mounted beside the working
+repo. The sandbox image only needs the language toolchains (`uv`, Rust, Go,
+Node, shell); the CLI inventory comes from mounted source.
+
 ## Secrets
 
 Secrets are resolved in this order:

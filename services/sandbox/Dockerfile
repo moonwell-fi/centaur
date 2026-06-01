@@ -14,6 +14,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     ripgrep fd-find jq tree tmux unzip xz-utils gettext-base vim \
     postgresql-client libpq-dev \
     python3 python3-pip python3-venv python3-dev \
+    golang-go \
     texlive texlive-latex-base texlive-latex-extra \
     texlive-latex-recommended texlive-fonts-recommended \
     texlive-plain-generic texlive-science tipa cm-super \

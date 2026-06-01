@@ -1,50 +1,13 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use regex::Regex;
 use serde_json::json;
 use thiserror::Error;
-
-const PYTHON_BRIDGE: &str = r#"
-import importlib.util
-import pathlib
-import re
-import sys
-import types
-
-tool_dir = pathlib.Path(sys.argv[1]).resolve()
-tool_name = sys.argv[2]
-args = sys.argv[3:]
-package_name = "centaur_cli_" + re.sub(r"[^A-Za-z0-9_]", "_", tool_name)
-
-for parent in (tool_dir, *tool_dir.parents):
-    if (parent / "centaur_sdk").is_dir():
-        sys.path.insert(0, str(parent))
-        break
-
-package = types.ModuleType(package_name)
-package.__path__ = [str(tool_dir)]
-sys.modules[package_name] = package
-
-spec = importlib.util.spec_from_file_location(f"{package_name}.cli", tool_dir / "cli.py")
-if spec is None or spec.loader is None:
-    raise SystemExit(f"could not load CLI for {tool_name}")
-module = importlib.util.module_from_spec(spec)
-module.__package__ = package_name
-sys.modules[spec.name] = module
-spec.loader.exec_module(module)
-
-app = getattr(module, "app", None)
-if app is None:
-    raise SystemExit(f"{tool_name} has no Typer app named 'app'")
-sys.argv = [tool_name, *args]
-app()
-"#;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -64,6 +27,7 @@ enum Commands {
     /// Show commands and run syntax for one tool.
     Discover { tool: String },
     /// Run a local CLI tool.
+    #[command(disable_help_flag = true)]
     Run {
         tool: String,
         #[arg(num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
@@ -92,12 +56,8 @@ enum Error {
     },
     #[error("failed to print help: {0}")]
     PrintHelp(std::io::Error),
-    #[error("failed to write Python bridge to uv: {0}")]
-    WriteBridge(std::io::Error),
     #[error("HOME is not set and XDG_CACHE_HOME was not provided")]
     MissingHome,
-    #[error("failed to open stdin for Python bridge")]
-    MissingBridgeStdin,
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -116,8 +76,10 @@ struct ToolRow {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RunnerKind {
     Exec,
+    Go,
     Node,
     Python,
+    Rust,
     Shell,
 }
 
@@ -125,8 +87,10 @@ impl RunnerKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Exec => "exec",
+            Self::Go => "go",
             Self::Node => "node",
             Self::Python => "python",
+            Self::Rust => "rust",
             Self::Shell => "shell",
         }
     }
@@ -224,6 +188,8 @@ fn run_tool(tool: &str, args: Vec<OsString>) -> Result<i32> {
             run_external(&row.runner, std::iter::empty::<&OsStr>(), &args, &row.dir)
         }
         RunnerKind::Python => run_python_tool(&row, &args),
+        RunnerKind::Rust => run_rust_tool(&row, &args),
+        RunnerKind::Go => run_go_tool(&row, &args),
     }
 }
 
@@ -247,66 +213,69 @@ where
 }
 
 fn run_python_tool(row: &ToolRow, args: &[OsString]) -> Result<i32> {
-    let env_dir = python_env_dir(&row.name, &row.dir)?;
-    if let Some(parent) = env_dir.parent() {
-        fs::create_dir_all(parent).map_err(|source| Error::CreateDir {
-            path: parent.to_path_buf(),
-            source,
-        })?;
+    let mut command = Command::new("uv");
+    command
+        .args(["tool", "run", "--isolated", "--from"])
+        .arg(&row.dir);
+    if let Some(sdk_path) = centaur_sdk_path(&row.dir) {
+        command.arg("--with").arg(sdk_path);
     }
-
-    let python = env_dir.join("bin").join("python");
-    let venv_status = Command::new("uv")
-        .args(["venv", "--quiet", "--allow-existing"])
-        .arg(&env_dir)
-        .current_dir(&row.dir)
-        .status()
-        .map_err(|source| Error::Spawn {
-            program: "uv venv".to_owned(),
-            source,
-        })?;
-    if !venv_status.success() {
-        return Ok(exit_code(venv_status));
-    }
-
-    let pip_status = Command::new("uv")
-        .args(["pip", "install", "--python"])
-        .arg(&python)
-        .args(["--quiet", "-r", "pyproject.toml"])
-        .current_dir(&row.dir)
-        .status()
-        .map_err(|source| Error::Spawn {
-            program: "uv pip install".to_owned(),
-            source,
-        })?;
-    if !pip_status.success() {
-        return Ok(exit_code(pip_status));
-    }
-
-    let mut child = Command::new("uv")
-        .args(["run", "--no-project", "--python"])
-        .arg(&python)
-        .args(["python", "-"])
-        .arg(&row.dir)
+    let status = command
         .arg(&row.name)
         .args(args)
         .current_dir(&row.dir)
-        .stdin(Stdio::piped())
-        .spawn()
+        .status()
         .map_err(|source| Error::Spawn {
-            program: "uv run".to_owned(),
+            program: "uv tool run".to_owned(),
             source,
         })?;
-    child
-        .stdin
-        .as_mut()
-        .ok_or(Error::MissingBridgeStdin)?
-        .write_all(PYTHON_BRIDGE.as_bytes())
-        .map_err(Error::WriteBridge)?;
-    let status = child.wait().map_err(|source| Error::Spawn {
-        program: "uv run".to_owned(),
+    Ok(exit_code(status))
+}
+
+fn run_rust_tool(row: &ToolRow, args: &[OsString]) -> Result<i32> {
+    let target_dir = tool_cache_dir("cargo-target", &row.name, &row.dir)?;
+    fs::create_dir_all(&target_dir).map_err(|source| Error::CreateDir {
+        path: target_dir.clone(),
         source,
     })?;
+    let status = Command::new("cargo")
+        .args(["run", "--quiet", "--manifest-path"])
+        .arg(&row.runner)
+        .arg("--")
+        .args(args)
+        .current_dir(&row.dir)
+        .env("CARGO_TARGET_DIR", target_dir)
+        .status()
+        .map_err(|source| Error::Spawn {
+            program: "cargo run".to_owned(),
+            source,
+        })?;
+    Ok(exit_code(status))
+}
+
+fn run_go_tool(row: &ToolRow, args: &[OsString]) -> Result<i32> {
+    let cache_dir = tool_cache_dir("go", &row.name, &row.dir)?;
+    let build_cache = cache_dir.join("build");
+    let module_cache = cache_dir.join("mod");
+    fs::create_dir_all(&build_cache).map_err(|source| Error::CreateDir {
+        path: build_cache.clone(),
+        source,
+    })?;
+    fs::create_dir_all(&module_cache).map_err(|source| Error::CreateDir {
+        path: module_cache.clone(),
+        source,
+    })?;
+    let status = Command::new("go")
+        .args(["run", "-mod=readonly", "."])
+        .args(args)
+        .current_dir(&row.dir)
+        .env("GOCACHE", build_cache)
+        .env("GOMODCACHE", module_cache)
+        .status()
+        .map_err(|source| Error::Spawn {
+            program: "go run".to_owned(),
+            source,
+        })?;
     Ok(exit_code(status))
 }
 
@@ -348,23 +317,6 @@ fn discover_rows_from_roots(roots: Vec<PathBuf>) -> Vec<ToolRow> {
 
 fn candidate_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
-    let pwd = std::env::var_os("PWD")
-        .map(PathBuf::from)
-        .or_else(|| std::env::current_dir().ok());
-    if let Some(pwd) = pwd {
-        push_if_dir(&mut roots, pwd.join("tools"));
-    }
-
-    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-        push_if_dir(&mut roots, home.join("workspace").join("tools"));
-    }
-
-    if let Some(tool_dirs) = std::env::var_os("TOOL_DIRS") {
-        for dir in std::env::split_paths(&tool_dirs) {
-            push_if_dir(&mut roots, dir);
-        }
-    }
-
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         let github = home.join("github");
         push_if_dir(&mut roots, github.join("tools"));
@@ -373,6 +325,20 @@ fn candidate_roots() -> Vec<PathBuf> {
             for repo in sorted_child_dirs(&org) {
                 push_if_dir(&mut roots, repo.join("tools"));
             }
+        }
+        push_if_dir(&mut roots, home.join("workspace").join("tools"));
+    }
+
+    let pwd = std::env::var_os("PWD")
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok());
+    if let Some(pwd) = pwd {
+        push_if_dir(&mut roots, pwd.join("tools"));
+    }
+
+    if let Some(tool_dirs) = std::env::var_os("TOOL_DIRS") {
+        for dir in std::env::split_paths(&tool_dirs) {
+            push_if_dir(&mut roots, dir);
         }
     }
 
@@ -420,7 +386,7 @@ fn find_tool_row(tool: &str) -> Option<ToolRow> {
 }
 
 fn runner_for_dir(dir: &Path) -> Option<PathBuf> {
-    ["cli", "cli.sh", "cli.js", "cli.py"]
+    ["cli", "cli.sh", "cli.js", "cli.py", "Cargo.toml", "go.mod"]
         .into_iter()
         .map(|name| dir.join(name))
         .find(|path| path.is_file())
@@ -431,6 +397,8 @@ fn runner_kind(runner: &Path) -> RunnerKind {
         Some("py") => RunnerKind::Python,
         Some("sh") => RunnerKind::Shell,
         Some("js") => RunnerKind::Node,
+        Some("toml") if runner.file_name() == Some(OsStr::new("Cargo.toml")) => RunnerKind::Rust,
+        Some("mod") if runner.file_name() == Some(OsStr::new("go.mod")) => RunnerKind::Go,
         _ => RunnerKind::Exec,
     }
 }
@@ -533,7 +501,7 @@ fn is_executable(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn python_env_dir(tool_name: &str, dir: &Path) -> Result<PathBuf> {
+fn tool_cache_dir(kind: &str, tool_name: &str, dir: &Path) -> Result<PathBuf> {
     let cache_home = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
         .or_else(|| {
@@ -544,7 +512,41 @@ fn python_env_dir(tool_name: &str, dir: &Path) -> Result<PathBuf> {
         .ok_or(Error::MissingHome)?;
     Ok(cache_home
         .join("centaur-tools")
+        .join(kind)
         .join(format!("{tool_name}-{}", stable_path_key(dir))))
+}
+
+fn centaur_sdk_path(tool_dir: &Path) -> Option<PathBuf> {
+    for ancestor in tool_dir.ancestors() {
+        let candidate = ancestor.join("centaur_sdk");
+        if is_python_package_dir(&candidate) {
+            return Some(candidate);
+        }
+    }
+
+    let mut roots = Vec::new();
+    if let Some(pwd) = std::env::var_os("PWD").map(PathBuf::from) {
+        roots.push(pwd);
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        roots.push(home.join("workspace"));
+        let github = home.join("github");
+        for org in sorted_child_dirs(&github) {
+            roots.push(org.clone());
+            for repo in sorted_child_dirs(&org) {
+                roots.push(repo);
+            }
+        }
+    }
+
+    roots
+        .into_iter()
+        .map(|root| root.join("centaur_sdk"))
+        .find(|candidate| is_python_package_dir(candidate))
+}
+
+fn is_python_package_dir(path: &Path) -> bool {
+    path.join("pyproject.toml").is_file() && path.join("__init__.py").is_file()
 }
 
 fn stable_path_key(path: &Path) -> u64 {
@@ -562,6 +564,7 @@ fn stable_path_key(path: &Path) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Stdio;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     struct TempTree {
@@ -652,6 +655,128 @@ def fields():
     }
 
     #[test]
+    fn discovers_python_rust_and_go_tool_packages() {
+        let temp = TempTree::new("polyglot");
+        temp.write(
+            "tools/pythonish/cli.py",
+            "import typer\napp = typer.Typer()\n",
+        );
+        temp.write(
+            "tools/rusty/Cargo.toml",
+            r#"[package]
+name = "rusty"
+version = "0.1.0"
+edition = "2021"
+"#,
+        );
+        temp.write(
+            "tools/gopher/go.mod",
+            r#"module example.com/gopher
+
+go 1.22
+"#,
+        );
+
+        let rows = discover_rows_from_roots(vec![temp.path("tools")]);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (row.name.as_str(), row.kind))
+                .collect::<Vec<_>>(),
+            vec![
+                ("gopher", RunnerKind::Go),
+                ("pythonish", RunnerKind::Python),
+                ("rusty", RunnerKind::Rust),
+            ]
+        );
+    }
+
+    #[test]
+    fn runs_source_mounted_rust_cli() {
+        if !command_available("cargo") {
+            eprintln!("skipping Rust CLI proof because cargo is not installed");
+            return;
+        }
+
+        let temp = TempTree::new("rust-run");
+        let manifest = temp.write(
+            "tools/rusty/Cargo.toml",
+            r#"[package]
+name = "rusty"
+version = "0.1.0"
+edition = "2021"
+"#,
+        );
+        temp.write(
+            "tools/rusty/src/main.rs",
+            r#"fn main() {
+    if std::env::args().nth(1).as_deref() == Some("ping") {
+        println!("rust-ok");
+    } else {
+        std::process::exit(2);
+    }
+}
+"#,
+        );
+        let row = ToolRow {
+            name: "rusty".to_owned(),
+            dir: temp.path("tools/rusty"),
+            summary: "CLI tool".to_owned(),
+            command_count: 0,
+            kind: RunnerKind::Rust,
+            runner: manifest,
+            commands: Vec::new(),
+        };
+
+        assert_eq!(run_rust_tool(&row, &[OsString::from("ping")]).unwrap(), 0);
+    }
+
+    #[test]
+    fn runs_source_mounted_go_cli() {
+        if !command_available("go") {
+            eprintln!("skipping Go CLI proof because go is not installed");
+            return;
+        }
+
+        let temp = TempTree::new("go-run");
+        let manifest = temp.write(
+            "tools/gopher/go.mod",
+            r#"module example.com/gopher
+
+go 1.22
+"#,
+        );
+        temp.write(
+            "tools/gopher/main.go",
+            r#"package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "ping" {
+		fmt.Println("go-ok")
+		return
+	}
+	os.Exit(2)
+}
+"#,
+        );
+        let row = ToolRow {
+            name: "gopher".to_owned(),
+            dir: temp.path("tools/gopher"),
+            summary: "CLI tool".to_owned(),
+            command_count: 0,
+            kind: RunnerKind::Go,
+            runner: manifest,
+            commands: Vec::new(),
+        };
+
+        assert_eq!(run_go_tool(&row, &[OsString::from("ping")]).unwrap(), 0);
+    }
+
+    #[test]
     fn formats_list_output() {
         let temp = TempTree::new("list");
         temp.write("tools/slack/cli.js", "console.log('ok')\n");
@@ -682,5 +807,16 @@ def fields():
             stable_path_key(Path::new("/tmp/a")),
             stable_path_key(Path::new("/tmp/a"))
         );
+    }
+
+    fn command_available(command: &str) -> bool {
+        Command::new(command)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
     }
 }
