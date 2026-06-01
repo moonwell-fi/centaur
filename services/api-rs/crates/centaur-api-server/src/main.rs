@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, env, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
 use centaur_api_server::{SandboxRuntime, build_router_with_runtime};
-use centaur_iron_proxy::{SourceKind, SourcePolicy, load_fragment_files};
+use centaur_iron_proxy::{SourceKind, SourcePolicy, discover_fragment_files, load_fragment_files};
 use centaur_sandbox_agent_k8s::{AgentSandboxBackend, AgentSandboxConfig, IronProxyPodConfig};
 use centaur_sandbox_local::LocalSandboxBackend;
 use centaur_session_runtime::SandboxWorkloadMode;
@@ -171,7 +171,7 @@ fn default_sandbox_image(workload: SandboxWorkloadKind) -> &'static str {
 }
 
 fn iron_proxy_config_from_env() -> Result<Option<IronProxyPodConfig>, ServerError> {
-    let fragment_paths = iron_proxy_fragment_paths();
+    let fragment_paths = iron_proxy_fragment_paths()?;
     if !env_bool("SESSION_SANDBOX_IRON_PROXY_ENABLED") && fragment_paths.is_empty() {
         return Ok(None);
     }
@@ -243,8 +243,20 @@ fn iron_proxy_config_from_env() -> Result<Option<IronProxyPodConfig>, ServerErro
     Ok(Some(config))
 }
 
-fn iron_proxy_fragment_paths() -> Vec<PathBuf> {
-    env::var("SESSION_SANDBOX_IRON_PROXY_FRAGMENT_PATHS")
+fn iron_proxy_fragment_paths() -> Result<Vec<PathBuf>, ServerError> {
+    let mut paths = split_env_paths("SESSION_SANDBOX_IRON_PROXY_FRAGMENT_PATHS");
+    let mut dirs = split_env_paths("SESSION_SANDBOX_IRON_PROXY_FRAGMENT_DIRS");
+    if dirs.is_empty() {
+        dirs.extend(split_env_paths("TOOL_DIRS"));
+    }
+    paths.extend(discover_fragment_files(&dirs)?);
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn split_env_paths(name: &str) -> Vec<PathBuf> {
+    env::var(name)
         .unwrap_or_default()
         .split([',', ':'])
         .map(str::trim)
