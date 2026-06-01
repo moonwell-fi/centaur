@@ -1,10 +1,17 @@
-use std::{convert::Infallible, convert::TryFrom};
+use std::{
+    convert::{Infallible, TryFrom},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
+    http::StatusCode,
     response::{
-        Sse,
+        IntoResponse, Response, Sse,
         sse::{Event, KeepAlive},
     },
     routing::{get, post},
@@ -26,24 +33,88 @@ use crate::{
 #[derive(Clone)]
 pub struct AppState {
     runtime: SessionRuntime,
+    lifecycle: ServerLifecycle,
+}
+
+#[derive(Clone, Debug)]
+pub struct ServerLifecycle {
+    ready: Arc<AtomicBool>,
+}
+
+impl ServerLifecycle {
+    pub fn new_ready() -> Self {
+        Self {
+            ready: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    pub fn mark_draining(&self) {
+        self.ready.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.ready.load(Ordering::SeqCst)
+    }
+}
+
+impl Default for ServerLifecycle {
+    fn default() -> Self {
+        Self::new_ready()
+    }
 }
 
 pub fn build_router_with_runtime(store: PgSessionStore, sandbox_runtime: SandboxRuntime) -> Router {
-    build_router_with_session_runtime(SessionRuntime::new(store, sandbox_runtime))
+    build_router_with_runtime_and_lifecycle(store, sandbox_runtime, ServerLifecycle::new_ready())
+}
+
+pub fn build_router_with_runtime_and_lifecycle(
+    store: PgSessionStore,
+    sandbox_runtime: SandboxRuntime,
+    lifecycle: ServerLifecycle,
+) -> Router {
+    build_router_with_session_runtime_and_lifecycle(
+        SessionRuntime::new(store, sandbox_runtime),
+        lifecycle,
+    )
 }
 
 pub fn build_router_with_session_runtime(runtime: SessionRuntime) -> Router {
+    build_router_with_session_runtime_and_lifecycle(runtime, ServerLifecycle::new_ready())
+}
+
+pub fn build_router_with_session_runtime_and_lifecycle(
+    runtime: SessionRuntime,
+    lifecycle: ServerLifecycle,
+) -> Router {
     Router::new()
+        .route("/health", get(healthz))
         .route("/healthz", get(healthz))
+        .route("/health/ready", get(readyz))
+        .route("/readyz", get(readyz))
         .route("/api/session/{thread_key}", post(create_or_get_session))
         .route("/api/session/{thread_key}/messages", post(append_messages))
         .route("/api/session/{thread_key}/execute", post(execute_session))
         .route("/api/session/{thread_key}/events", get(stream_events))
-        .with_state(AppState { runtime })
+        .with_state(AppState { runtime, lifecycle })
 }
 
 async fn healthz() -> Json<Value> {
     Json(json!({"ok": true}))
+}
+
+async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+    readiness_response(&state.lifecycle)
+}
+
+fn readiness_response(lifecycle: &ServerLifecycle) -> Response {
+    if lifecycle.is_ready() {
+        return (StatusCode::OK, Json(json!({"ok": true}))).into_response();
+    }
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({"ok": false, "status": "draining"})),
+    )
+        .into_response()
 }
 
 async fn create_or_get_session(
@@ -121,4 +192,23 @@ async fn stream_events(
         Ok(sse)
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ServerLifecycle, readiness_response};
+    use axum::http::StatusCode;
+
+    #[test]
+    fn readiness_response_reflects_draining_state() {
+        let lifecycle = ServerLifecycle::new_ready();
+        assert_eq!(readiness_response(&lifecycle).status(), StatusCode::OK);
+
+        lifecycle.mark_draining();
+
+        assert_eq!(
+            readiness_response(&lifecycle).status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 }

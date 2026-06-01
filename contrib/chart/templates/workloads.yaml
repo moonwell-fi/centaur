@@ -111,6 +111,12 @@ metadata:
 {{ include "centaur.componentLabels" (dict "root" . "component" "api") | nindent 4 }}
 spec:
   replicas: {{ .Values.api.replicaCount }}
+  minReadySeconds: {{ .Values.api.minReadySeconds }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: {{ .Values.api.rollingUpdate.maxSurge | quote }}
+      maxUnavailable: {{ .Values.api.rollingUpdate.maxUnavailable | quote }}
   selector:
     matchLabels:
 {{ include "centaur.componentSelectorLabels" (dict "root" . "component" "api") | nindent 6 }}
@@ -233,6 +239,10 @@ spec:
               value: {{ ternary "1" "0" .Values.api.warmPoolEnabled | quote }}
             - name: PLUGIN_WATCHER_ENABLED
               value: {{ ternary "1" "0" .Values.api.pluginWatcherEnabled | quote }}
+{{- if not (hasKey $apiExtraEnv "SHUTDOWN_READINESS_DRAIN_DELAY_S") }}
+            - name: SHUTDOWN_READINESS_DRAIN_DELAY_S
+              value: {{ .Values.api.shutdownReadinessDrainDelaySeconds | quote }}
+{{- end }}
 {{- if not (hasKey $apiExtraEnv "SLACK_ETL_ENABLED") }}
             - name: SLACK_ETL_ENABLED
               value: {{ ternary "1" "0" .Values.api.slackEtlEnabled | quote }}

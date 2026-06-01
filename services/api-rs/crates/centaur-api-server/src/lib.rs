@@ -5,7 +5,10 @@ pub mod types;
 
 pub use centaur_session_runtime::{SandboxRuntime, SessionRuntime};
 pub use error::ApiError;
-pub use routes::{build_router_with_runtime, build_router_with_session_runtime};
+pub use routes::{
+    ServerLifecycle, build_router_with_runtime, build_router_with_runtime_and_lifecycle,
+    build_router_with_session_runtime, build_router_with_session_runtime_and_lifecycle,
+};
 
 #[cfg(test)]
 mod tests {
@@ -23,7 +26,7 @@ mod tests {
     use centaur_session_sqlx::PgSessionStore;
     use sqlx::PgPool;
 
-    use super::build_router_with_runtime;
+    use super::{ServerLifecycle, build_router_with_runtime};
 
     #[tokio::test]
     async fn router_builds() {
@@ -33,6 +36,16 @@ mod tests {
             PgSessionStore::new(pool),
             SandboxRuntime::backend(Arc::new(TestBackend::default()), SandboxSpec::new("test")),
         );
+    }
+
+    #[test]
+    fn server_lifecycle_starts_ready_and_can_drain() {
+        let lifecycle = ServerLifecycle::new_ready();
+        assert!(lifecycle.is_ready());
+
+        lifecycle.mark_draining();
+
+        assert!(!lifecycle.is_ready());
     }
 
     #[derive(Default)]

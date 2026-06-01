@@ -1,6 +1,8 @@
 use std::{collections::BTreeMap, env, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
 
-use centaur_api_server::{SandboxRuntime, build_router_with_runtime};
+use centaur_api_server::{
+    SandboxRuntime, ServerLifecycle, build_router_with_runtime_and_lifecycle,
+};
 use centaur_iron_proxy::{SourceKind, SourcePolicy, discover_fragment_files, load_fragment_files};
 use centaur_sandbox_agent_k8s::{
     AgentSandboxBackend, AgentSandboxConfig, IronProxyPodConfig, StateVolumeConfig,
@@ -30,12 +32,19 @@ async fn main() -> Result<(), ServerError> {
     }
     let sandbox_runtime = sandbox_runtime_from_args(&args).await?;
 
+    let lifecycle = ServerLifecycle::new_ready();
     let listener = TcpListener::bind(args.bind_addr).await?;
     info!(bind_addr = %args.bind_addr, "starting centaur api-rs server");
 
-    axum::serve(listener, build_router_with_runtime(store, sandbox_runtime))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        build_router_with_runtime_and_lifecycle(store, sandbox_runtime, lifecycle.clone()),
+    )
+    .with_graceful_shutdown(shutdown_signal(
+        lifecycle,
+        Duration::from_secs(args.shutdown_readiness_drain_delay_s),
+    ))
+    .await?;
     Ok(())
 }
 
@@ -44,8 +53,40 @@ fn init_tracing() {
     tracing_fmt().with_env_filter(filter).json().init();
 }
 
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+async fn shutdown_signal(lifecycle: ServerLifecycle, drain_delay: Duration) {
+    let signal = wait_for_shutdown_signal().await;
+    lifecycle.mark_draining();
+    info!(
+        signal,
+        drain_delay_ms = drain_delay.as_millis(),
+        "received shutdown signal; marking server unready before graceful shutdown"
+    );
+    if !drain_delay.is_zero() {
+        tokio::time::sleep(drain_delay).await;
+    }
+    info!("readiness drain complete; stopping listener");
+}
+
+async fn wait_for_shutdown_signal() -> &'static str {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+        "ctrl_c"
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        let _ = signal.recv().await;
+        "sigterm"
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<&'static str>();
+
+    tokio::select! {
+        signal = ctrl_c => signal,
+        signal = terminate => signal,
+    }
 }
 
 async fn sandbox_runtime_from_args(args: &Args) -> Result<SandboxRuntime, ServerError> {
@@ -127,6 +168,8 @@ struct Args {
     bind_addr: SocketAddr,
     #[arg(long, env = "RUN_MIGRATIONS", default_value_t = false)]
     run_migrations: bool,
+    #[arg(long, env = "SHUTDOWN_READINESS_DRAIN_DELAY_S", default_value_t = 5)]
+    shutdown_readiness_drain_delay_s: u64,
     #[arg(
         long,
         env = "KUBERNETES_SANDBOX_BACKEND",
