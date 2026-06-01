@@ -209,7 +209,7 @@ fn default_sandbox_image(workload: SandboxWorkloadKind) -> &'static str {
 
 fn iron_proxy_config_from_env() -> Result<Option<IronProxyPodConfig>, ServerError> {
     let fragment_paths = iron_proxy_fragment_paths()?;
-    if !env_bool("SESSION_SANDBOX_IRON_PROXY_ENABLED") && fragment_paths.is_empty() {
+    if !iron_proxy_enabled_from_env(&fragment_paths) {
         return Ok(None);
     }
     let ca_cert_secret_name = env::var("SESSION_SANDBOX_IRON_PROXY_CA_CERT_SECRET_NAME")
@@ -316,6 +316,29 @@ fn iron_proxy_fragment_paths() -> Result<Vec<PathBuf>, ServerError> {
     Ok(paths)
 }
 
+fn iron_proxy_enabled_from_env(fragment_paths: &[PathBuf]) -> bool {
+    let has_kubernetes_proxy_config = nonempty_env("KUBERNETES_FIREWALL_CA_SECRET_NAME").is_some()
+        && nonempty_env("KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME").is_some();
+    iron_proxy_enabled(
+        env::var("SESSION_SANDBOX_IRON_PROXY_ENABLED")
+            .ok()
+            .as_deref(),
+        !fragment_paths.is_empty(),
+        has_kubernetes_proxy_config,
+    )
+}
+
+fn iron_proxy_enabled(
+    explicit: Option<&str>,
+    has_fragment_paths: bool,
+    has_kubernetes_proxy_config: bool,
+) -> bool {
+    if let Some(enabled) = explicit.and_then(parse_env_bool) {
+        return enabled;
+    }
+    has_fragment_paths || has_kubernetes_proxy_config
+}
+
 fn split_env_paths(name: &str) -> Vec<PathBuf> {
     env::var(name)
         .unwrap_or_default()
@@ -364,8 +387,18 @@ fn parse_label_selector(value: &str) -> BTreeMap<String, String> {
 
 fn env_bool(name: &str) -> bool {
     env::var(name)
-        .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .ok()
+        .as_deref()
+        .and_then(parse_env_bool)
         .unwrap_or(false)
+}
+
+fn parse_env_bool(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
 }
 
 fn sandbox_repos_path_from_env() -> Option<String> {
@@ -523,12 +556,27 @@ mod tests {
                 .any(|env| { env.name == "CENTAUR_THREAD_KEY" && env.value == "test:thread" })
         );
     }
+
+    #[test]
+    fn iron_proxy_enables_for_stock_kubernetes_proxy_config() {
+        assert!(iron_proxy_enabled(None, false, true));
+        assert!(iron_proxy_enabled(None, true, false));
+        assert!(!iron_proxy_enabled(None, false, false));
+    }
+
+    #[test]
+    fn iron_proxy_explicit_env_overrides_auto_detection() {
+        assert!(!iron_proxy_enabled(Some("0"), true, true));
+        assert!(!iron_proxy_enabled(Some("false"), true, true));
+        assert!(iron_proxy_enabled(Some("1"), false, false));
+        assert!(iron_proxy_enabled(Some("yes"), false, false));
+    }
 }
 
 #[derive(Debug, Error)]
 enum ServerError {
     #[error(
-        "SESSION_SANDBOX_IRON_PROXY_CA_CERT_SECRET_NAME/KUBERNETES_FIREWALL_CA_SECRET_NAME and SESSION_SANDBOX_IRON_PROXY_CA_KEY_SECRET_NAME/KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME are required when SESSION_SANDBOX_IRON_PROXY_ENABLED is set"
+        "SESSION_SANDBOX_IRON_PROXY_CA_CERT_SECRET_NAME/KUBERNETES_FIREWALL_CA_SECRET_NAME and SESSION_SANDBOX_IRON_PROXY_CA_KEY_SECRET_NAME/KUBERNETES_FIREWALL_CA_KEY_SECRET_NAME are required when sandbox iron-proxy is enabled"
     )]
     MissingIronProxyCaSecret,
     #[error(transparent)]
