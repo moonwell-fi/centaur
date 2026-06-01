@@ -54,7 +54,15 @@ async fn sandbox_runtime_from_args(args: &Args) -> Result<SandboxRuntime, Server
         )),
         SandboxBackendKind::AgentK8s => {
             let mut config = AgentSandboxConfig::new(args.session_sandbox_k8s_namespace.clone());
-            config.image_pull_policy = args.session_sandbox_image_pull_policy.clone();
+            config.image_pull_policy = args
+                .session_sandbox_image_pull_policy
+                .clone()
+                .or_else(|| nonempty_env("KUBERNETES_AGENT_IMAGE_PULL_POLICY"));
+            config.image_pull_secrets = sandbox_image_pull_secrets_from_env();
+            config.runtime_class_name = nonempty_env("SESSION_SANDBOX_RUNTIME_CLASS_NAME")
+                .or_else(|| nonempty_env("KUBERNETES_SANDBOX_RUNTIME_CLASS_NAME"));
+            config.service_account_name = nonempty_env("SESSION_SANDBOX_SERVICE_ACCOUNT_NAME")
+                .or_else(|| nonempty_env("KUBERNETES_SANDBOX_SERVICE_ACCOUNT_NAME"));
             config.ready_timeout = Duration::from_secs(args.session_sandbox_ready_timeout_secs);
             config.iron_proxy = iron_proxy_config_from_env()?;
 
@@ -214,7 +222,9 @@ fn iron_proxy_config_from_env() -> Result<Option<IronProxyPodConfig>, ServerErro
         .with_fragments(load_fragment_files(&fragment_paths)?);
     config.image_pull_policy = env::var("SESSION_SANDBOX_IRON_PROXY_IMAGE_PULL_POLICY")
         .or_else(|_| env::var("KUBERNETES_IRON_PROXY_IMAGE_PULL_POLICY"))
+        .or_else(|_| env::var("KUBERNETES_AGENT_IMAGE_PULL_POLICY"))
         .ok();
+    config.image_pull_secrets = sandbox_image_pull_secrets_from_env();
     config.source_policy = SourcePolicy::from_env();
     if let Some(secret_name) = env::var("SESSION_SANDBOX_IRON_PROXY_ENV_SECRET")
         .or_else(|_| env::var("KUBERNETES_SECRET_ENV_NAME"))
@@ -339,6 +349,17 @@ fn env_bool(name: &str) -> bool {
 
 fn sandbox_repos_path_from_env() -> Option<String> {
     nonempty_env("SESSION_SANDBOX_REPOS_PATH").or_else(|| nonempty_env("REPOS_PATH"))
+}
+
+fn sandbox_image_pull_secrets_from_env() -> Vec<String> {
+    env::var("SESSION_SANDBOX_IMAGE_PULL_SECRETS")
+        .or_else(|_| env::var("KUBERNETES_SANDBOX_IMAGE_PULL_SECRETS"))
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn nonempty_env(name: &str) -> Option<String> {

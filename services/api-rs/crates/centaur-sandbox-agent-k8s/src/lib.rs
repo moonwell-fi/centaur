@@ -43,6 +43,9 @@ pub struct AgentSandboxConfig {
     pub labels: BTreeMap<String, String>,
     pub annotations: BTreeMap<String, String>,
     pub image_pull_policy: Option<String>,
+    pub image_pull_secrets: Vec<String>,
+    pub runtime_class_name: Option<String>,
+    pub service_account_name: Option<String>,
     pub state_volume: Option<StateVolumeConfig>,
     pub iron_proxy: Option<IronProxyPodConfig>,
     pub ready_timeout: Duration,
@@ -57,6 +60,9 @@ impl AgentSandboxConfig {
             labels: BTreeMap::new(),
             annotations: BTreeMap::new(),
             image_pull_policy: None,
+            image_pull_secrets: Vec::new(),
+            runtime_class_name: None,
+            service_account_name: None,
             state_volume: None,
             iron_proxy: None,
             ready_timeout: Duration::from_secs(60),
@@ -73,6 +79,7 @@ impl AgentSandboxConfig {
 pub struct IronProxyPodConfig {
     pub image: String,
     pub image_pull_policy: Option<String>,
+    pub image_pull_secrets: Vec<String>,
     pub fragments: Vec<ProxyFragment>,
     pub source_policy: SourcePolicy,
     pub core_pg: Option<CorePgListener>,
@@ -97,6 +104,7 @@ impl IronProxyPodConfig {
         Self {
             image: image.into(),
             image_pull_policy: None,
+            image_pull_secrets: Vec::new(),
             fragments: Vec::new(),
             source_policy: SourcePolicy::default(),
             core_pg: None,
@@ -732,6 +740,21 @@ fn build_agent_sandbox(
     });
     insert_optional(
         &mut pod_spec,
+        "imagePullSecrets",
+        image_pull_secret_refs(&config.image_pull_secrets),
+    );
+    insert_optional(
+        &mut pod_spec,
+        "runtimeClassName",
+        config.runtime_class_name.clone(),
+    );
+    insert_optional(
+        &mut pod_spec,
+        "serviceAccountName",
+        config.service_account_name.clone(),
+    );
+    insert_optional(
+        &mut pod_spec,
         "volumes",
         (!volumes.is_empty()).then(|| std::mem::take(&mut volumes)),
     );
@@ -1088,6 +1111,17 @@ fn build_iron_proxy_pod(
     resolved: &ResolvedIronProxy,
 ) -> SandboxResult<Pod> {
     let labels = iron_proxy_labels(id);
+    let mut pod_spec = json!({
+        "automountServiceAccountToken": false,
+        "restartPolicy": "Never",
+        "containers": [iron_proxy_container(iron_proxy, resolved)],
+        "volumes": iron_proxy_volumes(id, iron_proxy),
+    });
+    insert_optional(
+        &mut pod_spec,
+        "imagePullSecrets",
+        image_pull_secret_refs(&iron_proxy.image_pull_secrets),
+    );
     let pod = json!({
         "apiVersion": "v1",
         "kind": "Pod",
@@ -1095,12 +1129,7 @@ fn build_iron_proxy_pod(
             "name": pod_name,
             "labels": labels,
         },
-        "spec": {
-            "automountServiceAccountToken": false,
-            "restartPolicy": "Never",
-            "containers": [iron_proxy_container(iron_proxy, resolved)],
-            "volumes": iron_proxy_volumes(id, iron_proxy),
-        },
+        "spec": pod_spec,
     });
     serde_json::from_value(pod)
         .map_err(|err| SandboxError::InvalidSpec(format!("invalid iron-proxy pod: {err}")))
@@ -1339,6 +1368,15 @@ where
     }
 }
 
+fn image_pull_secret_refs(names: &[String]) -> Option<Vec<Value>> {
+    (!names.is_empty()).then(|| {
+        names
+            .iter()
+            .map(|name| json!({ "name": name }))
+            .collect::<Vec<_>>()
+    })
+}
+
 fn next_sandbox_name() -> String {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1384,8 +1422,11 @@ mod tests {
                     .cpu_millis(500)
                     .memory_bytes(512 * 1024 * 1024),
             );
-        let config = AgentSandboxConfig::new("centaur")
+        let mut config = AgentSandboxConfig::new("centaur")
             .state_volume(StateVolumeConfig::new("/home/agent/state", "10Gi"));
+        config.image_pull_secrets = vec!["regcred".to_owned(), "mirrorcred".to_owned()];
+        config.runtime_class_name = Some("gvisor".to_owned());
+        config.service_account_name = Some("sandbox-agent".to_owned());
 
         let sandbox =
             build_agent_sandbox(&SandboxId::new("asbx-test"), &spec, &config, None).unwrap();
@@ -1405,6 +1446,15 @@ mod tests {
         assert_eq!(container.stdin, Some(true));
         assert_eq!(container.volume_mounts.as_ref().unwrap().len(), 2);
         assert!(container.resources.as_ref().unwrap().limits.is_some());
+        let pod_spec = &sandbox.spec.pod_template.spec;
+        assert_eq!(pod_spec.runtime_class_name.as_deref(), Some("gvisor"));
+        assert_eq!(
+            pod_spec.service_account_name.as_deref(),
+            Some("sandbox-agent")
+        );
+        let image_pull_secrets = pod_spec.image_pull_secrets.as_ref().unwrap();
+        assert_eq!(image_pull_secrets[0].name.as_deref(), Some("regcred"));
+        assert_eq!(image_pull_secrets[1].name.as_deref(), Some("mirrorcred"));
     }
 
     #[test]
@@ -1503,6 +1553,7 @@ mod tests {
             "firewall-ca-cert",
             "firewall-ca-key",
         );
+        iron_proxy.image_pull_secrets = vec!["regcred".to_owned()];
         iron_proxy.source_policy = SourcePolicy::onepassword_connect("ai-agents", "10m");
         iron_proxy
             .env_from_secret_names
@@ -1529,6 +1580,17 @@ mod tests {
         let pod =
             build_iron_proxy_pod(&id, &resolved.proxy_pod_name, &iron_proxy, &resolved).unwrap();
         assert_eq!(pod.metadata.name.as_deref(), Some("asbx-test-proxy-123"));
+        assert_eq!(
+            pod.spec
+                .as_ref()
+                .unwrap()
+                .image_pull_secrets
+                .as_ref()
+                .unwrap()[0]
+                .name
+                .as_str(),
+            "regcred"
+        );
         let pod_labels = pod.metadata.labels.as_ref().unwrap();
         assert_eq!(
             pod_labels.get("centaur.ai/iron-proxy"),
