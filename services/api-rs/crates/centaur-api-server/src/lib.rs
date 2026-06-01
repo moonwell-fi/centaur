@@ -205,7 +205,7 @@ async fn execute_session(
         ok: true,
         execution_id: execution.execution_id,
         thread_key: execution.thread_key,
-        status: execution.status.as_str().to_owned(),
+        status: execution.status.to_string(),
     }))
 }
 
