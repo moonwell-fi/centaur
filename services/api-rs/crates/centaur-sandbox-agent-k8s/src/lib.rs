@@ -871,6 +871,7 @@ fn host_from_url(value: &str) -> Option<String> {
 fn spec_env<'a>(spec: &'a SandboxSpec, name: &str) -> Option<&'a str> {
     spec.env
         .iter()
+        .rev()
         .find(|item| item.name == name)
         .map(|item| item.value.as_str())
         .filter(|value| !value.trim().is_empty())
