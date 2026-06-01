@@ -303,7 +303,6 @@ dependencies = [
  "bytes",
  "centaur-iron-proxy",
  "centaur-sandbox-core",
- "clap",
  "k8s-openapi",
  "kube",
  "serde",
