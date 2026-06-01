@@ -1375,10 +1375,16 @@ fn build_iron_proxy_network_policies(
         }),
     ];
     if let Some(broker_port) = iron_proxy_broker_port(iron_proxy) {
-        proxy_egress.push(json!({
-            "to": [{"podSelector": {"matchLabels": iron_proxy.token_broker_pod_labels.clone()}}],
-            "ports": [{"protocol": "TCP", "port": broker_port}],
-        }));
+        if iron_proxy.token_broker_name.is_some() {
+            proxy_egress.push(json!({
+                "to": [{"podSelector": {"matchLabels": iron_proxy.token_broker_pod_labels.clone()}}],
+                "ports": [{"protocol": "TCP", "port": broker_port}],
+            }));
+        } else {
+            proxy_egress.push(json!({
+                "ports": [{"protocol": "TCP", "port": broker_port}],
+            }));
+        }
     }
     if matches!(
         iron_proxy.source_policy.kind,
@@ -1777,6 +1783,7 @@ mod tests {
             .push("centaur-infra-env".to_owned());
         iron_proxy.secret_env_name = Some("centaur-infra-env".to_owned());
         iron_proxy.secret_env_prefix = "CENT_".to_owned();
+        iron_proxy.token_broker_name = Some("centaur-token-broker".to_owned());
         iron_proxy.extra_env.insert(
             "OP_CONNECT_HOST".to_owned(),
             "http://op-connect:8080".to_owned(),
