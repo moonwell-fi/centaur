@@ -2,6 +2,7 @@
 //!
 //! The Agent Sandbox CRD types are generated from the upstream CRD with
 //! `just codegen-agent-sandbox-crd`.
+#![cfg_attr(test, allow(dead_code))]
 
 use std::collections::BTreeMap;
 use std::pin::Pin;
@@ -9,13 +10,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use centaur_iron_proxy::{CorePgListener, ProxyFragment, SourceKind, SourcePolicy};
+#[cfg(test)]
+use centaur_iron_proxy::SourceKind;
+use centaur_iron_proxy::{CorePgListener, ProxyFragment, SourcePolicy};
 use centaur_sandbox_core::{
     MountKind, ObservedSandbox, SandboxBackend, SandboxError, SandboxHandle, SandboxId, SandboxIo,
     SandboxResult, SandboxSpec, SandboxStatus,
 };
+#[cfg(test)]
 use k8s_openapi::api::apps::v1::Deployment;
-use k8s_openapi::api::core::v1::{ConfigMap, PersistentVolumeClaim, Pod, Service};
+#[cfg(test)]
+use k8s_openapi::api::core::v1::{ConfigMap, Service};
+use k8s_openapi::api::core::v1::{PersistentVolumeClaim, Pod};
+#[cfg(test)]
 use k8s_openapi::api::networking::v1::NetworkPolicy;
 use kube::api::{
     ApiResource, AttachParams, DeleteParams, DynamicObject, GroupVersionKind, ListParams, Patch,
@@ -23,9 +30,11 @@ use kube::api::{
 };
 use kube::{Api, Client, Error};
 use serde_json::{Value, json};
+#[cfg(test)]
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::time::{Instant, sleep};
+#[cfg(test)]
 use uuid::Uuid;
 
 pub use generated::agents_x_k8s_io as crd;
@@ -43,7 +52,9 @@ const SANDBOX_CLAIM_LABEL: &str = "centaur.ai/sandbox-claim";
 const SANDBOX_TEMPLATE_LABEL: &str = "centaur.ai/sandbox-template";
 const SANDBOX_WARM_POOL_LABEL: &str = "centaur.ai/sandbox-warm-pool";
 const MANAGED_BY_VALUE: &str = "api-rs";
+#[cfg(test)]
 const TOKEN_BROKER_LABEL: &str = "centaur.ai/iron-token-broker";
+#[cfg(test)]
 const TOKEN_BROKER_CONFIG_KEY: &str = "iron-token-broker.yaml";
 const THREAD_KEY_ENV: &str = "CENTAUR_THREAD_KEY";
 
@@ -62,7 +73,7 @@ pub struct AgentSandboxConfig {
     pub service_account_name: Option<String>,
     pub state_volume: Option<StateVolumeConfig>,
     pub iron_proxy: Option<IronProxyPodConfig>,
-    pub warm_pool: Option<SandboxWarmPoolConfig>,
+    pub warm_pool: SandboxWarmPoolConfig,
     pub ready_timeout: Duration,
 }
 
@@ -80,7 +91,7 @@ impl AgentSandboxConfig {
             service_account_name: None,
             state_volume: None,
             iron_proxy: None,
-            warm_pool: None,
+            warm_pool: SandboxWarmPoolConfig::default(),
             ready_timeout: Duration::from_secs(60),
         }
     }
@@ -176,6 +187,15 @@ impl SandboxWarmPoolConfig {
     }
 }
 
+impl Default for SandboxWarmPoolConfig {
+    fn default() -> Self {
+        Self::new(
+            "centaur-agent-warm-pool",
+            "centaur-agent-warm-pool-template",
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SandboxWarmPoolUpdateStrategy {
     OnReplenish,
@@ -255,18 +275,22 @@ impl AgentSandboxBackend {
         Api::namespaced(self.client.clone(), &self.config.namespace)
     }
 
+    #[cfg(test)]
     fn config_maps(&self) -> Api<ConfigMap> {
         Api::namespaced(self.client.clone(), &self.config.namespace)
     }
 
+    #[cfg(test)]
     fn services(&self) -> Api<Service> {
         Api::namespaced(self.client.clone(), &self.config.namespace)
     }
 
+    #[cfg(test)]
     fn network_policies(&self) -> Api<NetworkPolicy> {
         Api::namespaced(self.client.clone(), &self.config.namespace)
     }
 
+    #[cfg(test)]
     fn deployments(&self) -> Api<Deployment> {
         Api::namespaced(self.client.clone(), &self.config.namespace)
     }
@@ -450,9 +474,7 @@ impl AgentSandboxBackend {
     }
 
     async fn delete_warm_pool_claim_for_sandbox(&self, id: &SandboxId) -> SandboxResult<()> {
-        let Some(warm_pool) = &self.config.warm_pool else {
-            return Ok(());
-        };
+        let warm_pool = &self.config.warm_pool;
         let Some(sandbox) = self.get_sandbox(id).await? else {
             return Ok(());
         };
@@ -463,6 +485,7 @@ impl AgentSandboxBackend {
         Ok(())
     }
 
+    #[cfg(test)]
     fn resolve_iron_proxy(
         &self,
         id: &SandboxId,
@@ -523,6 +546,7 @@ impl AgentSandboxBackend {
         }))
     }
 
+    #[cfg(test)]
     async fn create_iron_proxy_configmap(
         &self,
         id: &SandboxId,
@@ -551,6 +575,7 @@ impl AgentSandboxBackend {
             .map_err(|err| map_kube_error("create iron-proxy configmap", err))
     }
 
+    #[cfg(test)]
     async fn delete_iron_proxy_configmap(&self, id: &SandboxId) -> SandboxResult<()> {
         if self.config.iron_proxy.is_none() {
             return Ok(());
@@ -566,6 +591,7 @@ impl AgentSandboxBackend {
         }
     }
 
+    #[cfg(test)]
     async fn reconcile_token_broker(&self, iron_proxy: &IronProxyPodConfig) -> SandboxResult<()> {
         let Some(token_broker_name) = iron_proxy.token_broker_name.as_deref() else {
             return Ok(());
@@ -590,6 +616,7 @@ impl AgentSandboxBackend {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn apply_token_broker_configmap(
         &self,
         iron_proxy: &IronProxyPodConfig,
@@ -637,6 +664,7 @@ impl AgentSandboxBackend {
         }
     }
 
+    #[cfg(test)]
     async fn patch_token_broker_config_hash(
         &self,
         token_broker_name: &str,
@@ -664,6 +692,7 @@ impl AgentSandboxBackend {
         }
     }
 
+    #[cfg(test)]
     async fn create_iron_proxy_resources(
         &self,
         id: &SandboxId,
@@ -684,6 +713,7 @@ impl AgentSandboxBackend {
         self.wait_until_proxy_running(resolved).await
     }
 
+    #[cfg(test)]
     async fn create_iron_proxy_service(
         &self,
         id: &SandboxId,
@@ -697,6 +727,7 @@ impl AgentSandboxBackend {
             .map_err(|err| map_kube_error("create iron-proxy service", err))
     }
 
+    #[cfg(test)]
     async fn create_iron_proxy_pod(
         &self,
         id: &SandboxId,
@@ -713,6 +744,7 @@ impl AgentSandboxBackend {
             .map_err(|err| map_kube_error("create iron-proxy pod", err))
     }
 
+    #[cfg(test)]
     async fn create_iron_proxy_network_policies(
         &self,
         id: &SandboxId,
@@ -730,6 +762,7 @@ impl AgentSandboxBackend {
         Ok(())
     }
 
+    #[cfg(test)]
     async fn delete_iron_proxy_resources(&self, id: &SandboxId) -> SandboxResult<()> {
         if self.config.iron_proxy.is_none() {
             return Ok(());
@@ -755,6 +788,7 @@ impl AgentSandboxBackend {
         self.delete_iron_proxy_configmap(id).await
     }
 
+    #[cfg(test)]
     async fn delete_iron_proxy_pods_for_sandbox(&self, id: &SandboxId) -> SandboxResult<()> {
         let params = ListParams::default().labels(&format!(
             "centaur.ai/iron-proxy=true,{SANDBOX_ID_LABEL}={}",
@@ -795,6 +829,7 @@ impl AgentSandboxBackend {
         }
     }
 
+    #[cfg(test)]
     async fn wait_until_proxy_running(&self, resolved: &ResolvedIronProxy) -> SandboxResult<()> {
         let deadline = Instant::now() + self.config.ready_timeout;
         let pod_name = &resolved.proxy_pod_name;
@@ -874,34 +909,8 @@ impl SandboxBackend for AgentSandboxBackend {
     }
 
     async fn create(&self, spec: SandboxSpec) -> SandboxResult<SandboxHandle> {
-        if let Some(warm_pool) = &self.config.warm_pool {
-            return self.create_from_warm_pool(spec, warm_pool).await;
-        }
-
-        let id = SandboxId::new(next_sandbox_name());
-        let resolved_iron_proxy = self.resolve_iron_proxy(&id, &spec)?;
-        if let Err(err) = self
-            .create_iron_proxy_resources(&id, resolved_iron_proxy.as_ref())
+        self.create_from_warm_pool(spec, &self.config.warm_pool)
             .await
-        {
-            let _ = self.delete_iron_proxy_resources(&id).await;
-            return Err(err);
-        }
-        let sandbox = build_agent_sandbox(&id, &spec, &self.config, resolved_iron_proxy.as_ref())?;
-        let create_result = self
-            .sandboxes()
-            .create(&PostParams::default(), &sandbox)
-            .await
-            .map_err(|err| map_kube_error("create sandbox", err));
-        if let Err(err) = create_result {
-            let _ = self.delete_iron_proxy_resources(&id).await;
-            return Err(err);
-        }
-        if let Err(err) = self.wait_until_running(&id).await {
-            let _ = self.stop(&id).await;
-            return Err(err);
-        }
-        Ok(SandboxHandle::new(id, BACKEND_NAME))
     }
 
     async fn open_io(&self, id: &SandboxId) -> SandboxResult<SandboxIo> {
@@ -951,8 +960,7 @@ impl SandboxBackend for AgentSandboxBackend {
             Ok(_) => self.delete_state_pvc(id).await,
             Err(err) if is_not_found(&err) => self.delete_state_pvc(id).await,
             Err(err) => Err(map_kube_error("delete sandbox", err)),
-        }?;
-        self.delete_iron_proxy_resources(id).await
+        }
     }
 
     async fn pause(&self, id: &SandboxId) -> SandboxResult<()> {
@@ -1374,10 +1382,12 @@ fn proxy_env(
     env
 }
 
+#[cfg(test)]
 fn proxied_pg_url(host: &str, port: u16, password: &str, database: &str) -> String {
     format!("postgresql://app_user:{password}@{host}:{port}/{database}")
 }
 
+#[cfg(test)]
 fn proxy_password() -> String {
     Uuid::new_v4().simple().to_string()
 }
@@ -1439,6 +1449,7 @@ fn spec_env<'a>(spec: &'a SandboxSpec, name: &str) -> Option<&'a str> {
         .filter(|value| !value.trim().is_empty())
 }
 
+#[cfg(test)]
 fn iron_proxy_container(iron_proxy: &IronProxyPodConfig, resolved: &ResolvedIronProxy) -> Value {
     let mut env = BTreeMap::<String, Value>::new();
     if let Some(secret_name) = &iron_proxy.secret_env_name {
@@ -1564,6 +1575,7 @@ fn iron_proxy_container(iron_proxy: &IronProxyPodConfig, resolved: &ResolvedIron
     container
 }
 
+#[cfg(test)]
 fn insert_env_value(env: &mut BTreeMap<String, Value>, name: &str, value: impl AsRef<str>) {
     env.insert(
         name.to_owned(),
@@ -1571,6 +1583,7 @@ fn insert_env_value(env: &mut BTreeMap<String, Value>, name: &str, value: impl A
     );
 }
 
+#[cfg(test)]
 fn insert_env_secret_ref(
     env: &mut BTreeMap<String, Value>,
     name: &str,
@@ -1591,6 +1604,7 @@ fn insert_env_secret_ref(
     );
 }
 
+#[cfg(test)]
 fn iron_proxy_volumes(id: &SandboxId, iron_proxy: &IronProxyPodConfig) -> Vec<Value> {
     vec![
         json!({
@@ -1606,6 +1620,7 @@ fn iron_proxy_volumes(id: &SandboxId, iron_proxy: &IronProxyPodConfig) -> Vec<Va
     ]
 }
 
+#[cfg(test)]
 fn build_iron_proxy_pod(
     id: &SandboxId,
     pod_name: &str,
@@ -1637,6 +1652,7 @@ fn build_iron_proxy_pod(
         .map_err(|err| SandboxError::InvalidSpec(format!("invalid iron-proxy pod: {err}")))
 }
 
+#[cfg(test)]
 fn build_iron_proxy_service(
     id: &SandboxId,
     resolved: &ResolvedIronProxy,
@@ -1676,6 +1692,7 @@ fn build_iron_proxy_service(
         .map_err(|err| SandboxError::InvalidSpec(format!("invalid iron-proxy service: {err}")))
 }
 
+#[cfg(test)]
 fn build_iron_proxy_network_policies(
     id: &SandboxId,
     resolved: &ResolvedIronProxy,
@@ -1776,6 +1793,7 @@ fn build_iron_proxy_network_policies(
         .collect()
 }
 
+#[cfg(test)]
 fn dns_egress_rule() -> Value {
     json!({
         "to": [{
@@ -1790,6 +1808,7 @@ fn dns_egress_rule() -> Value {
     })
 }
 
+#[cfg(test)]
 fn iron_proxy_broker_port(iron_proxy: &IronProxyPodConfig) -> Option<u16> {
     iron_proxy
         .extra_env
@@ -1803,6 +1822,7 @@ fn iron_proxy_broker_port(iron_proxy: &IronProxyPodConfig) -> Option<u16> {
         })
 }
 
+#[cfg(test)]
 fn url_port(value: &str) -> Option<u16> {
     let without_scheme = value
         .split_once("://")
@@ -1850,14 +1870,17 @@ fn state_pvc_name(id: &SandboxId) -> String {
     format!("state-{}", id.as_str())
 }
 
+#[cfg(test)]
 fn iron_proxy_configmap_name(id: &SandboxId) -> String {
     format!("{}-iron-proxy", id.as_str())
 }
 
+#[cfg(test)]
 fn iron_proxy_pod_name(id: &SandboxId) -> String {
     format!("{}-proxy", id.as_str())
 }
 
+#[cfg(test)]
 fn new_iron_proxy_pod_name(id: &SandboxId) -> String {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1867,18 +1890,22 @@ fn new_iron_proxy_pod_name(id: &SandboxId) -> String {
     format!("{}-proxy-{millis}-{sequence}", id.as_str())
 }
 
+#[cfg(test)]
 fn iron_proxy_service_name(id: &SandboxId) -> String {
     format!("{}-proxy", id.as_str())
 }
 
+#[cfg(test)]
 fn iron_proxy_sandbox_egress_policy_name(id: &SandboxId) -> String {
     format!("{}-sandbox-egress", id.as_str())
 }
 
+#[cfg(test)]
 fn iron_proxy_policy_name(id: &SandboxId) -> String {
     format!("{}-proxy-net", id.as_str())
 }
 
+#[cfg(test)]
 fn iron_token_broker_configmap_name(iron_proxy: &IronProxyPodConfig) -> SandboxResult<String> {
     if let Some(name) = iron_proxy.token_broker_configmap_name.as_deref() {
         return Ok(name.to_owned());
@@ -1891,6 +1918,7 @@ fn iron_token_broker_configmap_name(iron_proxy: &IronProxyPodConfig) -> SandboxR
     Ok(format!("{name}-config"))
 }
 
+#[cfg(test)]
 fn token_broker_labels() -> BTreeMap<String, String> {
     BTreeMap::from([
         (TOKEN_BROKER_LABEL.to_owned(), "true".to_owned()),
@@ -1907,6 +1935,7 @@ fn sandbox_labels(id: &SandboxId) -> BTreeMap<String, String> {
     labels
 }
 
+#[cfg(test)]
 fn iron_proxy_labels(id: &SandboxId) -> BTreeMap<String, String> {
     let mut labels = base_resource_labels(id);
     labels.insert("centaur.ai/iron-proxy".to_owned(), "true".to_owned());
@@ -1979,6 +2008,7 @@ fn image_pull_secret_refs(names: &[String]) -> Option<Vec<Value>> {
     })
 }
 
+#[cfg(test)]
 fn short_sha256(value: &str) -> String {
     let digest = Sha256::digest(value.as_bytes());
     format!("{digest:x}").chars().take(16).collect()

@@ -102,10 +102,8 @@ fn container_workload_mode(args: &Args) -> SandboxWorkloadMode {
         SandboxWorkloadKind::Mock => SandboxWorkloadMode::mock_app_server(image),
         SandboxWorkloadKind::CodexAppServer => {
             let mut workload =
-                SandboxWorkloadMode::codex_app_server(image, codex_app_server_env_template(args));
-            if args.kubernetes_sandbox_warm_pool_enabled {
-                workload = workload.without_thread_key_env();
-            }
+                SandboxWorkloadMode::codex_app_server(image, codex_app_server_env_template(args))
+                    .without_thread_key_env();
             if let Some(repos_path) = clean_optional_value(args.repos_path.as_deref()) {
                 workload = workload.mount(
                     Mount::new(
@@ -163,12 +161,6 @@ struct Args {
     kubernetes_sandbox_image_pull_secrets: Vec<String>,
     #[arg(long, env = "KUBERNETES_SANDBOX_READY_TIMEOUT_S", default_value_t = 90)]
     kubernetes_sandbox_ready_timeout_s: u64,
-    #[arg(
-        long,
-        env = "KUBERNETES_SANDBOX_WARM_POOL_ENABLED",
-        default_value_t = false
-    )]
-    kubernetes_sandbox_warm_pool_enabled: bool,
     #[arg(long, env = "KUBERNETES_SANDBOX_WARM_POOL_NAME")]
     kubernetes_sandbox_warm_pool_name: Option<String>,
     #[arg(long, env = "KUBERNETES_SANDBOX_WARM_POOL_TEMPLATE_NAME")]
@@ -364,7 +356,7 @@ fn agent_sandbox_config_from_args(args: &Args) -> Result<AgentSandboxConfig, Ser
     config.state_volume = sandbox_state_volume_from_args(args);
     config.iron_proxy = iron_proxy_config_from_args(args)?;
     config.warm_pool = sandbox_warm_pool_config_from_args(args)?;
-    if config.warm_pool.is_some() && config.iron_proxy.is_some() {
+    if config.iron_proxy.is_some() {
         return Err(ServerError::UnsupportedConfig(
             "SandboxWarmPool mode cannot be combined with per-sandbox iron-proxy resources"
                 .to_owned(),
@@ -373,12 +365,7 @@ fn agent_sandbox_config_from_args(args: &Args) -> Result<AgentSandboxConfig, Ser
     Ok(config)
 }
 
-fn sandbox_warm_pool_config_from_args(
-    args: &Args,
-) -> Result<Option<SandboxWarmPoolConfig>, ServerError> {
-    if !args.kubernetes_sandbox_warm_pool_enabled {
-        return Ok(None);
-    }
+fn sandbox_warm_pool_config_from_args(args: &Args) -> Result<SandboxWarmPoolConfig, ServerError> {
     if args.kubernetes_sandbox_warm_pool_replicas < 0 {
         return Err(ServerError::UnsupportedConfig(
             "KUBERNETES_SANDBOX_WARM_POOL_REPLICAS must be non-negative".to_owned(),
@@ -398,7 +385,7 @@ fn sandbox_warm_pool_config_from_args(
         WarmPoolUpdateStrategyArg::OnReplenish => SandboxWarmPoolUpdateStrategy::OnReplenish,
         WarmPoolUpdateStrategyArg::Recreate => SandboxWarmPoolUpdateStrategy::Recreate,
     };
-    Ok(Some(config))
+    Ok(config)
 }
 
 fn iron_proxy_config_from_args(args: &Args) -> Result<Option<IronProxyPodConfig>, ServerError> {
@@ -725,7 +712,6 @@ mod tests {
             "centaur-api-server",
             "--database-url",
             "postgresql://postgres@localhost/centaur",
-            "--kubernetes-sandbox-warm-pool-enabled",
             "--kubernetes-sandbox-warm-pool-name",
             "codex-warm",
             "--kubernetes-sandbox-warm-pool-template-name",
@@ -740,7 +726,7 @@ mod tests {
         .unwrap();
 
         let config = agent_sandbox_config_from_args(&args).unwrap();
-        let warm_pool = config.warm_pool.unwrap();
+        let warm_pool = config.warm_pool;
 
         assert_eq!(warm_pool.pool_name, "codex-warm");
         assert_eq!(warm_pool.template_name, "codex-template");
@@ -758,7 +744,6 @@ mod tests {
             "centaur-api-server",
             "--database-url",
             "postgresql://postgres@localhost/centaur",
-            "--kubernetes-sandbox-warm-pool-enabled",
             "--kubernetes-sandbox-iron-proxy-mode",
             "enabled",
             "--kubernetes-firewall-ca-secret-name",
