@@ -23,7 +23,9 @@ transforms:
 ```
 
 The renderer fills the missing `source` from the deployment policy. The same
-placeholder shorthand works anywhere a source object is accepted:
+pass also assigns each secret entry a stable unique `id` unless the fragment
+provides one explicitly. The same placeholder shorthand works anywhere a
+source object is accepted:
 
 ```yaml
 transforms:

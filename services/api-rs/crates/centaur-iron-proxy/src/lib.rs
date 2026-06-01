@@ -6,6 +6,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub const DEFAULT_PROXY_BASE_CONFIG: &str =
@@ -454,9 +455,13 @@ pub fn render_proxy_yaml_with_source_policy(
     }
 
     let mut transforms = existing_unmanaged_transforms(cfg_map);
-    let managed = fragments
+    let mut managed = fragments
         .iter()
         .flat_map(|fragment| fragment.transforms.iter().cloned())
+        .collect::<Vec<_>>();
+    assign_secret_ids(&mut managed)?;
+    let managed = managed
+        .into_iter()
         .map(|transform| resolve_fragment_transform_sources(transform, source_policy))
         .collect::<Vec<_>>();
     if !managed.is_empty() {
@@ -590,6 +595,118 @@ fn resolve_fragment_transform_sources(mut transform: Value, source_policy: &Sour
     fill_missing_secret_sources(&mut transform, source_policy);
     resolve_placeholder_source_values(&mut transform, source_policy);
     transform
+}
+
+fn assign_secret_ids(transforms: &mut [Value]) -> Result<()> {
+    let mut used = BTreeMap::<String, usize>::new();
+    for secret in secret_entries_mut(transforms) {
+        if let Some(id) = secret["id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            used.entry(id.to_owned()).or_insert(1);
+        }
+    }
+
+    for secret in secret_entries_mut(transforms) {
+        if secret
+            .as_mapping()
+            .and_then(|map| map.get(&string_value("id")))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty())
+        {
+            continue;
+        }
+        let candidate = generated_secret_id(secret)?;
+        let id = unique_id(candidate, &mut used);
+        if let Some(secret_map) = secret.as_mapping_mut() {
+            secret_map.insert(string_value("id"), string_value(id));
+        }
+    }
+    Ok(())
+}
+
+fn secret_entries_mut(transforms: &mut [Value]) -> Vec<&mut Value> {
+    transforms
+        .iter_mut()
+        .filter(|transform| transform_name(transform) == Some("secrets"))
+        .filter_map(|transform| {
+            transform
+                .as_mapping_mut()
+                .and_then(|map| map.get_mut(&string_value("config")))
+                .and_then(Value::as_mapping_mut)
+                .and_then(|map| map.get_mut(&string_value("secrets")))
+                .and_then(Value::as_sequence_mut)
+        })
+        .flat_map(|secrets| secrets.iter_mut())
+        .collect()
+}
+
+fn generated_secret_id(secret: &Value) -> Result<String> {
+    let base = secret_id_base(secret);
+    let digest = secret_identity_digest(secret)?;
+    Ok(format!("{base}-{digest}"))
+}
+
+fn secret_id_base(secret: &Value) -> String {
+    let raw = secret_proxy_value(secret)
+        .or_else(|| secret["source"]["credential_id"].as_str())
+        .or_else(|| secret["source"]["placeholder"].as_str())
+        .or_else(|| secret["source"]["var"].as_str())
+        .or_else(|| secret["source"]["secret_ref"].as_str())
+        .or_else(|| secret["inject"]["header"].as_str())
+        .or_else(|| secret["inject"]["query_param"].as_str())
+        .or_else(|| secret["rules"][0]["host"].as_str())
+        .unwrap_or("secret");
+    let slug = slugify_id_component(raw);
+    if slug.is_empty() {
+        "secret".to_owned()
+    } else {
+        slug
+    }
+}
+
+fn slugify_id_component(value: &str) -> String {
+    let mut slug = String::new();
+    let mut previous_dash = false;
+    for ch in value.chars().flat_map(char::to_lowercase) {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch);
+            previous_dash = false;
+        } else if !previous_dash && !slug.is_empty() {
+            slug.push('-');
+            previous_dash = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    slug
+}
+
+fn secret_identity_digest(secret: &Value) -> Result<String> {
+    let mut identity = secret.clone();
+    if let Some(map) = identity.as_mapping_mut() {
+        map.remove(&string_value("id"));
+    }
+    let serialized = serde_yaml::to_string(&identity).map_err(IronProxyConfigError::Serialize)?;
+    let digest = Sha256::digest(serialized.as_bytes());
+    Ok(digest[..6]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
+}
+
+fn unique_id(candidate: String, used: &mut BTreeMap<String, usize>) -> String {
+    let count = used.entry(candidate.clone()).or_insert(0);
+    *count += 1;
+    if *count == 1 {
+        candidate
+    } else {
+        format!("{candidate}-{count}")
+    }
 }
 
 fn fill_missing_secret_sources(transform: &mut Value, source_policy: &SourcePolicy) {
@@ -1062,6 +1179,77 @@ transforms:
             secrets_transform["config"]["secrets"][0]["source"]["secret_ref"],
             "op://ai-agents/LEGACY_API_KEY/credential"
         );
+    }
+
+    #[test]
+    fn assigns_stable_unique_secret_ids() {
+        let fragment = fragment_yaml(
+            r#"
+transforms:
+  - name: secrets
+    config:
+      secrets:
+        - id: explicit-api-key
+          replace:
+            proxy_value: OPENAI_API_KEY
+            match_headers: ["Authorization"]
+          rules: [{ host: api.openai.com }]
+        - replace:
+            proxy_value: OPENAI_API_KEY
+            match_headers: ["Authorization"]
+          rules: [{ host: api.openai.com }]
+        - replace:
+            proxy_value: OPENAI_API_KEY
+            match_headers: ["Authorization"]
+          rules: [{ host: proxy.openai.com }]
+        - source: { type: token_broker, credential_id: openai-codex }
+          inject:
+            header: Authorization
+            formatter: "Bearer {{.Value}}"
+          rules: [{ host: chatgpt.com }]
+        - source:
+            placeholder: OPENAI_CODEX_ACCOUNT_ID
+          inject:
+            header: chatgpt-account-id
+          rules: [{ host: chatgpt.com }]
+"#,
+        );
+        let env_rendered = render_proxy_yaml_with_source_policy(
+            None,
+            &[fragment.clone()],
+            None,
+            &SourcePolicy::env(),
+        )
+        .unwrap();
+        let op_rendered = render_proxy_yaml_with_source_policy(
+            None,
+            &[fragment],
+            None,
+            &SourcePolicy::onepassword_connect("ai-agents", "10m"),
+        )
+        .unwrap();
+
+        let ids = |rendered: &str| -> Vec<String> {
+            let cfg = parse_rendered(rendered);
+            cfg["transforms"][1]["config"]["secrets"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .map(|secret| secret["id"].as_str().unwrap().to_owned())
+                .collect()
+        };
+        let env_ids = ids(&env_rendered);
+        let op_ids = ids(&op_rendered);
+        assert_eq!(env_ids, op_ids);
+        assert_eq!(env_ids[0], "explicit-api-key");
+        assert!(env_ids[1].starts_with("openai-api-key-"));
+        assert!(env_ids[2].starts_with("openai-api-key-"));
+        assert!(env_ids[3].starts_with("openai-codex-"));
+        assert!(env_ids[4].starts_with("openai-codex-account-id-"));
+        let mut unique_ids = env_ids.clone();
+        unique_ids.sort();
+        unique_ids.dedup();
+        assert_eq!(unique_ids.len(), env_ids.len());
     }
 
     #[test]
