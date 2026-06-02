@@ -101,14 +101,19 @@ function taskChunk(task: RendererTaskUpdate): ChatSDKStreamChunk {
     title: task.title,
     status: task.status,
     ...(task.details?.length ? { details: taskBodyToChatSdkText(task.details) } : {}),
-    ...(task.output?.length ? { output: taskBodyToChatSdkText(task.output) } : {})
+    ...(task.output?.length ? { output: taskBodyToChatSdkText(task.output, { fenceCode: false }) } : {})
   }
 }
 
-function taskBodyToChatSdkText(blocks: RendererTaskBlock[]): string {
+function taskBodyToChatSdkText(
+  blocks: RendererTaskBlock[],
+  options: { fenceCode?: boolean } = {}
+): string {
+  const fenceCode = options.fenceCode ?? true
   return blocks
     .map(block => {
       if (block.type === 'text') return block.text
+      if (!fenceCode) return block.text
       const language = block.language ?? ''
       return `\`\`\`${language}\n${block.text}\n\`\`\``
     })

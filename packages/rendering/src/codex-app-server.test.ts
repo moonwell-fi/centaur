@@ -311,10 +311,7 @@ describe('CodexAppServerRendererEventMapper', () => {
     expect(taskChunks.filter(chunk => chunk.details).map(chunk => chunk.details)).toEqual([
       '```sh\necho one && echo two\n```'
     ])
-    expect(taskChunks.filter(chunk => chunk.output).map(chunk => chunk.output)).toEqual([
-      '```text\none\n\n```',
-      '```text\ntwo\n\n```'
-    ])
+    expect(taskChunks.filter(chunk => chunk.output).map(chunk => chunk.output)).toEqual(['one\n', 'two\n'])
     expect(taskChunks.at(-1)).toMatchObject({
       id: 'cmd-1',
       status: 'complete'
