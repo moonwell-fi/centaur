@@ -61,14 +61,15 @@ impl KubernetesSandboxArgs {
         &self,
         iron_proxy: Option<IronProxyPodConfig>,
     ) -> AgentSandboxConfig {
-        let mut config = AgentSandboxConfig::new(self.namespace.clone());
-        config.image_pull_policy = self.agent_image_pull_policy.clone();
-        config.image_pull_secrets = self.image_pull_secrets.clone();
-        config.ready_timeout = Duration::from_secs(self.ready_timeout_s);
-        config.runtime_class_name = self.runtime_class_name.clone();
-        config.service_account_name = self.service_account_name.clone();
-        config.iron_proxy = iron_proxy;
-        config
+        AgentSandboxConfig {
+            image_pull_policy: self.agent_image_pull_policy.clone(),
+            image_pull_secrets: self.image_pull_secrets.clone(),
+            ready_timeout: Duration::from_secs(self.ready_timeout_s),
+            runtime_class_name: self.runtime_class_name.clone(),
+            service_account_name: self.service_account_name.clone(),
+            iron_proxy,
+            ..AgentSandboxConfig::new(&self.namespace)
+        }
     }
 
     pub(super) fn agent_image_pull_policy(&self) -> Option<String> {
