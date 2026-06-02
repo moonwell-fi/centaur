@@ -236,7 +236,7 @@ impl SandboxBackend for AgentSandboxBackend {
     async fn create(&self, spec: SandboxSpec) -> SandboxResult<SandboxHandle> {
         let id = SandboxId::new(next_sandbox_name());
         let mut spec = spec;
-        let resolved_iron_proxy = self.resolve_iron_proxy(&id, &spec)?;
+        let resolved_iron_proxy = self.resolve_iron_proxy(&id)?;
         if let Some(resolved) = &resolved_iron_proxy {
             iron_proxy::apply_proxy_env(&mut spec, resolved);
         }
@@ -321,12 +321,21 @@ impl SandboxBackend for AgentSandboxBackend {
     }
 
     async fn pause(&self, id: &SandboxId) -> SandboxResult<()> {
-        self.patch_replicas(id, 0).await
+        self.patch_replicas(id, 0).await?;
+        self.delete_iron_proxy_resources(id).await
     }
 
     async fn resume(&self, id: &SandboxId) -> SandboxResult<()> {
+        let resolved_iron_proxy = self.resolve_iron_proxy(id)?;
+        self.create_iron_proxy_resources(id, resolved_iron_proxy.as_ref())
+            .await?;
         self.patch_replicas(id, 1).await?;
-        self.wait_until_running(id).await
+        if let Err(err) = self.wait_until_running(id).await {
+            let _ = self.patch_replicas(id, 0).await;
+            let _ = self.delete_iron_proxy_resources(id).await;
+            return Err(err);
+        }
+        Ok(())
     }
 }
 

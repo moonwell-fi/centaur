@@ -107,7 +107,6 @@ impl AgentSandboxBackend {
     pub(crate) fn resolve_iron_proxy(
         &self,
         id: &SandboxId,
-        _spec: &SandboxSpec,
     ) -> SandboxResult<Option<ResolvedIronProxy>> {
         let Some(iron_proxy) = &self.config.iron_proxy else {
             return Ok(None);
