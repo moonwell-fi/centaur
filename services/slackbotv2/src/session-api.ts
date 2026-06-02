@@ -43,6 +43,7 @@ export async function serializeMessage(message: Message): Promise<SlackbotV2ApiM
   for (const attachment of message.attachments) {
     attachments.push(await serializeAttachment(attachment))
   }
+  const text = slackRichTextToMarkdown(message.raw) ?? message.text
 
   return {
     attachments,
@@ -56,10 +57,148 @@ export async function serializeMessage(message: Message): Promise<SlackbotV2ApiM
     id: message.id,
     isMention: message.isMention === true,
     raw: message.raw,
-    text: message.text,
+    text,
     threadId: message.threadId,
     timestamp: message.metadata.dateSent.toISOString()
   }
+}
+
+function slackRichTextToMarkdown(raw: unknown): string | undefined {
+  const blocks = isJsonObject(raw) && Array.isArray(raw.blocks) ? raw.blocks : []
+  const text = blocks
+    .map(block => renderSlackBlock(block))
+    .filter(part => part.trim())
+    .join('\n')
+    .trim()
+  return text || undefined
+}
+
+function renderSlackBlock(block: unknown): string {
+  if (!isJsonObject(block)) return ''
+  if (block.type !== 'rich_text') return ''
+  const elements = Array.isArray(block.elements) ? block.elements : []
+  return elements.map(renderSlackRichTextElement).filter(Boolean).join('\n').trimEnd()
+}
+
+function renderSlackRichTextElement(element: unknown): string {
+  if (!isJsonObject(element)) return ''
+  switch (element.type) {
+    case 'rich_text_section':
+      return renderSlackInlineElements(element.elements)
+    case 'rich_text_list':
+      return renderSlackList(element)
+    case 'rich_text_preformatted':
+      return renderSlackPreformatted(element)
+    case 'rich_text_quote':
+      return renderSlackQuote(element)
+    case 'text':
+      return renderSlackTextElement(element)
+    case 'user':
+      return renderSlackMention(element, 'user_id', '<@', '>')
+    case 'channel':
+      return renderSlackMention(element, 'channel_id', '<#', '>')
+    case 'usergroup':
+      return renderSlackMention(element, 'usergroup_id', '<!subteam^', '>')
+    case 'link':
+      return renderSlackLink(element)
+    case 'emoji':
+      return renderSlackEmoji(element)
+    default:
+      return renderSlackInlineElements(element.elements)
+  }
+}
+
+function renderSlackInlineElements(elements: unknown): string {
+  if (!Array.isArray(elements)) return ''
+  return elements.map(renderSlackRichTextElement).join('')
+}
+
+function renderSlackList(element: JsonObject): string {
+  const children = Array.isArray(element.elements) ? element.elements : []
+  const style = textField(element.style)
+  return children
+    .map((child, index) => {
+      const body = renderSlackRichTextElement(child).trimEnd()
+      if (!body) return ''
+      const prefix = style === 'ordered' ? `${index + 1}. ` : '- '
+      return `${prefix}${body.replace(/\n/g, '\n  ')}`
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function renderSlackPreformatted(element: JsonObject): string {
+  const body = renderSlackInlineElements(element.elements).replace(/\n+$/g, '')
+  if (!body) return ''
+  const language = textField(element.language)
+  return `\`\`\`${language ? language : ''}\n${body}\n\`\`\``
+}
+
+function renderSlackQuote(element: JsonObject): string {
+  const body = renderSlackInlineElements(element.elements).trimEnd()
+  if (!body) return ''
+  return body
+    .split('\n')
+    .map(line => `> ${line}`)
+    .join('\n')
+}
+
+function renderSlackTextElement(element: JsonObject): string {
+  const text = textField(element.text) ?? ''
+  if (!slackTextElementHasCodeStyle(element)) return text
+  return renderMarkdownCode(text)
+}
+
+function renderSlackMention(
+  element: JsonObject,
+  key: string,
+  prefix: string,
+  suffix: string
+): string {
+  const value = textField(element[key])
+  return value ? `${prefix}${value}${suffix}` : ''
+}
+
+function renderSlackLink(element: JsonObject): string {
+  const url = textField(element.url)
+  const text = textField(element.text)
+  if (!url) return text ?? ''
+  if (!text || text === url) return url
+  return `[${text}](${url})`
+}
+
+function renderSlackEmoji(element: JsonObject): string {
+  const name = textField(element.name)
+  return name ? `:${name}:` : ''
+}
+
+function slackTextElementHasCodeStyle(element: JsonObject): boolean {
+  return isJsonObject(element.style) && element.style.code === true
+}
+
+function renderMarkdownCode(text: string): string {
+  if (text.includes('\n')) return `\`\`\`\n${text.replace(/\n+$/g, '')}\n\`\`\``
+  const backticks = Math.max(1, longestBacktickRun(text) + 1)
+  const fence = '`'.repeat(backticks)
+  return `${fence}${text}${fence}`
+}
+
+function longestBacktickRun(text: string): number {
+  let longest = 0
+  let current = 0
+  for (const char of text) {
+    if (char === '`') {
+      current += 1
+      longest = Math.max(longest, current)
+    } else {
+      current = 0
+    }
+  }
+  return longest
+}
+
+function textField(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
 }
 
 export async function forwardToSessionApi(

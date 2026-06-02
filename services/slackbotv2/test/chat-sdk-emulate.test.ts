@@ -265,6 +265,75 @@ describe('slackbotv2', () => {
     expectSlackRenderedReply(renderedReplies[2]!, 'Executed request 3.')
   })
 
+  it('preserves Slack rich_text code spans in forwarded model input', async () => {
+    const rootText = `<@${BOT_USER_ID}> run the Slack tool call`
+    const root = await postUserMessage(rootText)
+    const waits: Promise<unknown>[] = []
+    const response = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-rich-text-code-input',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: root.ts,
+          text: rootText,
+          blocks: [
+            {
+              type: 'rich_text',
+              elements: [
+                {
+                  type: 'rich_text_section',
+                  elements: [
+                    { type: 'user', user_id: BOT_USER_ID },
+                    { type: 'text', text: ' Run this exact command: ' },
+                    {
+                      type: 'text',
+                      text: 'CALL_TIMEOUT_SECONDS=15 call slack get_channel_history \'{"channel":"C0APUQ8U5T9","limit":1}\'',
+                      style: { code: true }
+                    },
+                    { type: 'text', text: ' then answer exactly ' },
+                    { type: 'text', text: 'RICH_TEXT_CODE_OK', style: { code: true } },
+                    { type: 'text', text: '.' }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+
+    expect(codexApi.appends).toHaveLength(1)
+    expect(codexApi.executes).toHaveLength(1)
+    const forwardedText = sessionMessageTexts(codexApi.appends[0]!.body.messages).join('\n')
+    expect(forwardedText).toContain(`<@${BOT_USER_ID}>`)
+    expect(forwardedText).toContain(
+      '`CALL_TIMEOUT_SECONDS=15 call slack get_channel_history \'{"channel":"C0APUQ8U5T9","limit":1}\'`'
+    )
+    expect(forwardedText).toContain('`RICH_TEXT_CODE_OK`')
+
+    const inputLine = JSON.parse(codexApi.executes[0]!.body.input_lines[0]!) as Record<
+      string,
+      unknown
+    >
+    const inputMessage = isRecord(inputLine.message) ? inputLine.message : {}
+    const inputContent = Array.isArray(inputMessage.content) ? inputMessage.content : []
+    const inputText = inputContent
+      .map(part => (isRecord(part) && typeof part.text === 'string' ? part.text : ''))
+      .join('\n')
+    expect(inputText).toContain(
+      '`CALL_TIMEOUT_SECONDS=15 call slack get_channel_history \'{"channel":"C0APUQ8U5T9","limit":1}\'`'
+    )
+  })
+
   it('forwards subscribed messages to /messages without executing during a stream', async () => {
     codexApi.autoRespond = false
 
