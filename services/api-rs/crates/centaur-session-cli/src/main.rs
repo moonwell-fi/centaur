@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use centaur_api_server::{
-    client::{CentaurClient, SseEvent as ApiSseEvent, SseEventStream},
+    client::{CentaurClient, SseEventStream},
     types::{AppendMessagesRequest, CreateSessionRequest, ExecuteSessionRequest},
 };
 use centaur_session_core::{HarnessType, MessageRole, SessionMessageInput, ThreadKey};
@@ -15,11 +15,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-mod tui;
-
 const DEFAULT_MESSAGE: &str = "Reply with exactly PONG and nothing else.";
-
-pub(crate) type SseFrame = ApiSseEvent;
 
 #[derive(Debug, Parser)]
 #[command(about = "Create, execute, or attach to a Centaur session")]
@@ -62,12 +58,6 @@ struct Args {
 
     #[arg(long, alias = "stdin")]
     stdin_events: bool,
-
-    #[arg(long)]
-    tui: bool,
-
-    #[arg(long)]
-    debug: bool,
 }
 
 #[tokio::main]
@@ -86,9 +76,6 @@ async fn main() -> Result<()> {
             .stream_events(&thread_key, args.after_event_id)
             .await
             .wrap_err("open event stream")?;
-        if args.tui {
-            return tui::run(client, thread_key, events, tui_options(&args)).await;
-        }
         return run_stream_and_optional_stdin(
             client,
             thread_key,
@@ -139,25 +126,7 @@ async fn main() -> Result<()> {
         .wrap_err("execute initial turn")?;
     }
 
-    if args.tui {
-        return tui::run(client, thread_key, events, tui_options(&args)).await;
-    }
-
     run_stream_and_optional_stdin(client, thread_key, events, stream_run_options(&args)).await
-}
-
-fn tui_options(args: &Args) -> tui::TuiOptions {
-    tui::TuiOptions {
-        debug_visible: args.debug,
-        idle_timeout_ms: args.idle_timeout_ms,
-        max_duration_ms: args.max_duration_ms,
-        exit_on_terminal: args.exit_on_terminal,
-        exit_on_output_type: args
-            .exit_on_output_type
-            .as_ref()
-            .map(OutputEventType::as_str)
-            .map(ToOwned::to_owned),
-    }
 }
 
 fn stream_run_options(args: &Args) -> StreamRunOptions {
@@ -185,9 +154,6 @@ fn validate_mode(args: &Args, attach_mode: bool) -> Result<()> {
     }
     if args.attach && (args.message.is_some() || !args.input_lines.is_empty()) {
         bail!("--attach does not accept --message or --input-line");
-    }
-    if args.tui && args.stdin_events {
-        bail!("--tui cannot be combined with --stdin-events");
     }
     Ok(())
 }
@@ -416,7 +382,7 @@ fn session_input_lines(args: &Args) -> Result<Vec<String>> {
 }
 
 fn should_send_initial_turn(args: &Args) -> bool {
-    args.message.is_some() || !args.input_lines.is_empty() || (!args.stdin_events && !args.tui)
+    args.message.is_some() || !args.input_lines.is_empty() || !args.stdin_events
 }
 
 pub(crate) fn user_input_line(text: &str) -> Result<String> {
