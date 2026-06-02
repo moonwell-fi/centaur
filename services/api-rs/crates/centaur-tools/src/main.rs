@@ -260,6 +260,7 @@ where
 
 fn run_python_tool(row: &ToolRow, args: &[OsString]) -> Result<i32> {
     let tool_dir = prepare_tool_source_dir("python-src", row)?;
+    let executable = python_executable_name(row, &tool_dir);
     let mut command = Command::new("uv");
     command
         .args(["tool", "run", "--isolated", "--from"])
@@ -268,7 +269,7 @@ fn run_python_tool(row: &ToolRow, args: &[OsString]) -> Result<i32> {
         command.arg("--with").arg(sdk_path);
     }
     let status = command
-        .arg(&row.name)
+        .arg(executable)
         .args(args)
         .current_dir(&tool_dir)
         .status()
@@ -277,6 +278,51 @@ fn run_python_tool(row: &ToolRow, args: &[OsString]) -> Result<i32> {
             source,
         })?;
     Ok(exit_code(status))
+}
+
+fn python_executable_name(row: &ToolRow, tool_dir: &Path) -> String {
+    let normalized_name = row.name.replace('_', "-");
+    let Ok(contents) = fs::read_to_string(tool_dir.join("pyproject.toml")) else {
+        return normalized_name;
+    };
+    let scripts = project_script_names(&contents);
+    if scripts.iter().any(|script| script == &row.name) {
+        return row.name.clone();
+    }
+    if scripts.iter().any(|script| script == &normalized_name) {
+        return normalized_name;
+    }
+    if scripts.len() == 1 {
+        return scripts[0].clone();
+    }
+    normalized_name
+}
+
+fn project_script_names(pyproject: &str) -> Vec<String> {
+    let mut in_scripts = false;
+    let mut scripts = Vec::new();
+    for line in pyproject.lines() {
+        let without_comment = line.split_once('#').map_or(line, |(prefix, _)| prefix);
+        let trimmed = without_comment.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            in_scripts = trimmed == "[project.scripts]";
+            continue;
+        }
+        if !in_scripts {
+            continue;
+        }
+        let Some((key, _value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        let key = key.trim().trim_matches('"').trim_matches('\'');
+        if !key.is_empty() {
+            scripts.push(key.to_owned());
+        }
+    }
+    scripts
 }
 
 fn prepare_tool_source_dir(kind: &str, row: &ToolRow) -> Result<PathBuf> {
@@ -962,6 +1008,46 @@ dependencies = ["typer"]
             "print('changed')\n"
         );
         fs::remove_dir_all(prepared).unwrap();
+    }
+
+    #[test]
+    fn resolves_python_executable_from_project_scripts() {
+        let temp = TempTree::new("python-entrypoint");
+        temp.write(
+            "tools/acme_crm/pyproject.toml",
+            r#"[project]
+name = "acme-crm"
+
+[project.scripts]
+acme-crm = "centaur_tool_acme_crm.cli:main"
+"#,
+        );
+        let row = ToolRow {
+            name: "acme_crm".to_owned(),
+            dir: temp.path("tools/acme_crm"),
+            summary: "CLI tool".to_owned(),
+            command_count: 0,
+            kind: RunnerKind::Python,
+            runner: temp.path("tools/acme_crm/cli.py"),
+            commands: Vec::new(),
+        };
+
+        assert_eq!(python_executable_name(&row, &row.dir), "acme-crm");
+    }
+
+    #[test]
+    fn parses_quoted_project_script_keys() {
+        let scripts = project_script_names(
+            r#"[project.scripts]
+"acme.crm" = "pkg.cli:main"
+'acme-alt' = "pkg.alt:main"
+
+[tool.other]
+ignored = "nope"
+"#,
+        );
+
+        assert_eq!(scripts, vec!["acme.crm", "acme-alt"]);
     }
 
     #[test]

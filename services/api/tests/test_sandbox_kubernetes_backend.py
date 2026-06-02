@@ -1743,6 +1743,30 @@ async def test_create_mounts_tool_build_cache_host_path(
             "type": "DirectoryOrCreate",
         },
     } in pod_body["spec"]["volumes"]
+    assert {
+        "name": "tool-build-cache-permissions",
+        "image": "centaur-agent:test",
+        "imagePullPolicy": "IfNotPresent",
+        "command": [
+            "/bin/sh",
+            "-ec",
+            'chown 1001:1001 "/centaur-tool-build-cache"',
+        ],
+        "volumeMounts": [
+            {
+                "name": "tool-build-cache",
+                "mountPath": "/centaur-tool-build-cache",
+            }
+        ],
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "capabilities": {"drop": ["ALL"], "add": ["CHOWN"]},
+            "runAsGroup": 0,
+            "runAsNonRoot": False,
+            "runAsUser": 0,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+    } in pod_body["spec"]["initContainers"]
 
 
 @pytest.mark.asyncio

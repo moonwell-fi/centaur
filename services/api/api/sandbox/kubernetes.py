@@ -56,6 +56,7 @@ _AGENT_UID = 1001
 _SANDBOX_OVERLAY_ROOT = "/home/agent/overlay"
 _SANDBOX_OVERLAY_DIR = f"{_SANDBOX_OVERLAY_ROOT}/org"
 _TOOL_BUILD_CACHE_VOLUME_NAME = "tool-build-cache"
+_TOOL_BUILD_CACHE_INIT_MOUNT_PATH = "/centaur-tool-build-cache"
 _DEFAULT_TOOL_BUILD_CACHE_MOUNT_PATH = "/home/agent/.cache"
 # Writable dir the tool-server sidecar installs overlay tool deps into. The
 # sidecar runs as a non-root user and cannot write the root-owned /app/.venv,
@@ -479,6 +480,35 @@ def _append_tool_build_cache_volume(
                 },
             }
         )
+
+
+def _tool_build_cache_init_container() -> dict[str, Any] | None:
+    if not _tool_build_cache_host_path():
+        return None
+    return {
+        "name": "tool-build-cache-permissions",
+        "image": image(),
+        "imagePullPolicy": _image_pull_policy(),
+        "command": [
+            "/bin/sh",
+            "-ec",
+            f'chown {_AGENT_UID}:{_AGENT_UID} "{_TOOL_BUILD_CACHE_INIT_MOUNT_PATH}"',
+        ],
+        "volumeMounts": [
+            {
+                "name": _TOOL_BUILD_CACHE_VOLUME_NAME,
+                "mountPath": _TOOL_BUILD_CACHE_INIT_MOUNT_PATH,
+            }
+        ],
+        "securityContext": {
+            "allowPrivilegeEscalation": False,
+            "capabilities": {"drop": ["ALL"], "add": ["CHOWN"]},
+            "runAsGroup": 0,
+            "runAsNonRoot": False,
+            "runAsUser": 0,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+    }
 
 
 def _overlay_image() -> str | None:
@@ -1734,6 +1764,9 @@ class KubernetesExecutorBackend(SandboxBackend):
             )
 
         self._configure_workload_volumes(volume_mounts, volumes)
+        tool_build_cache_init_container = _tool_build_cache_init_container()
+        if tool_build_cache_init_container:
+            init_containers.insert(0, tool_build_cache_init_container)
 
         cmd = build_harness_cmd(engine, model)
 
