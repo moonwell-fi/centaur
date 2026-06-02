@@ -28,8 +28,7 @@ fn codex_credential_profile_adds_openai_placeholder() {
         "firewall-ca-cert",
         "firewall-ca-key",
     );
-    let spec =
-        SandboxSpec::new("centaur-agent:latest").credential_profile(CredentialProfile::Codex);
+    let spec = SandboxSpec::new("centaur-agent:latest").credential(CredentialProfile::Codex, None);
 
     let fragments = iron_proxy_fragments_for_spec(&iron_proxy, &spec).unwrap();
     let placeholder_env = centaur_iron_proxy::placeholder_env(&fragments);

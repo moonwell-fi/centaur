@@ -19,16 +19,6 @@ pub struct CodexAppServerWorkload {
 }
 
 impl SandboxWorkloadMode {
-    pub fn mock_app_server(image: impl Into<String>) -> Self {
-        Self::MockAppServer {
-            image: image.into(),
-        }
-    }
-
-    pub fn codex_app_server(workload: CodexAppServerWorkload) -> Self {
-        Self::CodexAppServer(workload)
-    }
-
     pub(crate) fn spec(&self, thread_key: &ThreadKey, harness_type: &HarnessType) -> SandboxSpec {
         match self {
             Self::MockAppServer { image } => SandboxSpec::new(image)
@@ -51,9 +41,7 @@ impl CodexAppServerWorkload {
         if let Some(api_key) = &self.centaur_api_key {
             spec = spec.env("CENTAUR_API_KEY", api_key);
         }
-        for env in &self.extra_env {
-            spec = spec.env(&env.name, &env.value);
-        }
+        spec.env.extend(self.extra_env.iter().cloned());
         spec
     }
 }
@@ -117,7 +105,7 @@ mod tests {
     #[test]
     fn codex_app_server_declares_credential_profile() {
         let thread_key = ThreadKey::parse("cli:test").unwrap();
-        let spec = SandboxWorkloadMode::codex_app_server(CodexAppServerWorkload {
+        let spec = SandboxWorkloadMode::CodexAppServer(CodexAppServerWorkload {
             image: "centaur-agent:test".to_owned(),
             centaur_api_url: "http://api:8000".to_owned(),
             centaur_api_key: None,

@@ -52,10 +52,6 @@ impl SandboxSpec {
         self
     }
 
-    pub fn credential_profile(self, profile: CredentialProfile) -> Self {
-        self.credential(profile, None)
-    }
-
     pub fn credential(
         mut self,
         profile: CredentialProfile,

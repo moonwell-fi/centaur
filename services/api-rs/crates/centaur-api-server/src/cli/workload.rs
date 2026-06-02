@@ -38,11 +38,12 @@ pub(super) struct SandboxWorkloadArgs {
 impl SandboxWorkloadArgs {
     pub(super) fn local_mode(&self) -> Result<SandboxWorkloadMode, ServerError> {
         match self.workload {
-            SandboxWorkloadKind::Mock => Ok(SandboxWorkloadMode::mock_app_server(
-                self.agent_image
+            SandboxWorkloadKind::Mock => Ok(SandboxWorkloadMode::MockAppServer {
+                image: self
+                    .agent_image
                     .clone()
                     .unwrap_or_else(|| "local-mock-app-server".to_owned()),
-            )),
+            }),
             SandboxWorkloadKind::CodexAppServer => Err(ServerError::UnsupportedConfig(
                 "codex-app-server workload requires --kubernetes-sandbox-backend agent-k8s"
                     .to_owned(),
@@ -56,9 +57,9 @@ impl SandboxWorkloadArgs {
             .clone()
             .unwrap_or_else(|| default_sandbox_image(self.workload).to_owned());
         match self.workload {
-            SandboxWorkloadKind::Mock => SandboxWorkloadMode::mock_app_server(image),
+            SandboxWorkloadKind::Mock => SandboxWorkloadMode::MockAppServer { image },
             SandboxWorkloadKind::CodexAppServer => {
-                SandboxWorkloadMode::codex_app_server(CodexAppServerWorkload {
+                SandboxWorkloadMode::CodexAppServer(CodexAppServerWorkload {
                     image,
                     centaur_api_url: self.centaur_api_url.clone(),
                     centaur_api_key: self.centaur_api_key.clone(),
