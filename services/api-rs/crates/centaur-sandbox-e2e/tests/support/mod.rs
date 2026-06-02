@@ -1070,7 +1070,7 @@ async fn agent_k8s_client_and_namespace(args: &E2eArgs) -> (Client, String) {
         .sandbox_e2e_k8s_context
         .clone()
         .or_else(|| args.kube_context.clone())
-        .unwrap_or_else(|| "kind-centaur-api-rs-e2e".to_owned());
+        .unwrap_or_else(|| "k3d-centaur-api-rs-e2e".to_owned());
     let namespace = args
         .sandbox_e2e_k8s_namespace
         .clone()

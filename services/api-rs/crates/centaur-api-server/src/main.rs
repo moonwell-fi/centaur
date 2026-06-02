@@ -14,7 +14,7 @@ use centaur_session_sqlx::PgSessionStore;
 use clap::{Parser, ValueEnum};
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt as tracing_fmt};
 
 const SANDBOX_REPOS_MOUNT_PATH: &str = "/home/agent/github";
@@ -36,6 +36,7 @@ async fn main() -> Result<(), ServerError> {
         sandbox_runtime,
         session_runtime_options_from_args(&args),
     );
+    let shutdown_session_runtime = session_runtime.clone();
 
     let lifecycle = ServerLifecycle::new_ready();
     let listener = TcpListener::bind(args.bind_addr).await?;
@@ -48,6 +49,8 @@ async fn main() -> Result<(), ServerError> {
     .with_graceful_shutdown(shutdown_signal(
         lifecycle,
         Duration::from_secs(args.shutdown_readiness_drain_delay_s),
+        shutdown_session_runtime,
+        Duration::from_secs(args.shutdown_session_drain_timeout_s),
     ))
     .await?;
     Ok(())
@@ -58,7 +61,12 @@ fn init_tracing() {
     tracing_fmt().with_env_filter(filter).json().init();
 }
 
-async fn shutdown_signal(lifecycle: ServerLifecycle, drain_delay: Duration) {
+async fn shutdown_signal(
+    lifecycle: ServerLifecycle,
+    drain_delay: Duration,
+    session_runtime: SessionRuntime,
+    session_drain_timeout: Duration,
+) {
     let signal = wait_for_shutdown_signal().await;
     lifecycle.mark_draining();
     info!(
@@ -69,7 +77,29 @@ async fn shutdown_signal(lifecycle: ServerLifecycle, drain_delay: Duration) {
     if !drain_delay.is_zero() {
         tokio::time::sleep(drain_delay).await;
     }
-    info!("readiness drain complete; stopping listener");
+
+    let active_inputs = session_runtime.active_input_count().await;
+    if active_inputs > 0 {
+        let active_pipes = session_runtime.active_pipe_count().await;
+        info!(
+            active_inputs,
+            active_pipes,
+            timeout_ms = session_drain_timeout.as_millis(),
+            "waiting for active session inputs to drain before shutdown"
+        );
+        if !session_runtime
+            .wait_for_no_active_inputs(session_drain_timeout)
+            .await
+        {
+            let active_inputs = session_runtime.active_input_count().await;
+            let active_pipes = session_runtime.active_pipe_count().await;
+            warn!(
+                active_inputs,
+                active_pipes, "session input drain timeout reached; stopping listener"
+            );
+        }
+    }
+    info!("shutdown drain complete; stopping listener");
 }
 
 async fn wait_for_shutdown_signal() -> &'static str {
@@ -196,6 +226,8 @@ struct Args {
     run_migrations: bool,
     #[arg(long, env = "SHUTDOWN_READINESS_DRAIN_DELAY_S", default_value_t = 5)]
     shutdown_readiness_drain_delay_s: u64,
+    #[arg(long, env = "SHUTDOWN_SESSION_DRAIN_TIMEOUT_S", default_value_t = 540)]
+    shutdown_session_drain_timeout_s: u64,
     #[arg(
         long,
         env = "SESSION_PIPE_LEASE_TTL_S",

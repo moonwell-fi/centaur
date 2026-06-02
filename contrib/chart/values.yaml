@@ -123,6 +123,7 @@ api:
     tailnetFqdnAnnotation: tailscale.com/tailnet-fqdn
   terminationGracePeriodSeconds: 600
   shutdownReadinessDrainDelaySeconds: 5
+  shutdownSessionDrainTimeoutSeconds: 540
   extraEnv: {}
   resources: {}
 

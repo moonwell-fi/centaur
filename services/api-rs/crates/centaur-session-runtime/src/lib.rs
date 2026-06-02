@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -24,7 +24,7 @@ use thiserror::Error;
 use tokio::{
     io,
     sync::Mutex,
-    time::{Instant, Interval, MissedTickBehavior, interval, interval_at, sleep},
+    time::{Instant, Interval, MissedTickBehavior, interval, interval_at, sleep, timeout},
 };
 use tokio_util::codec::{FramedRead, FramedWrite, LinesCodec, LinesCodecError};
 use tracing::warn;
@@ -93,6 +93,7 @@ impl Default for SessionRuntimeOptions {
 struct SessionPipe {
     stdin: Arc<Mutex<SessionInputSink>>,
     lease: Arc<PipeLeaseState>,
+    active_inputs: Arc<AtomicUsize>,
 }
 
 #[derive(Debug, Default)]
@@ -171,6 +172,36 @@ impl SessionRuntime {
             ));
         }
         Ok(self.store.append_messages(thread_key, messages).await?)
+    }
+
+    pub async fn active_pipe_count(&self) -> usize {
+        self.sandbox_pipes.lock().await.len()
+    }
+
+    pub async fn active_input_count(&self) -> usize {
+        self.sandbox_pipes
+            .lock()
+            .await
+            .values()
+            .map(|pipe| pipe.active_inputs.load(Ordering::Relaxed))
+            .sum()
+    }
+
+    pub async fn wait_for_no_active_inputs(&self, wait_timeout: Duration) -> bool {
+        if wait_timeout.is_zero() {
+            return self.active_input_count().await == 0;
+        }
+
+        timeout(wait_timeout, async {
+            loop {
+                if self.active_input_count().await == 0 {
+                    return;
+                }
+                sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .await
+        .is_ok()
     }
 
     pub async fn execute_session(
@@ -373,12 +404,14 @@ impl SessionRuntime {
             }
         };
         let lease = Arc::new(PipeLeaseState::default());
+        let active_inputs = Arc::new(AtomicUsize::new(0));
         let pipe = SessionPipe {
             stdin: Arc::new(Mutex::new(FramedWrite::new(
                 io.stdin,
                 LinesCodec::new_with_max_length(MAX_SESSION_OUTPUT_LINE_BYTES),
             ))),
             lease: lease.clone(),
+            active_inputs: active_inputs.clone(),
         };
 
         self.sandbox_pipes
@@ -422,6 +455,7 @@ impl SessionRuntime {
                 stdout,
                 guard,
                 lease.clone(),
+                active_inputs,
             )
             .await;
             if let Err(error) = result {
@@ -551,17 +585,17 @@ printf '%s\n' '{{"type":"system","subtype":"wrapper_heartbeat","phase":"app_serv
 sleep {delay_seconds}
 printf '%s\n' '{{"type":"thread.started","thread_id":"mock-codex-thread"}}'
 sleep {delay_seconds}
-turn_index=1
-while [ "$turn_index" -le {turns_per_input} ]; do
-  turn_id="mock-turn-$turn_index"
-  printf '{{"type":"turn.started","turn_id":"%s"}}\n' "$turn_id"
+turn_id="mock-turn-1"
+printf '{{"type":"turn.started","turn_id":"%s"}}\n' "$turn_id"
+sleep {delay_seconds}
+delta_index=1
+while [ "$delta_index" -le {turns_per_input} ]; do
+  printf '{{"type":"item.agentMessage.delta","turnId":"%s","session_id":"mock-codex-thread","delta":"PONG %s"}}\n' "$turn_id" "$delta_index"
   sleep {delay_seconds}
-  printf '{{"type":"item.agentMessage.delta","turnId":"%s","session_id":"mock-codex-thread","delta":"PONG %s"}}\n' "$turn_id" "$turn_index"
-  sleep {delay_seconds}
-  printf '{{"type":"turn.completed","turn":{{"id":"%s"}},"usage":{{"input_tokens":0,"output_tokens":1}}}}\n' "$turn_id"
-  sleep {delay_seconds}
-  turn_index=$((turn_index + 1))
+  delta_index=$((delta_index + 1))
 done
+printf '{{"type":"turn.completed","turn":{{"id":"%s"}},"usage":{{"input_tokens":0,"output_tokens":1}}}}\n' "$turn_id"
+sleep {delay_seconds}
 done"#
     )
 }
@@ -641,6 +675,7 @@ async fn run_stdout_pump(
     stdout: SandboxRead,
     _guard: SandboxIoGuard,
     lease: Arc<PipeLeaseState>,
+    active_inputs: Arc<AtomicUsize>,
 ) -> Result<(), SessionRuntimeError> {
     let mut stdout = FramedRead::new(
         stdout,
@@ -652,6 +687,9 @@ async fn run_stdout_pump(
             break;
         }
         append_output_line(&store, &thread_key, None, &line).await?;
+        if is_terminal_output_line(&line) {
+            mark_one_input_complete(&active_inputs);
+        }
     }
     store
         .append_event(
@@ -717,9 +755,29 @@ async fn write_input_lines(
 ) -> Result<(), SessionRuntimeError> {
     let mut stdin = pipe.stdin.lock().await;
     for line in input_lines {
-        stdin.send(line).await.map_err(codec_error_to_runtime)?;
+        pipe.active_inputs.fetch_add(1, Ordering::Relaxed);
+        if let Err(error) = stdin.send(line).await {
+            mark_one_input_complete(&pipe.active_inputs);
+            return Err(codec_error_to_runtime(error));
+        }
     }
     Ok(())
+}
+
+fn mark_one_input_complete(active_inputs: &AtomicUsize) {
+    let _ = active_inputs.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+        count.checked_sub(1)
+    });
+}
+
+fn is_terminal_output_line(line: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return false;
+    };
+    matches!(
+        value.get("type").and_then(Value::as_str),
+        Some("turn.completed" | "turn.done" | "result")
+    )
 }
 
 async fn append_output_line(

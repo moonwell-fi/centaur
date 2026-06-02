@@ -243,6 +243,10 @@ spec:
             - name: SHUTDOWN_READINESS_DRAIN_DELAY_S
               value: {{ .Values.api.shutdownReadinessDrainDelaySeconds | quote }}
 {{- end }}
+{{- if not (hasKey $apiExtraEnv "SHUTDOWN_SESSION_DRAIN_TIMEOUT_S") }}
+            - name: SHUTDOWN_SESSION_DRAIN_TIMEOUT_S
+              value: {{ .Values.api.shutdownSessionDrainTimeoutSeconds | quote }}
+{{- end }}
 {{- if not (hasKey $apiExtraEnv "SLACK_ETL_ENABLED") }}
             - name: SLACK_ETL_ENABLED
               value: {{ ternary "1" "0" .Values.api.slackEtlEnabled | quote }}

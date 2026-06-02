@@ -4,7 +4,7 @@ use test_case::test_case;
 
 #[test_case("agent-k8s"; "agent_k8s")]
 #[tokio::test]
-#[ignore = "requires sandbox e2e infrastructure; run `just e2e-kind`"]
+#[ignore = "requires sandbox e2e infrastructure; run `just e2e-k3d`"]
 async fn env_secret_proxy_rewrites_https_request_before_receiver(
     implementation_name: &'static str,
 ) {
