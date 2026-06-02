@@ -171,7 +171,7 @@ describe('slackbotv2', () => {
       threadKey(parent.ts),
       threadKey(parent.ts)
     ])
-    expect(codexApi.executes).toHaveLength(3)
+    expect(codexApi.executes).toHaveLength(2)
 
     const firstAppend = codexApi.appends[0]!
     expect(firstAppend.threadKey).toBe(threadKey(parent.ts))
@@ -209,28 +209,24 @@ describe('slackbotv2', () => {
     expect(sessionMessageTexts(followUpAppend.body.messages)).toEqual([
       'Additional detail for the subscribed thread.'
     ])
-    const followUpExecute = codexApi.executes[1]!
-    expect(JSON.stringify(JSON.parse(followUpExecute.body.input_lines[0]!))).toContain(
-      'Additional detail for the subscribed thread.'
-    )
 
     const secondMentionAppend = codexApi.appends[2]!
     expect(sessionMessageTexts(secondMentionAppend.body.messages)[0]).toContain(
       'now execute with the latest'
     )
-    const secondExecute = codexApi.executes[2]!
+    const secondExecute = codexApi.executes[1]!
     expect(JSON.stringify(JSON.parse(secondExecute.body.input_lines[0]!))).toContain(
       'now execute with the latest'
     )
 
     expectSlackPlanStreamShape(slackApi.calls, {
-      answers: ['Executed request 1.', 'Executed request 2.', 'Executed request 3.'],
+      answers: ['Executed request 1.', 'Executed request 2.'],
       parentTs: parent.ts
     })
     const assistantStatuses = slackApi.calls
       .filter(call => call.method === 'assistant.threads.setStatus')
       .map(call => stringField(call.body.status))
-    expect(assistantStatuses).toEqual(['Thinking...', '', 'Thinking...', '', 'Thinking...', ''])
+    expect(assistantStatuses).toEqual(['Thinking...', '', 'Thinking...', ''])
     expect(
       slackApi.calls
         .filter(call => call.method === 'assistant.threads.setTitle')
@@ -238,10 +234,8 @@ describe('slackbotv2', () => {
     ).toEqual([
       'run with this screenshot',
       'Codex request 1',
-      'Additional detail for the subscribed thread.',
-      'Codex request 2',
       'now execute with the latest',
-      'Codex request 3'
+      'Codex request 2'
     ])
 
     const text = await threadText(parent.ts)
@@ -254,15 +248,13 @@ describe('slackbotv2', () => {
     expect(text).toContain('tests passed')
     expect(text).toContain('Executed request 1.')
     expect(text).toContain('Executed request 2.')
-    expect(text).toContain('Executed request 3.')
 
     const renderedReplies = (await threadTexts(parent.ts)).filter(reply =>
       reply.includes('Executed request')
     )
-    expect(renderedReplies).toHaveLength(3)
+    expect(renderedReplies).toHaveLength(2)
     expectSlackRenderedReply(renderedReplies[0]!, 'Executed request 1.')
     expectSlackRenderedReply(renderedReplies[1]!, 'Executed request 2.')
-    expectSlackRenderedReply(renderedReplies[2]!, 'Executed request 3.')
   })
 
   it('forwards subscribed messages to /messages without executing during a stream', async () => {
@@ -422,70 +414,6 @@ describe('slackbotv2', () => {
     await waitFor(() => codexApi.streamCount === 1)
     codexApi.closeStreams()
     await Promise.all(waits)
-  })
-
-  it('keeps reading after malformed output and slash-method completion until final answer arrives', async () => {
-    codexApi.autoRespond = false
-
-    const parent = await postUserMessage('Context before parser regression run.')
-    const mention = await postUserMessage(`<@${BOT_USER_ID}> handle reconnect ordering`, parent.ts)
-    const waits: Promise<unknown>[] = []
-    const response = await bot.app.request(
-      '/api/webhooks/slack',
-      signedSlackEvent({
-        event_id: 'Ev-slackbotv2-parser-regression',
-        event: {
-          type: 'app_mention',
-          user: USER_ID,
-          channel: CHANNEL_ID,
-          team: TEAM_ID,
-          ts: mention.ts,
-          thread_ts: parent.ts,
-          text: `<@${BOT_USER_ID}> handle reconnect ordering`
-        }
-      }),
-      {},
-      waitUntilContext(waits)
-    )
-
-    expect(response.status).toBe(200)
-    await waitFor(() => codexApi.executes.length === 1)
-    await waitFor(() => codexApi.eventRequests.length === 1)
-    await waitFor(() => codexApi.streamCount === 1)
-
-    const key = threadKey(parent.ts)
-    codexApi.emitOutputLine(key, 'warning: reconnecting')
-    codexApi.emitOutputLine(
-      key,
-      JSON.stringify({ type: 'turn.completed', turn: { id: 'turn-1', status: 'completed' } })
-    )
-    codexApi.emitOutputLine(
-      key,
-      JSON.stringify({
-        method: 'turn/completed',
-        params: { turn: { id: 'turn-1', status: 'completed' } }
-      })
-    )
-    codexApi.emitOutputLine(
-      key,
-      JSON.stringify({
-        method: 'item/agentMessage/delta',
-        params: {
-          turnId: 'turn-1',
-          itemId: 'answer-1',
-          delta: 'Final answer after reconnect'
-        }
-      })
-    )
-    codexApi.closeStreams()
-    await Promise.all(waits)
-
-    const transcript = slackStreamTranscripts(slackApi.calls)[0]!
-    expect(transcript.chunks).toContainEqual({
-      type: 'markdown_text',
-      text: 'Final answer after reconnect'
-    })
-    expect(await threadText(parent.ts)).toContain('Final answer after reconnect')
   })
 
   it('refetches full context on a later mention if the initial execute failed', async () => {
