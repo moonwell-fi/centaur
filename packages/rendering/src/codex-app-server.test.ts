@@ -419,6 +419,59 @@ describe('CodexAppServerRendererEventMapper', () => {
     })
   })
 
+  it('redacts credential-shaped command details and output', async () => {
+    const chunks = await collect(
+      codexAppServerToChatSdkStream(
+        toAsyncIterable([
+          {
+            method: 'item/started',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              item: {
+                id: 'cmd-1',
+                type: 'commandExecution',
+                command:
+                  'curl -H "Authorization: Bearer sbx1.threadpayload.signature" https://example.test',
+                status: 'inProgress'
+              }
+            }
+          },
+          {
+            method: 'item/completed',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              item: {
+                id: 'cmd-1',
+                type: 'commandExecution',
+                command:
+                  'curl -H "Authorization: Bearer sbx1.threadpayload.signature" https://example.test',
+                status: 'completed',
+                aggregatedOutput:
+                  'agent curl -H Authorization: Bearer sbx1.threadpayload.signature\nCENTAUR_API_KEY=sbx1.otherpayload.othersig\nSLACK_BOT_TOKEN=xoxb-1234567890-abcdef\n',
+                exitCode: 0
+              }
+            }
+          }
+        ])
+      )
+    )
+
+    const rendered = chunks
+      .filter((chunk): chunk is Extract<(typeof chunks)[number], { type: 'task_update' }> =>
+        chunk.type === 'task_update' && chunk.id === 'cmd-1'
+      )
+      .map(chunk => `${chunk.details ?? ''}\n${chunk.output ?? ''}`)
+      .join('\n')
+
+    expect(rendered).not.toContain('sbx1.')
+    expect(rendered).not.toContain('xoxb-')
+    expect(rendered).toContain('Authorization: Bearer [REDACTED_TOKEN]')
+    expect(rendered).toContain('CENTAUR_API_KEY=[REDACTED_TOKEN]')
+    expect(rendered).toContain('SLACK_BOT_TOKEN=[REDACTED_TOKEN]')
+  })
+
   it('omits binary command output from task updates', async () => {
     const chunks = await collect(
       codexAppServerToChatSdkStream(

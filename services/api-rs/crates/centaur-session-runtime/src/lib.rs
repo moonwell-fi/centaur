@@ -1345,15 +1345,144 @@ async fn append_output_line(
     execution_id: Option<&str>,
     line: &str,
 ) -> Result<(), SessionRuntimeError> {
+    let safe_line = redact_sensitive_text(line);
     store
         .append_event(
             thread_key,
             execution_id,
             SESSION_OUTPUT_LINE_EVENT,
-            Value::String(line.to_owned()),
+            Value::String(safe_line),
         )
         .await?;
     Ok(())
+}
+
+fn redact_sensitive_text(input: &str) -> String {
+    let bearer_redacted = redact_bearer_tokens(input);
+    let env_redacted = redact_sensitive_env_assignments(&bearer_redacted);
+    redact_prefixed_tokens(&env_redacted)
+}
+
+fn redact_bearer_tokens(input: &str) -> String {
+    const BEARER: &str = "bearer ";
+    let lower = input.to_ascii_lowercase();
+    let mut out = String::with_capacity(input.len());
+    let mut index = 0;
+
+    while let Some(relative) = lower[index..].find(BEARER) {
+        let start = index + relative;
+        let token_start = start + BEARER.len();
+        let token_end = consume_sensitive_token(input, token_start);
+        out.push_str(&input[index..token_start]);
+        if token_end > token_start {
+            out.push_str("[REDACTED_TOKEN]");
+            index = token_end;
+        } else {
+            index = token_start;
+        }
+    }
+
+    out.push_str(&input[index..]);
+    out
+}
+
+fn redact_sensitive_env_assignments(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut index = 0;
+
+    while let Some(relative) = input[index..].find('=') {
+        let equals = index + relative;
+        let key_start = env_key_start(input, equals);
+        let key = &input[key_start..equals];
+        out.push_str(&input[index..=equals]);
+        if is_sensitive_env_key(key) {
+            let token_start = equals + 1;
+            let token_end = consume_sensitive_token(input, token_start);
+            if token_end > token_start {
+                out.push_str("[REDACTED_TOKEN]");
+                index = token_end;
+                continue;
+            }
+        }
+        index = equals + 1;
+    }
+
+    out.push_str(&input[index..]);
+    out
+}
+
+fn redact_prefixed_tokens(input: &str) -> String {
+    const PREFIXES: &[&str] = &[
+        "sbx1.",
+        "xoxa-",
+        "xoxb-",
+        "xoxp-",
+        "xoxr-",
+        "xoxs-",
+        "sk-ant-",
+        "sk-",
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "ghs_",
+        "ghr_",
+        "github_pat_",
+    ];
+
+    let mut out = String::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if let Some(prefix) = PREFIXES
+            .iter()
+            .find(|prefix| input[index..].starts_with(**prefix))
+        {
+            let token_end = consume_sensitive_token(input, index + prefix.len());
+            out.push_str("[REDACTED_TOKEN]");
+            index = token_end;
+            continue;
+        }
+
+        let ch = input[index..].chars().next().expect("valid char boundary");
+        out.push(ch);
+        index += ch.len_utf8();
+    }
+
+    out
+}
+
+fn consume_sensitive_token(input: &str, start: usize) -> usize {
+    let mut end = start;
+    for (relative, ch) in input[start..].char_indices() {
+        if !is_sensitive_token_char(ch) {
+            break;
+        }
+        end = start + relative + ch.len_utf8();
+    }
+    end
+}
+
+fn is_sensitive_token_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '=' | '+' | '/' | '.' | ':')
+}
+
+fn env_key_start(input: &str, equals: usize) -> usize {
+    let mut start = equals;
+    for (index, ch) in input[..equals].char_indices().rev() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-') {
+            start = index;
+        } else {
+            break;
+        }
+    }
+    start
+}
+
+fn is_sensitive_env_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    upper.contains("API_KEY")
+        || upper.contains("TOKEN")
+        || upper.contains("SECRET")
+        || upper.contains("PASSWORD")
 }
 
 fn harness_thread_id_from_output_line(line: &str) -> Option<String> {
@@ -1559,6 +1688,20 @@ mod tests {
             idle_timeout_from_execution(&execution),
             Some(Duration::from_millis(1500))
         );
+    }
+
+    #[test]
+    fn redacts_sensitive_values_from_output_lines() {
+        let line = r#"{"type":"item.completed","item":{"aggregatedOutput":"Authorization: Bearer sbx1.threadpayload.signature\nCENTAUR_API_KEY=sbx1.otherpayload.othersig\nSLACK_BOT_TOKEN=xoxb-1234567890-abcdef\n"}}"#;
+
+        let redacted = redact_sensitive_text(line);
+
+        assert!(!redacted.contains("sbx1.threadpayload.signature"));
+        assert!(!redacted.contains("sbx1.otherpayload.othersig"));
+        assert!(!redacted.contains("xoxb-1234567890-abcdef"));
+        assert!(redacted.contains("Authorization: Bearer [REDACTED_TOKEN]"));
+        assert!(redacted.contains("CENTAUR_API_KEY=[REDACTED_TOKEN]"));
+        assert!(redacted.contains("SLACK_BOT_TOKEN=[REDACTED_TOKEN]"));
     }
 
     #[test]

@@ -1129,6 +1129,7 @@ function commandTask(
   const rawCommand = String(item.command ?? 'Command')
   const displayCommand =
     rawCommand === 'Command' ? rawCommand : oneLine(unwrapShellCommand(rawCommand), 220)
+  const safeDisplayCommand = redactSensitiveText(displayCommand)
   const status = commandStatus(item, eventType)
   const exitCode = item.exitCode ?? item.exit_code
   const failed = isCommandFailure(item, eventType)
@@ -1143,7 +1144,7 @@ function commandTask(
     details:
       isCompletionUpdate && existing && !failed
         ? []
-        : [pre(displayCommand, shellLanguageForCommand(displayCommand))],
+        : [pre(safeDisplayCommand, shellLanguageForCommand(safeDisplayCommand))],
     output
   }
 }
@@ -1191,16 +1192,36 @@ function formatCommandOutput(output: string): { body: string; language: string }
 function sanitizeCommandOutput(output: string): { body: string; binary: boolean } {
   if (!looksLikeBinaryOutput(output)) {
     return {
-      body: output.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '?'),
+      body: redactSensitiveText(
+        output.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '?')
+      ),
       binary: false
     }
   }
 
   const exitCodePrefix = /^exit code \d+\n/.exec(output)?.[0] ?? ''
   return {
-    body: `${exitCodePrefix}[binary output omitted; ${output.length - exitCodePrefix.length} chars received]`,
+    body: `${redactSensitiveText(exitCodePrefix)}[binary output omitted; ${output.length - exitCodePrefix.length} chars received]`,
     binary: true
   }
+}
+
+function redactSensitiveText(input: string): string {
+  return input
+    .replace(
+      /\b(authorization\s*:\s*bearer\s+)([^\s"'`\\]+)/gi,
+      '$1[REDACTED_TOKEN]'
+    )
+    .replace(/\b(bearer\s+)([A-Za-z0-9._=+/:-]{16,})/gi, '$1[REDACTED_TOKEN]')
+    .replace(
+      /\b((?:[A-Z0-9_]*(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*)\s*=\s*)([^\s"'`]+)/gi,
+      '$1[REDACTED_TOKEN]'
+    )
+    .replace(/\bsbx1\.[A-Za-z0-9_=+-]+(?:\.[A-Za-z0-9_=+-]+)?/g, '[REDACTED_TOKEN]')
+    .replace(/\bxox[abprs]-[A-Za-z0-9-]{8,}/g, '[REDACTED_TOKEN]')
+    .replace(/\b(?:sk-ant-[A-Za-z0-9_-]{16,}|sk-[A-Za-z0-9_-]{20,})/g, '[REDACTED_TOKEN]')
+    .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{20,}\b/g, '[REDACTED_TOKEN]')
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '[REDACTED_TOKEN]')
 }
 
 function looksLikeBinaryOutput(output: string): boolean {
