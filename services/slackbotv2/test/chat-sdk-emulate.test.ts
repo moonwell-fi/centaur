@@ -416,6 +416,70 @@ describe('slackbotv2', () => {
     await Promise.all(waits)
   })
 
+  it('keeps reading after malformed output and slash-method completion until final answer arrives', async () => {
+    codexApi.autoRespond = false
+
+    const parent = await postUserMessage('Context before parser regression run.')
+    const mention = await postUserMessage(`<@${BOT_USER_ID}> handle reconnect ordering`, parent.ts)
+    const waits: Promise<unknown>[] = []
+    const response = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-parser-regression',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: mention.ts,
+          thread_ts: parent.ts,
+          text: `<@${BOT_USER_ID}> handle reconnect ordering`
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await waitFor(() => codexApi.executes.length === 1)
+    await waitFor(() => codexApi.eventRequests.length === 1)
+    await waitFor(() => codexApi.streamCount === 1)
+
+    const key = threadKey(parent.ts)
+    codexApi.emitOutputLine(key, 'warning: reconnecting')
+    codexApi.emitOutputLine(
+      key,
+      JSON.stringify({ type: 'turn.completed', turn: { id: 'turn-1', status: 'completed' } })
+    )
+    codexApi.emitOutputLine(
+      key,
+      JSON.stringify({
+        method: 'turn/completed',
+        params: { turn: { id: 'turn-1', status: 'completed' } }
+      })
+    )
+    codexApi.emitOutputLine(
+      key,
+      JSON.stringify({
+        method: 'item/agentMessage/delta',
+        params: {
+          turnId: 'turn-1',
+          itemId: 'answer-1',
+          delta: 'Final answer after reconnect'
+        }
+      })
+    )
+    codexApi.closeStreams()
+    await Promise.all(waits)
+
+    const transcript = slackStreamTranscripts(slackApi.calls)[0]!
+    expect(transcript.chunks).toContainEqual({
+      type: 'markdown_text',
+      text: 'Final answer after reconnect'
+    })
+    expect(await threadText(parent.ts)).toContain('Final answer after reconnect')
+  })
+
   it('refetches full context on a later mention if the initial execute failed', async () => {
     codexApi.failNextExecute = true
 

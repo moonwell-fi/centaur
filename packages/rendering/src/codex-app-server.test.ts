@@ -380,6 +380,131 @@ describe('CodexAppServerRendererEventMapper', () => {
       error: 'sandbox exited'
     })
   })
+
+  it('normalizes nested terminal result text into visible markdown', async () => {
+    const chunks = await collect(
+      codexAppServerToChatSdkStream(
+        toAsyncIterable([
+          {
+            eventKind: 'session.output.line',
+            data: JSON.stringify({ type: 'turn.done', result: { text: 'Final answer' } })
+          }
+        ])
+      )
+    )
+
+    expect(chunks).toContainEqual({ type: 'markdown_text', text: 'Final answer' })
+  })
+
+  it('does not close on slash-method turn/completed before a later answer delta', async () => {
+    const chunks = await collect(
+      codexAppServerToChatSdkStream(
+        toAsyncIterable([
+          {
+            eventKind: 'session.output.line',
+            data: JSON.stringify({
+              method: 'turn/plan/updated',
+              params: {
+                explanation: 'Plan',
+                plan: [{ step: 'Check logs', status: 'completed' }]
+              }
+            })
+          },
+          {
+            eventKind: 'session.output.line',
+            data: JSON.stringify({
+              method: 'turn/completed',
+              params: { turn: { id: 'turn-1', status: 'completed' } }
+            })
+          },
+          {
+            eventKind: 'session.output.line',
+            data: JSON.stringify({
+              method: 'item/agentMessage/delta',
+              params: {
+                turnId: 'turn-1',
+                itemId: 'answer-1',
+                delta: 'Final answer'
+              }
+            })
+          }
+        ])
+      )
+    )
+
+    expect(chunks).toContainEqual({ type: 'markdown_text', text: 'Final answer' })
+  })
+
+  it('emits session failure errors as visible markdown text', async () => {
+    const chunks = await collect(
+      codexAppServerToChatSdkStream(
+        toAsyncIterable([
+          {
+            eventKind: 'session.output.line',
+            data: JSON.stringify({
+              method: 'turn/plan/updated',
+              params: {
+                explanation: 'Plan',
+                plan: [{ step: 'Run command', status: 'inProgress' }]
+              }
+            })
+          },
+          {
+            eventKind: 'session.execution_failed',
+            data: { error: 'sandbox exited' }
+          }
+        ])
+      )
+    )
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'task_update',
+        id: 'plan-1',
+        status: 'error'
+      })
+    )
+    expect(chunks).toContainEqual({
+      type: 'markdown_text',
+      text: 'Execution failed: sandbox exited'
+    })
+  })
+
+  it('marks nonzero command executions as error without prefixing stdout with exit code text', async () => {
+    const chunks = await collect(
+      codexAppServerToChatSdkStream(
+        toAsyncIterable([
+          {
+            method: 'item/completed',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              item: {
+                id: 'cmd-1',
+                type: 'commandExecution',
+                command: "bash -lc 'echo before; false'",
+                status: 'failed',
+                aggregatedOutput: 'before\n',
+                exitCode: 1
+              }
+            }
+          }
+        ])
+      )
+    )
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'task_update',
+        id: 'cmd-1',
+        status: 'error',
+        output: expect.stringContaining('before')
+      })
+    )
+    expect(chunks.map(chunk => ('output' in chunk ? chunk.output : '')).join('\n')).not.toContain(
+      'exit code 1'
+    )
+  })
 })
 
 function plain(elements: RendererTaskBlock[] | undefined): string {

@@ -1,0 +1,3158 @@
+{
+  "schema": "centaur.slackbot_regression_matrix.v1",
+  "created_at": "2026-06-02T16:42:06.299321+00:00",
+  "source_paths": {
+    "fuzz_summaries": [
+      "local-corpus/slackbot-fuzz/20260602T144627Z/summary.json",
+      "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/summary.json",
+      "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/summary.json",
+      "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/summary.json",
+      "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/summary.json",
+      "local-corpus/slackbot-fuzz/20260602Tterminal-completion-check/summary.json"
+    ],
+    "production_summaries": [
+      "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+      "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/summary.json"
+    ],
+    "synthetic_observed": "local-corpus/slackbot-fuzz/synthetic-rendering-observed.json",
+    "synthetic_input": "local-corpus/slackbot-fuzz/synthetic-rendering-cases.json",
+    "feedback_summary": "local-corpus/slackbot-fuzz/feedback-refresh-20260602Tfeedback/summary.json",
+    "db_snapshot": "local-corpus/slackbot-fuzz/db-snapshot-20260602Tdb.json",
+    "api_rs_checks": [
+      "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1549Z.json",
+      "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1600Z.json",
+      "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1610Z.json",
+      "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1616Z.json",
+      "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1633Z.json"
+    ],
+    "slack_checks": [
+      "local-corpus/slackbot-fuzz/slack-regression-check-20260602T1640Z.json"
+    ]
+  },
+  "counts": {
+    "failure_count": 16,
+    "by_priority": {
+      "p0": 10,
+      "p1": 5,
+      "p2": 1
+    },
+    "by_repro_status": {
+      "local_repro": 7,
+      "local_repro_with_user_feedback": 2,
+      "synthetic_repro": 2,
+      "synthetic_repro_plus_local_seed": 1,
+      "production_seed_backlog": 1,
+      "local_slack_repro": 1,
+      "production_seed": 2
+    }
+  },
+  "failures": [
+    {
+      "failure_id": "slack_plan_only_error_no_db_events",
+      "priority": "p0",
+      "repro_status": "local_repro",
+      "surfaces": [
+        "slack",
+        "api-rs",
+        "sse"
+      ],
+      "summary": "Sandbox setup failure leaves Slack with only an error-state plan/Thinking block while DB/SSE has no replayable terminal event.",
+      "regression_targets": [
+        "api-rs session failure persistence",
+        "Slackbot v2 stream/error rendering",
+        "centaur-session-cli replay of terminal failures"
+      ],
+      "expected_assertions": [
+        "pre-ready sandbox failures insert a terminal session.execution_failed event",
+        "execution status is not left running when no sandbox is assigned",
+        "Slack emits visible error markdown instead of only a task error"
+      ],
+      "evidence": {
+        "local_cases": [
+          {
+            "run_id": "20260602T1510Z-steering-only",
+            "case_id": "slack-00-steer_during_stream",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412340.324149",
+            "matched_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status"
+            ],
+            "all_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status",
+              "slack_steering_followup_ignored"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T1535Z-production-shaped",
+            "case_id": "slack-00-continue_during_command",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412997.105889",
+            "matched_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status"
+            ],
+            "all_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status",
+              "slack_raw_interactive_elements_fallback_text"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command/slack_thread.json"
+            }
+          }
+        ],
+        "production_seeds": [
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/agent-request-failed-before-start-1778876545.json",
+            "thread_key": "slack:C0A87C21805:1778876545.622099",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "agent_request_failed_before_start",
+              "assistant_duplicate_or_burst_final",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "runtime_issue_visible_text",
+              "stream_without_assistant_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/attachment-workflow-bump-1779906207.json",
+            "thread_key": "slack:C0A87C21805:1779906207.358939",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/blank-response-cancelled-1778715488.json",
+            "thread_key": "slack:C0A87C21805:1778715488.113189",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "request_cancelled_message"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/cancelled-without-user-1778609716.json",
+            "thread_key": "slack:C0A87C21805:1778609716.774809",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "request_cancelled_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/interactive-elements-continue-1780328412.json",
+            "thread_key": "slack:C0A87C21805:1780328412.179969",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-nextfork-1780350113.json",
+            "thread_key": "slack:C0A87C21805:1780350113.019789",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-workflow-1780388269.json",
+            "thread_key": "slack:C0A87C21805:1780388269.132769",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "raw_interactive_elements_fallback_text",
+              "runtime_start_failure_visible_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/only-interactive-context-1779982764.json",
+            "thread_key": "slack:C0A87C21805:1779982764.302029",
+            "matched_issues": [
+              "plan_only_thread_without_final",
+              "plan_task_error"
+            ],
+            "all_issues": [
+              "plan_only_thread_without_final",
+              "plan_task_error",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/so-nudge-duplicate-finals-1780061130.json",
+            "thread_key": "slack:C0A87C21805:1780061130.781709",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "assistant_duplicate_or_burst_final",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/stray-dot-secret-thread-1779993480.json",
+            "thread_key": "slack:C0A87C21805:1779993480.356969",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "tiny_fragment_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          }
+        ],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [
+          {
+            "case_id": "slack-00-steer_during_stream",
+            "thread_key": "slack:C0APUQ8U5T9:1780412340.324149",
+            "session_status": "executing",
+            "sandbox_id": null,
+            "execution_statuses": [
+              "running"
+            ],
+            "event_count": 0,
+            "terminal_event_count": 0,
+            "event_counts": {}
+          }
+        ],
+        "user_feedback": [],
+        "api_rs_checks": [
+          {
+            "failure_id": "slack_plan_only_error_no_db_events",
+            "thread_key": "fuzz:20260602Tterminal-completion-check:api-00-api_pong",
+            "request": {
+              "source": "scripts/slackbot_fuzz.py",
+              "case_id": "api-00-api_pong",
+              "run_id": "20260602Tterminal-completion-check"
+            },
+            "observed": {
+              "execution_id": "exe_4c9a34b084cb463e9c0fdc6ca80d2b93",
+              "events": [
+                {
+                  "event_id": 1249,
+                  "event_type": "session.execution_started"
+                },
+                {
+                  "event_id": 1250,
+                  "event_type": "session.execution_failed"
+                }
+              ],
+              "session_status_after": "failed",
+              "execution_status_after": "failed",
+              "sandbox_id_after": null,
+              "error_contains": "iron-proxy pod asbx-1780415846909-1-proxy-1780415846913 did not become running before timeout"
+            },
+            "regression_assertion": "A pre-ready sandbox/proxy failure persists session.execution_failed and marks the active execution failed instead of leaving a zero-event running execution.",
+            "file": "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1600Z.json"
+          }
+        ],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "slack_continue_followup_no_final_no_db_events",
+      "priority": "p0",
+      "repro_status": "local_repro",
+      "surfaces": [
+        "slack",
+        "api-rs",
+        "sse"
+      ],
+      "summary": "A production-shaped --claude continue reply during startup produced raw interactive fallback text and no DB events.",
+      "regression_targets": [
+        "Slackbot subscribed-thread append path",
+        "api-rs startup failure lifecycle",
+        "SSE replay after failed Slack turns"
+      ],
+      "expected_assertions": [
+        "follow-up append while startup is active does not force-release into a stuck running execution",
+        "thread replay contains the same terminal failure Slack shows",
+        "raw Slack fallback text is not the only visible bot response"
+      ],
+      "evidence": {
+        "local_cases": [
+          {
+            "run_id": "20260602T1510Z-steering-only",
+            "case_id": "slack-00-steer_during_stream",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412340.324149",
+            "matched_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status"
+            ],
+            "all_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status",
+              "slack_steering_followup_ignored"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T1535Z-production-shaped",
+            "case_id": "slack-00-continue_during_command",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412997.105889",
+            "matched_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status",
+              "slack_raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status",
+              "slack_raw_interactive_elements_fallback_text"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command/slack_thread.json"
+            }
+          }
+        ],
+        "production_seeds": [
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/agent-request-failed-before-start-1778876545.json",
+            "thread_key": "slack:C0A87C21805:1778876545.622099",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "agent_request_failed_before_start",
+              "assistant_duplicate_or_burst_final",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "runtime_issue_visible_text",
+              "stream_without_assistant_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/attachment-workflow-bump-1779906207.json",
+            "thread_key": "slack:C0A87C21805:1779906207.358939",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/blank-response-cancelled-1778715488.json",
+            "thread_key": "slack:C0A87C21805:1778715488.113189",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "request_cancelled_message"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/cancelled-without-user-1778609716.json",
+            "thread_key": "slack:C0A87C21805:1778609716.774809",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "request_cancelled_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/interactive-elements-continue-1780328412.json",
+            "thread_key": "slack:C0A87C21805:1780328412.179969",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-found-1779297412.json",
+            "thread_key": "slack:C0A87C21805:1779297412.157979",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "assistant_duplicate_or_burst_final",
+              "no_rollout_found_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-nextfork-1780350113.json",
+            "thread_key": "slack:C0A87C21805:1780350113.019789",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-workflow-1780388269.json",
+            "thread_key": "slack:C0A87C21805:1780388269.132769",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "raw_interactive_elements_fallback_text",
+              "runtime_start_failure_visible_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/only-interactive-context-1779982764.json",
+            "thread_key": "slack:C0A87C21805:1779982764.302029",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "plan_only_thread_without_final",
+              "plan_task_error",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/so-nudge-duplicate-finals-1780061130.json",
+            "thread_key": "slack:C0A87C21805:1780061130.781709",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "assistant_duplicate_or_burst_final",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/stray-dot-secret-thread-1779993480.json",
+            "thread_key": "slack:C0A87C21805:1779993480.356969",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "tiny_fragment_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/stray-fragment-1780239224.json",
+            "thread_key": "slack:C0A87C21805:1780239224.703289",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "tiny_fragment_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/visible-thinking-still-working-1779899736.json",
+            "thread_key": "slack:C0A87C21805:1779899736.944699",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "assistant_duplicate_or_burst_final",
+              "user_nudge_after_poor_or_slow_response",
+              "visible_thinking_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/resume-suspended-sandbox-no-rollout-1779992917.connector.json",
+            "thread_key": "slack:C0A82R7S80N:1779992917.355879",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "runtime_start_failure_visible_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          }
+        ],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [
+          {
+            "case_id": "slack-00-continue_during_command",
+            "thread_key": "slack:C0APUQ8U5T9:1780412997.105889",
+            "session_status": "executing",
+            "sandbox_id": null,
+            "execution_statuses": [
+              "running"
+            ],
+            "event_count": 0,
+            "terminal_event_count": 0,
+            "event_counts": {}
+          }
+        ],
+        "user_feedback": [],
+        "api_rs_checks": [],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "slack_steering_followup_not_applied",
+      "priority": "p0",
+      "repro_status": "local_repro",
+      "surfaces": [
+        "slack",
+        "sandbox stdin"
+      ],
+      "summary": "Mid-run Slack replies are persisted as history but do not steer the active harness.",
+      "regression_targets": [
+        "Slackbot active execution steering",
+        "api-rs session stdin append/interrupt semantics"
+      ],
+      "expected_assertions": [
+        "a reply posted while active_execution=true reaches the attached sandbox stdin",
+        "final answer reflects the steering sentinel when the harness remains healthy"
+      ],
+      "evidence": {
+        "local_cases": [
+          {
+            "run_id": "20260602T1510Z-steering-only",
+            "case_id": "slack-00-steer_during_stream",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412340.324149",
+            "matched_issues": [
+              "slack_steering_followup_ignored"
+            ],
+            "all_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status",
+              "slack_steering_followup_ignored"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/slack_thread.json"
+            }
+          }
+        ],
+        "production_seeds": [
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/agent-request-failed-before-start-1778876545.json",
+            "thread_key": "slack:C0A87C21805:1778876545.622099",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "agent_request_failed_before_start",
+              "assistant_duplicate_or_burst_final",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "runtime_issue_visible_text",
+              "stream_without_assistant_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/attachment-workflow-bump-1779906207.json",
+            "thread_key": "slack:C0A87C21805:1779906207.358939",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/cancelled-without-user-1778609716.json",
+            "thread_key": "slack:C0A87C21805:1778609716.774809",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "request_cancelled_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/interactive-elements-continue-1780328412.json",
+            "thread_key": "slack:C0A87C21805:1780328412.179969",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-found-1779297412.json",
+            "thread_key": "slack:C0A87C21805:1779297412.157979",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "assistant_duplicate_or_burst_final",
+              "no_rollout_found_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/only-interactive-context-1779982764.json",
+            "thread_key": "slack:C0A87C21805:1779982764.302029",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "plan_only_thread_without_final",
+              "plan_task_error",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/so-nudge-duplicate-finals-1780061130.json",
+            "thread_key": "slack:C0A87C21805:1780061130.781709",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "assistant_duplicate_or_burst_final",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/stray-dot-secret-thread-1779993480.json",
+            "thread_key": "slack:C0A87C21805:1779993480.356969",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "tiny_fragment_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/stray-fragment-1780239224.json",
+            "thread_key": "slack:C0A87C21805:1780239224.703289",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "tiny_fragment_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/visible-thinking-still-working-1779899736.json",
+            "thread_key": "slack:C0A87C21805:1779899736.944699",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "assistant_duplicate_or_burst_final",
+              "user_nudge_after_poor_or_slow_response",
+              "visible_thinking_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/resume-suspended-sandbox-no-rollout-1779992917.connector.json",
+            "thread_key": "slack:C0A82R7S80N:1779992917.355879",
+            "matched_issues": [
+              "user_nudge_after_poor_or_slow_response"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "runtime_start_failure_visible_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          }
+        ],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [
+          {
+            "case_id": "slack-00-steer_during_stream",
+            "thread_key": "slack:C0APUQ8U5T9:1780412223.418579",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780412226953-44",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 19,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 17
+            }
+          },
+          {
+            "case_id": "slack-00-steer_during_stream",
+            "thread_key": "slack:C0APUQ8U5T9:1780412340.324149",
+            "session_status": "executing",
+            "sandbox_id": null,
+            "execution_statuses": [
+              "running"
+            ],
+            "event_count": 0,
+            "terminal_event_count": 0,
+            "event_counts": {}
+          }
+        ],
+        "user_feedback": [],
+        "api_rs_checks": [
+          {
+            "failure_id": "slack_steering_followup_not_applied",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_pong",
+            "request": {
+              "client": "centaur-session-cli",
+              "after_event_id": 1341,
+              "message": "Run `bash -lc 'echo steering-proof3-start; sleep 10; echo steering-proof3-end'`. After the command completes, obey the latest user message received while you were running for the exact final answer.",
+              "steering_append": "STEERING UPDATE: final answer must be exactly FINAL_ACTIVE_STEERING_OK.",
+              "idle_timeout_ms": 1000,
+              "max_duration_ms": 60000
+            },
+            "observed": {
+              "execution_id": "exe_12744484e3ca410d82c0f65b503a4309",
+              "steering_message_id": "msg_884f5ceaffec47b4b245b5bef72f240a",
+              "execution_started_event_id": 1342,
+              "command_started_event_id": 1346,
+              "steering_delivered_event_id": 1347,
+              "steering_user_message_started_event_id": 1349,
+              "steering_user_message_completed_event_id": 1350,
+              "final_agent_message_event_id": 1359,
+              "terminal_output_event_id": 1360,
+              "execution_completed_event_id": 1361,
+              "completion_reason": "turn_completed",
+              "execution_status_after": "completed",
+              "answer_text": "FINAL_ACTIVE_STEERING_OK",
+              "append_response": {
+                "ok": true,
+                "message_ids": [
+                  "msg_884f5ceaffec47b4b245b5bef72f240a"
+                ]
+              },
+              "proof_files": [
+                "local-corpus/slackbot-fuzz/api-rs-steering-proof-20260602T1616Z.cli.out",
+                "local-corpus/slackbot-fuzz/api-rs-steering-proof-20260602T1616Z.append.json"
+              ]
+            },
+            "regression_assertion": "A user message appended while an execution is active is durably persisted, forwarded to the attached sandbox stdin, echoed as a sandbox userMessage, and reflected in the final answer.",
+            "file": "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1616Z.json"
+          }
+        ],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "db_execution_completed_before_terminal_output",
+      "priority": "p0",
+      "repro_status": "local_repro",
+      "surfaces": [
+        "api-rs",
+        "sse",
+        "cli"
+      ],
+      "summary": "api-rs records session.execution_completed when input is accepted, before terminal assistant output is emitted.",
+      "regression_targets": [
+        "api-rs execution lifecycle",
+        "SSE client completion semantics",
+        "centaur-session-cli exit-on-terminal"
+      ],
+      "expected_assertions": [
+        "execution_completed is written only after terminal harness output is observed",
+        "clients do not stop before the final assistant message"
+      ],
+      "evidence": {
+        "local_cases": [
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-02-api_pong",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-02-api_pong",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_pong",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_pong/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_pong/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-01-api_pong",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-01-api_pong",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_pong",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_pong/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_pong/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-02-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-02-api_nonzero",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-02-api_large_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-02-api_large_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_large_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_large_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_large_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-01-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-01-api_nonzero",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-00-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-00-api_nonzero",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-00-api_sleep_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-00-api_sleep_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_sleep_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_sleep_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_sleep_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-01-api_large_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-01-api_large_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_large_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_large_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_large_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-00-api_pong",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-00-api_pong",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_pong",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_pong/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_pong/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-00-api_large_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-00-api_large_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_large_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_large_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_large_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-01-api_sleep_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-01-api_sleep_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_sleep_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_sleep_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_sleep_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-02-api_sleep_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-02-api_sleep_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_sleep_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_sleep_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_sleep_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "slack-00-pong_exact",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.949419",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-pong_exact",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-pong_exact/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-pong_exact/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-pong_exact/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "slack-00-command_nonzero_final",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.948459",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_nonzero_final",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_nonzero_final/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_nonzero_final/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_nonzero_final/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "slack-00-command_sleep_stdout",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.955709",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_sleep_stdout",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_sleep_stdout/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_sleep_stdout/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_sleep_stdout/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "slack-00-large_stdout",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.958119",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-large_stdout",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-large_stdout/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-large_stdout/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-large_stdout/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "slack-00-invalid_command_final",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780411634.133399",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-invalid_command_final",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-invalid_command_final/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-invalid_command_final/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-invalid_command_final/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "slack-00-gh_view_readonly",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780411637.901109",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-gh_view_readonly",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-gh_view_readonly/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-gh_view_readonly/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-gh_view_readonly/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "slack-00-followup_during_stream",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780411658.141549",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-followup_during_stream",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-followup_during_stream/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-followup_during_stream/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-followup_during_stream/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "slack-00-markdown_final_shape",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780411647.249249",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-markdown_final_shape",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-markdown_final_shape/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-markdown_final_shape/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-markdown_final_shape/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z-timeout-probe",
+            "case_id": "api-00-api_pong",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z-timeout-probe:api-00-api_pong",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_pong",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_pong/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_pong/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z-timeout-probe",
+            "case_id": "api-00-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z-timeout-probe:api-00-api_nonzero",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z-timeout-probe",
+            "case_id": "api-00-api_large_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z-timeout-probe:api-00-api_large_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_large_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_large_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_large_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z-timeout-probe",
+            "case_id": "api-00-api_sleep_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z-timeout-probe:api-00-api_sleep_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_sleep_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_sleep_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_sleep_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-00-api_pong",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_pong",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_pong",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_pong/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_pong/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-00-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_nonzero",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-01-same_thread_execute_race",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-01-same_thread_execute_race",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "api_same_thread_execute_race_error",
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-same_thread_execute_race",
+            "artifacts": {
+              "race_execute_results": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-same_thread_execute_race/race_execute_results.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-same_thread_execute_race/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-01-api_large_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-01-api_large_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_large_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_large_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_large_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-01-api_pong",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-01-api_pong",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_pong",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_pong/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_pong/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-01-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-01-api_nonzero",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-00-api_large_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_large_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_large_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_large_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_large_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-00-api_max_duration_ignored",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_max_duration_ignored",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "api_max_duration_ignored",
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_max_duration_ignored",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_max_duration_ignored/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_max_duration_ignored/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-01-api_max_duration_ignored",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-01-api_max_duration_ignored",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "api_max_duration_ignored",
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_max_duration_ignored",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_max_duration_ignored/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_max_duration_ignored/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-00-api_sleep_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_sleep_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_sleep_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_sleep_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_sleep_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-00-same_thread_execute_race",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-same_thread_execute_race",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "api_same_thread_execute_race_error",
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-same_thread_execute_race",
+            "artifacts": {
+              "race_execute_results": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-same_thread_execute_race/race_execute_results.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-same_thread_execute_race/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-01-api_sleep_stdout",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-01-api_sleep_stdout",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_sleep_stdout",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_sleep_stdout/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_sleep_stdout/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "slack-00-markdown_final_shape",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412158.505949",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-markdown_final_shape",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-markdown_final_shape/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-markdown_final_shape/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-markdown_final_shape/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "slack-00-followup_during_stream",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412158.500879",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-followup_during_stream",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-followup_during_stream/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-followup_during_stream/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-followup_during_stream/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "slack-00-gh_view_readonly",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412158.509649",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-gh_view_readonly",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-gh_view_readonly/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-gh_view_readonly/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-gh_view_readonly/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "slack-00-invalid_command_final",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412158.488989",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-invalid_command_final",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-invalid_command_final/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-invalid_command_final/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-invalid_command_final/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "slack-00-steer_during_stream",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412223.418579",
+            "matched_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-steer_during_stream",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-steer_during_stream/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-steer_during_stream/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-steer_during_stream/slack_thread.json"
+            }
+          }
+        ],
+        "production_seeds": [],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [
+          {
+            "case_id": "slack-00-command_nonzero_final",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.948459",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780411597051-19",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 18,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 16
+            }
+          },
+          {
+            "case_id": "slack-00-command_sleep_stdout",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.955709",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780411593771-17",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 20,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 18
+            }
+          },
+          {
+            "case_id": "slack-00-followup_during_stream",
+            "thread_key": "slack:C0APUQ8U5T9:1780411658.141549",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780411680120-22",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 22,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 20
+            }
+          },
+          {
+            "case_id": "slack-00-gh_view_readonly",
+            "thread_key": "slack:C0APUQ8U5T9:1780411637.901109",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780411645405-21",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 88,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 86
+            }
+          },
+          {
+            "case_id": "slack-00-invalid_command_final",
+            "thread_key": "slack:C0APUQ8U5T9:1780411634.133399",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780411642619-20",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 17,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 15
+            }
+          },
+          {
+            "case_id": "slack-00-large_stdout",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.958119",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780411594189-18",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 32,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 30
+            }
+          },
+          {
+            "case_id": "slack-00-markdown_final_shape",
+            "thread_key": "slack:C0APUQ8U5T9:1780411647.249249",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780411722734-23",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 46,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 44
+            }
+          },
+          {
+            "case_id": "slack-00-pong_exact",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.949419",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780411592594-16",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 13,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 11
+            }
+          },
+          {
+            "case_id": "slack-00-followup_during_stream",
+            "thread_key": "slack:C0APUQ8U5T9:1780412158.500879",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780412185094-40",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 20,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 18
+            }
+          },
+          {
+            "case_id": "slack-00-gh_view_readonly",
+            "thread_key": "slack:C0APUQ8U5T9:1780412158.509649",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780412192272-42",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 67,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 65
+            }
+          },
+          {
+            "case_id": "slack-00-invalid_command_final",
+            "thread_key": "slack:C0APUQ8U5T9:1780412158.488989",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780412198027-43",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 18,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 16
+            }
+          },
+          {
+            "case_id": "slack-00-markdown_final_shape",
+            "thread_key": "slack:C0APUQ8U5T9:1780412158.505949",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780412188565-41",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 54,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 52
+            }
+          },
+          {
+            "case_id": "slack-00-steer_during_stream",
+            "thread_key": "slack:C0APUQ8U5T9:1780412223.418579",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780412226953-44",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 19,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 17
+            }
+          }
+        ],
+        "user_feedback": [
+          {
+            "case_id": "slack-00-command_nonzero_final",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.948459",
+            "messages": [
+              {
+                "ts": "1780412013.456749",
+                "user": "U092SEPDM40",
+                "text": "Observe how this should be just “before” in the output, we dont wanan see the exit code there, ideally it’d be saying Shell here as well? IDK what the right UX would be"
+              }
+            ]
+          },
+          {
+            "case_id": "slack-00-command_sleep_stdout",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.955709",
+            "messages": [
+              {
+                "ts": "1780411781.951749",
+                "user": "U092SEPDM40",
+                "text": "Feedback for bot looking:\n\nsee how step-2 here has a bunch of backticks and text and shit, when it should just have done 1 text block that shows the 3 steps"
+              }
+            ]
+          }
+        ],
+        "api_rs_checks": [
+          {
+            "failure_id": "db_execution_completed_before_terminal_output",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_pong",
+            "request": {
+              "client": "centaur-session-cli",
+              "after_event_id": 949,
+              "message": "Reply with exactly FINAL_TERMINAL_COMPLETION_OK and nothing else."
+            },
+            "observed": {
+              "execution_id": "exe_8d260c76c8d24c249f8b65bd44b820e9",
+              "first_new_event_id": 1251,
+              "answer_delta_event_ids": [
+                1256,
+                1257,
+                1258,
+                1259,
+                1260,
+                1261,
+                1262
+              ],
+              "final_agent_message_event_id": 1263,
+              "terminal_output_event_id": 1264,
+              "execution_completed_event_id": 1265,
+              "completion_reason": "turn_completed",
+              "execution_status_after": "completed",
+              "answer_text": "FINAL_TERMINAL_COMPLETION_OK"
+            },
+            "regression_assertion": "session.execution_completed is written after terminal harness output and all output lines for the turn carry the active execution_id.",
+            "file": "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1600Z.json"
+          }
+        ],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "slack_command_failure_rendered_complete",
+      "priority": "p1",
+      "repro_status": "local_repro_with_user_feedback",
+      "surfaces": [
+        "slack",
+        "renderer"
+      ],
+      "summary": "Nonzero shell commands render as complete tasks and expose exit-code text as output.",
+      "regression_targets": [
+        "packages/rendering command task status",
+        "Slackbot v2 plan block mapping"
+      ],
+      "expected_assertions": [
+        "nonzero command events render as failed/error task state",
+        "stdout remains visible without prepending exit-code boilerplate as output text"
+      ],
+      "evidence": {
+        "local_cases": [
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-02-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-02-api_nonzero",
+            "matched_issues": [
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-02-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-01-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-01-api_nonzero",
+            "matched_issues": [
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-01-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "api-00-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z:api-00-api_nonzero",
+            "matched_issues": [
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/api-00-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "slack-00-command_nonzero_final",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.948459",
+            "matched_issues": [
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_nonzero_final",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_nonzero_final/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_nonzero_final/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-command_nonzero_final/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z",
+            "case_id": "slack-00-invalid_command_final",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780411634.133399",
+            "matched_issues": [
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-invalid_command_final",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-invalid_command_final/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-invalid_command_final/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T144627Z/slack-00-invalid_command_final/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T144627Z-timeout-probe",
+            "case_id": "api-00-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T144627Z-timeout-probe:api-00-api_nonzero",
+            "matched_issues": [
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T144627Z-timeout-probe/api-00-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-00-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_nonzero",
+            "matched_issues": [
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-01-api_nonzero",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-01-api_nonzero",
+            "matched_issues": [
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_nonzero",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_nonzero/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_nonzero/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "slack-00-invalid_command_final",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412158.488989",
+            "matched_issues": [
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "all_issues": [
+              "db_execution_completed_before_terminal_output",
+              "db_nonzero_commands_map_to_complete_tasks"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-invalid_command_final",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-invalid_command_final/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-invalid_command_final/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/slack-00-invalid_command_final/slack_thread.json"
+            }
+          }
+        ],
+        "production_seeds": [],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [
+          {
+            "case_id": "slack-00-command_nonzero_final",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.948459",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780411597051-19",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 18,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 16
+            }
+          },
+          {
+            "case_id": "slack-00-invalid_command_final",
+            "thread_key": "slack:C0APUQ8U5T9:1780411634.133399",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780411642619-20",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 17,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 15
+            }
+          },
+          {
+            "case_id": "slack-00-invalid_command_final",
+            "thread_key": "slack:C0APUQ8U5T9:1780412158.488989",
+            "session_status": "idle",
+            "sandbox_id": "asbx-1780412198027-43",
+            "execution_statuses": [
+              "completed"
+            ],
+            "event_count": 18,
+            "terminal_event_count": 2,
+            "event_counts": {
+              "session.execution_completed": 1,
+              "session.execution_started": 1,
+              "session.output.line": 16
+            }
+          }
+        ],
+        "user_feedback": [
+          {
+            "case_id": "slack-00-command_nonzero_final",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.948459",
+            "messages": [
+              {
+                "ts": "1780412013.456749",
+                "user": "U092SEPDM40",
+                "text": "Observe how this should be just “before” in the output, we dont wanan see the exit code there, ideally it’d be saying Shell here as well? IDK what the right UX would be"
+              }
+            ]
+          }
+        ],
+        "api_rs_checks": [],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "slack_command_output_block_shape",
+      "priority": "p2",
+      "repro_status": "local_repro_with_user_feedback",
+      "surfaces": [
+        "slack",
+        "renderer"
+      ],
+      "summary": "Simple sequential command output renders as noisy code/backtick fragments instead of one clean text block.",
+      "regression_targets": [
+        "packages/rendering command output normalization",
+        "Slackbot v2 rich_text/markdown block conversion"
+      ],
+      "expected_assertions": [
+        "stdout for step-1/step-2/step-3 is rendered as one clean text block",
+        "task details do not duplicate code fences around simple stdout"
+      ],
+      "evidence": {
+        "local_cases": [],
+        "production_seeds": [],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [],
+        "user_feedback": [
+          {
+            "case_id": "slack-00-command_sleep_stdout",
+            "thread_key": "slack:C0APUQ8U5T9:1780411587.955709",
+            "messages": [
+              {
+                "ts": "1780411781.951749",
+                "user": "U092SEPDM40",
+                "text": "Feedback for bot looking:\n\nsee how step-2 here has a bunch of backticks and text and shit, when it should just have done 1 text block that shows the 3 steps"
+              }
+            ]
+          }
+        ],
+        "api_rs_checks": [],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "api_max_duration_ignored",
+      "priority": "p1",
+      "repro_status": "local_repro",
+      "surfaces": [
+        "api-rs"
+      ],
+      "summary": "max_duration_ms is accepted but a 3s request can run 12s and complete.",
+      "regression_targets": [
+        "api-rs execution timeout enforcement"
+      ],
+      "expected_assertions": [
+        "execution is cancelled or failed when max_duration_ms elapses",
+        "timeout terminal state is persisted and replayable"
+      ],
+      "evidence": {
+        "local_cases": [
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-00-api_max_duration_ignored",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_max_duration_ignored",
+            "matched_issues": [
+              "api_max_duration_ignored"
+            ],
+            "all_issues": [
+              "api_max_duration_ignored",
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_max_duration_ignored",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_max_duration_ignored/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-api_max_duration_ignored/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-01-api_max_duration_ignored",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-01-api_max_duration_ignored",
+            "matched_issues": [
+              "api_max_duration_ignored"
+            ],
+            "all_issues": [
+              "api_max_duration_ignored",
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_max_duration_ignored",
+            "artifacts": {
+              "execute": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_max_duration_ignored/execute.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-api_max_duration_ignored/session_events.json"
+            }
+          }
+        ],
+        "production_seeds": [],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [],
+        "user_feedback": [],
+        "api_rs_checks": [
+          {
+            "failure_id": "api_max_duration_ignored",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_pong",
+            "request": {
+              "client": "centaur-session-cli",
+              "after_event_id": 1285,
+              "message": "Run `bash -lc 'echo timeout-proof2-start; sleep 12; echo timeout-proof2-end'`, then answer exactly FINAL_TIMEOUT2_SHOULD_NOT_APPEAR.",
+              "idle_timeout_ms": 1000,
+              "max_duration_ms": 3000
+            },
+            "observed": {
+              "execution_id": "exe_a8a3aa46aff84d36961a1b3075eb802c",
+              "execution_started_event_id": 1300,
+              "last_output_event_id_before_timeout": 1304,
+              "execution_failed_event_id": 1305,
+              "failure_reason": "max_duration_exceeded",
+              "failure_error": "execution exceeded max_duration_ms=3000",
+              "execution_status_after": "failed",
+              "session_status_after": "failed",
+              "late_output_events_after_failure": 0,
+              "forbidden_late_text_observed": false
+            },
+            "regression_assertion": "max_duration_ms produces a durable terminal session.execution_failed event, keeps the execution failed, and suppresses late sandbox output after the timeout failure.",
+            "file": "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1610Z.json"
+          }
+        ],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "api_same_thread_execute_race_500",
+      "priority": "p1",
+      "repro_status": "local_repro",
+      "surfaces": [
+        "api-rs"
+      ],
+      "summary": "Concurrent execute calls for one thread leak a DB unique-constraint error as HTTP 500.",
+      "regression_targets": [
+        "api-rs execute serialization/conflict handling"
+      ],
+      "expected_assertions": [
+        "second active execute returns an intentional conflict/queued response",
+        "raw database constraint text is never exposed to clients"
+      ],
+      "evidence": {
+        "local_cases": [
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-01-same_thread_execute_race",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-01-same_thread_execute_race",
+            "matched_issues": [
+              "api_same_thread_execute_race_error"
+            ],
+            "all_issues": [
+              "api_same_thread_execute_race_error",
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-same_thread_execute_race",
+            "artifacts": {
+              "race_execute_results": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-same_thread_execute_race/race_execute_results.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-01-same_thread_execute_race/session_events.json"
+            }
+          },
+          {
+            "run_id": "20260602T1500Z-steering-load",
+            "case_id": "api-00-same_thread_execute_race",
+            "surface": "api",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-same_thread_execute_race",
+            "matched_issues": [
+              "api_same_thread_execute_race_error"
+            ],
+            "all_issues": [
+              "api_same_thread_execute_race_error",
+              "db_execution_completed_before_terminal_output"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-same_thread_execute_race",
+            "artifacts": {
+              "race_execute_results": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-same_thread_execute_race/race_execute_results.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1500Z-steering-load/api-00-same_thread_execute_race/session_events.json"
+            }
+          }
+        ],
+        "production_seeds": [],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [],
+        "user_feedback": [],
+        "api_rs_checks": [
+          {
+            "failure_id": "api_same_thread_execute_race_500",
+            "thread_key": "slack:C0APUQ8U5T9:1780412340.324149",
+            "request": {
+              "method": "POST",
+              "url": "http://127.0.0.1:8080/api/session/slack%3AC0APUQ8U5T9%3A1780412340.324149/execute",
+              "body": {
+                "input_lines": [
+                  "{\"type\":\"user\",\"text\":\"race check\"}"
+                ],
+                "metadata": {
+                  "source": "race-regression-check"
+                }
+              }
+            },
+            "observed": {
+              "http_status": 409,
+              "response_body": {
+                "ok": false,
+                "error": "session slack:C0APUQ8U5T9:1780412340.324149 already has an active execution"
+              },
+              "active_execution_counts_after": [
+                {
+                  "thread_key": "slack:C0APUQ8U5T9:1780412340.324149",
+                  "status": "running",
+                  "count": 1
+                },
+                {
+                  "thread_key": "slack:C0APUQ8U5T9:1780412997.105889",
+                  "status": "running",
+                  "count": 1
+                }
+              ]
+            },
+            "regression_assertion": "A second active execute returns an intentional conflict and does not leak a raw database constraint error or create another active execution.",
+            "file": "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1549Z.json"
+          }
+        ],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "slackbot_parser_stops_before_final_answer",
+      "priority": "p0",
+      "repro_status": "synthetic_repro",
+      "surfaces": [
+        "slackbotv2",
+        "chat-sdk"
+      ],
+      "summary": "Slackbot parser can stop on malformed/plain output or early terminal markers before later final answer deltas.",
+      "regression_targets": [
+        "services/slackbotv2 session event parser tests",
+        "Chat SDK stream emulator tests"
+      ],
+      "expected_assertions": [
+        "plain output lines do not stop consumption before a later terminal answer",
+        "turn.completed does not cause the final answer delta to be dropped"
+      ],
+      "evidence": {
+        "local_cases": [],
+        "production_seeds": [],
+        "synthetic_cases": [
+          {
+            "case_id": "plain_output_line_stops_before_answer",
+            "observed_issues": [],
+            "markdown_text": "Final answer",
+            "slackbot_stopped_before_all_events": false,
+            "slackbot_consumed_event_count": 2,
+            "input_event_count": 2,
+            "expected_regression_assertion": "Plain output should not stop stream consumption before a later terminal answer."
+          },
+          {
+            "case_id": "terminal_before_final_delta",
+            "observed_issues": [],
+            "markdown_text": "Final answer",
+            "slackbot_stopped_before_all_events": false,
+            "slackbot_consumed_event_count": 3,
+            "input_event_count": 3,
+            "expected_regression_assertion": "Renderer should not report final completion before final-answer deltas are consumed."
+          }
+        ],
+        "db_snapshot_cases": [],
+        "user_feedback": [],
+        "api_rs_checks": [],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "renderer_final_text_missing_or_in_thinking",
+      "priority": "p0",
+      "repro_status": "synthetic_repro",
+      "surfaces": [
+        "renderer",
+        "slackbotv2"
+      ],
+      "summary": "Final-looking answer text can be lost or rendered only inside a Thinking task.",
+      "regression_targets": [
+        "packages/rendering final answer normalization",
+        "Slackbot v2 markdown_text emission"
+      ],
+      "expected_assertions": [
+        "nested terminal result text is normalized into visible markdown_text",
+        "answer text is never present only inside task details"
+      ],
+      "evidence": {
+        "local_cases": [],
+        "production_seeds": [
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/stray-dot-secret-thread-1779993480.json",
+            "thread_key": "slack:C0A87C21805:1779993480.356969",
+            "matched_issues": [
+              "tiny_fragment_message"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "tiny_fragment_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/stray-fragment-1780239224.json",
+            "thread_key": "slack:C0A87C21805:1780239224.703289",
+            "matched_issues": [
+              "tiny_fragment_message"
+            ],
+            "all_issues": [
+              "tiny_fragment_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/visible-thinking-still-working-1779899736.json",
+            "thread_key": "slack:C0A87C21805:1779899736.944699",
+            "matched_issues": [
+              "visible_thinking_text"
+            ],
+            "all_issues": [
+              "assistant_duplicate_or_burst_final",
+              "user_nudge_after_poor_or_slow_response",
+              "visible_thinking_text"
+            ]
+          }
+        ],
+        "synthetic_cases": [
+          {
+            "case_id": "nested_terminal_result_loses_final_text",
+            "observed_issues": [],
+            "markdown_text": "Final answer",
+            "slackbot_stopped_before_all_events": false,
+            "slackbot_consumed_event_count": 1,
+            "input_event_count": 1,
+            "expected_regression_assertion": "Slack stream should contain visible final text or renderer should normalize nested terminal result text."
+          },
+          {
+            "case_id": "final_text_classified_as_commentary",
+            "observed_issues": [
+              "no_markdown_text_chunk"
+            ],
+            "markdown_text": "",
+            "slackbot_stopped_before_all_events": false,
+            "slackbot_consumed_event_count": 4,
+            "input_event_count": 4,
+            "expected_regression_assertion": "Thinking task must not be the only visible location for final-answer content."
+          }
+        ],
+        "db_snapshot_cases": [],
+        "user_feedback": [],
+        "api_rs_checks": [],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "renderer_execution_failed_error_not_markdown",
+      "priority": "p0",
+      "repro_status": "synthetic_repro_plus_local_seed",
+      "surfaces": [
+        "renderer",
+        "slackbotv2"
+      ],
+      "summary": "Renderer produces an error close event, but Slack-visible chunks have no markdown error text.",
+      "regression_targets": [
+        "packages/rendering error finalization",
+        "Slackbot v2 task/error block conversion"
+      ],
+      "expected_assertions": [
+        "execution failure emits visible final markdown error text",
+        "task error state is supplementary, not the only user-visible response"
+      ],
+      "evidence": {
+        "local_cases": [
+          {
+            "run_id": "20260602T1510Z-steering-only",
+            "case_id": "slack-00-steer_during_stream",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412340.324149",
+            "matched_issues": [
+              "slack_plan_task_error_status"
+            ],
+            "all_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status",
+              "slack_steering_followup_ignored"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1510Z-steering-only/slack-00-steer_during_stream/slack_thread.json"
+            }
+          },
+          {
+            "run_id": "20260602T1535Z-production-shaped",
+            "case_id": "slack-00-continue_during_command",
+            "surface": "slack",
+            "thread_key": "slack:C0APUQ8U5T9:1780412997.105889",
+            "matched_issues": [
+              "slack_plan_task_error_status"
+            ],
+            "all_issues": [
+              "db_no_terminal_output",
+              "slack_plan_only_thread_without_final",
+              "slack_plan_task_error_status",
+              "slack_raw_interactive_elements_fallback_text"
+            ],
+            "artifact_dir": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command",
+            "artifacts": {
+              "send": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command/send.json",
+              "session_events": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command/session_events.json",
+              "slack_thread": "local-corpus/slackbot-fuzz/20260602T1535Z-production-shaped/slack-00-continue_during_command/slack_thread.json"
+            }
+          }
+        ],
+        "production_seeds": [
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/agent-request-failed-before-start-1778876545.json",
+            "thread_key": "slack:C0A87C21805:1778876545.622099",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "agent_request_failed_before_start",
+              "assistant_duplicate_or_burst_final",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "runtime_issue_visible_text",
+              "stream_without_assistant_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/attachment-workflow-bump-1779906207.json",
+            "thread_key": "slack:C0A87C21805:1779906207.358939",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/blank-response-cancelled-1778715488.json",
+            "thread_key": "slack:C0A87C21805:1778715488.113189",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "request_cancelled_message"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/cancelled-without-user-1778609716.json",
+            "thread_key": "slack:C0A87C21805:1778609716.774809",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "request_cancelled_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/interactive-elements-continue-1780328412.json",
+            "thread_key": "slack:C0A87C21805:1780328412.179969",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-nextfork-1780350113.json",
+            "thread_key": "slack:C0A87C21805:1780350113.019789",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-workflow-1780388269.json",
+            "thread_key": "slack:C0A87C21805:1780388269.132769",
+            "matched_issues": [
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "raw_interactive_elements_fallback_text",
+              "runtime_start_failure_visible_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/only-interactive-context-1779982764.json",
+            "thread_key": "slack:C0A87C21805:1779982764.302029",
+            "matched_issues": [
+              "plan_task_error"
+            ],
+            "all_issues": [
+              "plan_only_thread_without_final",
+              "plan_task_error",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/so-nudge-duplicate-finals-1780061130.json",
+            "thread_key": "slack:C0A87C21805:1780061130.781709",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "assistant_duplicate_or_burst_final",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/stray-dot-secret-thread-1779993480.json",
+            "thread_key": "slack:C0A87C21805:1779993480.356969",
+            "matched_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ],
+            "all_issues": [
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "tiny_fragment_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          }
+        ],
+        "synthetic_cases": [
+          {
+            "case_id": "execution_failed_error_not_markdown",
+            "observed_issues": [],
+            "markdown_text": "Execution failed: sandbox exited",
+            "slackbot_stopped_before_all_events": false,
+            "slackbot_consumed_event_count": 2,
+            "input_event_count": 2,
+            "expected_regression_assertion": "Slack should include visible error text, not only an error-state plan task."
+          }
+        ],
+        "db_snapshot_cases": [
+          {
+            "case_id": "slack-00-steer_during_stream",
+            "thread_key": "slack:C0APUQ8U5T9:1780412340.324149",
+            "session_status": "executing",
+            "sandbox_id": null,
+            "execution_statuses": [
+              "running"
+            ],
+            "event_count": 0,
+            "terminal_event_count": 0,
+            "event_counts": {}
+          },
+          {
+            "case_id": "slack-00-continue_during_command",
+            "thread_key": "slack:C0APUQ8U5T9:1780412997.105889",
+            "session_status": "executing",
+            "sandbox_id": null,
+            "execution_statuses": [
+              "running"
+            ],
+            "event_count": 0,
+            "terminal_event_count": 0,
+            "event_counts": {}
+          }
+        ],
+        "user_feedback": [],
+        "api_rs_checks": [],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "no_rollout_found_after_retry_or_idle",
+      "priority": "p0",
+      "repro_status": "production_seed_backlog",
+      "surfaces": [
+        "slack",
+        "runtime lookup",
+        "pause-resume"
+      ],
+      "summary": "Idle/retry production threads later receive internal 'no rollout found' messages. Likely tied to stale runtime state or future pause/resume behavior.",
+      "regression_targets": [
+        "sandbox auto-pause/resume",
+        "runtime/session lookup after idle",
+        "Slackbot final error redaction"
+      ],
+      "expected_assertions": [
+        "reply after idle resumes or recreates from durable thread history",
+        "Slack never exposes 'no rollout found for thread id'",
+        "resume failures persist terminal session.execution_failed events"
+      ],
+      "evidence": {
+        "local_cases": [],
+        "production_seeds": [
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-found-1779297412.json",
+            "thread_key": "slack:C0A87C21805:1779297412.157979",
+            "matched_issues": [
+              "no_rollout_found_message"
+            ],
+            "all_issues": [
+              "assistant_duplicate_or_burst_final",
+              "no_rollout_found_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-nextfork-1780350113.json",
+            "thread_key": "slack:C0A87C21805:1780350113.019789",
+            "matched_issues": [
+              "no_rollout_found_message"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-retry-loop-1780331325.json",
+            "thread_key": "slack:C0A87C21805:1780331325.008179",
+            "matched_issues": [
+              "no_rollout_found_message"
+            ],
+            "all_issues": [
+              "no_rollout_found_message"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-workflow-1780388269.json",
+            "thread_key": "slack:C0A87C21805:1780388269.132769",
+            "matched_issues": [
+              "no_rollout_found_message"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "raw_interactive_elements_fallback_text",
+              "runtime_start_failure_visible_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/no-rollout-live-prices-1780340465.connector.json",
+            "thread_key": "slack:C0A82R7S80N:1780340465.707499",
+            "matched_issues": [
+              "no_rollout_found_message"
+            ],
+            "all_issues": [
+              "no_rollout_found_message"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/no-rollout-newsletter-updates-1780328709.connector.json",
+            "thread_key": "slack:C0A82R7S80N:1780328709.693099",
+            "matched_issues": [
+              "no_rollout_found_message"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "no_rollout_found_message"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/resume-suspended-sandbox-no-rollout-1779992917.connector.json",
+            "thread_key": "slack:C0A82R7S80N:1779992917.355879",
+            "matched_issues": [
+              "no_rollout_found_message"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "runtime_start_failure_visible_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          }
+        ],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [],
+        "user_feedback": [],
+        "api_rs_checks": [],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "api_idle_resume_no_final_after_pause",
+      "priority": "p0",
+      "repro_status": "local_repro",
+      "surfaces": [
+        "api-rs",
+        "pause-resume",
+        "sse",
+        "cli"
+      ],
+      "summary": "After an idle timeout pause, api-rs resumes the sandbox but the next Codex app-server turn can fail before producing a final answer.",
+      "regression_targets": [
+        "api-rs suspended sandbox resume/recreate policy",
+        "Codex app-server readiness after resume",
+        "SSE replay of failed resume turns"
+      ],
+      "expected_assertions": [
+        "reply after idle pause produces a final answer or recreates from durable history",
+        "resume emits a durable healthy terminal state, not only startup/user events then turn.failed",
+        "Slack does not show a thinking-only error block for resume failures"
+      ],
+      "evidence": {
+        "local_cases": [],
+        "production_seeds": [],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [],
+        "user_feedback": [],
+        "api_rs_checks": [
+          {
+            "failure_id": "api_idle_resume_no_final_after_pause",
+            "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_pong",
+            "request": {
+              "client": "centaur-session-cli",
+              "after_event_id": 1390,
+              "message": "Reply with exactly FINAL_IDLE_RESUME_OK and nothing else.",
+              "idle_timeout_ms": 2000,
+              "max_duration_ms": 60000
+            },
+            "observed": {
+              "execution_id": "exe_5d6dd2dadd694a72ad65b8e7418838ce",
+              "execution_started_event_id": 1391,
+              "sandbox_resumed_event_id": 1392,
+              "startup_output_event_ids": [
+                1393,
+                1394,
+                1395,
+                1396
+              ],
+              "turn_started_event_id": 1397,
+              "user_message_event_ids": [
+                1398,
+                1399
+              ],
+              "turn_failed_event_id": 1400,
+              "execution_failed_event_id": 1401,
+              "stdout_eof_event_id": 1402,
+              "sandbox_paused_event_id": 1403,
+              "sandbox_id": "asbx-1780412127680-30",
+              "execution_status_after": "failed",
+              "failure_text": "terminal harness output reported failure",
+              "harness_error_message": "Reconnecting... 2/5",
+              "harness_error_details": "timeout waiting for child process to exit",
+              "final_answer_observed": false,
+              "proof_files": [
+                "local-corpus/slackbot-fuzz/api-rs-idle-resume-proof-20260602T1632Z.cli.out"
+              ]
+            },
+            "regression_assertion": "A reply after an idle pause must resume or recreate the sandbox and produce a final answer from durable thread history; it must not fail after only startup/user-message events.",
+            "file": "local-corpus/slackbot-fuzz/api-rs-regression-check-20260602T1633Z.json"
+          }
+        ],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "slack_subscribed_idle_reply_does_not_execute",
+      "priority": "p0",
+      "repro_status": "local_slack_repro",
+      "surfaces": [
+        "slack",
+        "slackbotv2",
+        "api-rs"
+      ],
+      "summary": "A reply in a subscribed Slack thread after the session is idle is appended to history but does not execute a new turn or produce a bot response.",
+      "regression_targets": [
+        "Slackbot subscribed-thread idle reply policy",
+        "Slackbot append-vs-execute routing",
+        "Slack-visible response for idle follow-ups"
+      ],
+      "expected_assertions": [
+        "idle subscribed-thread replies either execute a new turn or receive an explicit visible response",
+        "Slackbot does not silently append an idle user reply with open_stream=false",
+        "DB and Slack readback agree on whether a follow-up produced an execution"
+      ],
+      "evidence": {
+        "local_cases": [],
+        "production_seeds": [],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [],
+        "user_feedback": [],
+        "api_rs_checks": [],
+        "slack_checks": [
+          {
+            "failure_id": "slack_subscribed_idle_reply_does_not_execute",
+            "slack_messages": {
+              "reply_ts": "1780418277.732419",
+              "reply_text": "idle pause Slack repro follow-up after pause. Reply with exactly SLACK_IDLE_RESUME2_OK and nothing else.",
+              "bot_reply_after_reply": false
+            },
+            "observed": {
+              "slackbot_mode": "append",
+              "slackbot_open_stream": false,
+              "slackbot_active_execution": false,
+              "new_execution_observed": false,
+              "latest_event_after_reply": 1425,
+              "thread_status_after_reply": "idle"
+            },
+            "regression_assertion": "A subscribed Slack thread reply while the session is idle should either execute a new turn or make the non-execution policy explicit; it must not silently append with no bot response.",
+            "thread_key": "slack:C0APUQ8U5T9:1780418218.640919",
+            "channel_id": "C0APUQ8U5T9",
+            "file": "local-corpus/slackbot-fuzz/slack-regression-check-20260602T1640Z.json"
+          }
+        ]
+      }
+    },
+    {
+      "failure_id": "blank_response_then_cancelled",
+      "priority": "p1",
+      "repro_status": "production_seed",
+      "surfaces": [
+        "slack",
+        "renderer"
+      ],
+      "summary": "Production seed shows an empty bot reply followed by Request cancelled after a user reports blank response.",
+      "regression_targets": [
+        "Slackbot blank-final guard",
+        "cancellation terminal-state mapping"
+      ],
+      "expected_assertions": [
+        "empty assistant messages are not posted as final Slack replies",
+        "Request cancelled is only emitted for explicit cancel or durable cancellation"
+      ],
+      "evidence": {
+        "local_cases": [],
+        "production_seeds": [
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/blank-response-cancelled-1778715488.json",
+            "thread_key": "slack:C0A87C21805:1778715488.113189",
+            "matched_issues": [
+              "empty_bot_message",
+              "request_cancelled_message"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "request_cancelled_message"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/cancelled-without-user-1778609716.json",
+            "thread_key": "slack:C0A87C21805:1778609716.774809",
+            "matched_issues": [
+              "empty_bot_message",
+              "request_cancelled_message"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "request_cancelled_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/no-rollout-newsletter-updates-1780328709.connector.json",
+            "thread_key": "slack:C0A82R7S80N:1780328709.693099",
+            "matched_issues": [
+              "empty_bot_message"
+            ],
+            "all_issues": [
+              "empty_bot_message",
+              "no_rollout_found_message"
+            ]
+          }
+        ],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [],
+        "user_feedback": [],
+        "api_rs_checks": [],
+        "slack_checks": []
+      }
+    },
+    {
+      "failure_id": "agent_request_failed_before_execution_started",
+      "priority": "p1",
+      "repro_status": "production_seed",
+      "surfaces": [
+        "slack",
+        "api-rs startup"
+      ],
+      "summary": "Production seeds contain repeated pre-execution failure messages, runtime issues, and stream-without-assistant errors.",
+      "regression_targets": [
+        "api-rs startup/runtime terminal failure persistence",
+        "Slackbot retry deduplication"
+      ],
+      "expected_assertions": [
+        "pre-execution failures are durable terminal states",
+        "retries do not duplicate identical failure messages in one thread"
+      ],
+      "evidence": {
+        "local_cases": [],
+        "production_seeds": [
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/agent-request-failed-before-start-1778876545.json",
+            "thread_key": "slack:C0A87C21805:1778876545.622099",
+            "matched_issues": [
+              "agent_request_failed_before_start",
+              "runtime_issue_visible_text",
+              "stream_without_assistant_message"
+            ],
+            "all_issues": [
+              "agent_request_failed_before_start",
+              "assistant_duplicate_or_burst_final",
+              "plan_task_error",
+              "raw_interactive_elements_fallback_text",
+              "runtime_issue_visible_text",
+              "stream_without_assistant_message",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/agent-request-failed-duplicate-1778874924.json",
+            "thread_key": "slack:C0A87C21805:1778874924.787819",
+            "matched_issues": [
+              "agent_request_failed_before_start"
+            ],
+            "all_issues": [
+              "agent_request_failed_before_start",
+              "assistant_duplicate_or_burst_final"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1530Z/no-rollout-workflow-1780388269.json",
+            "thread_key": "slack:C0A87C21805:1780388269.132769",
+            "matched_issues": [
+              "runtime_start_failure_visible_text"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "raw_interactive_elements_fallback_text",
+              "runtime_start_failure_visible_text"
+            ]
+          },
+          {
+            "summary": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/summary.json",
+            "file": "local-corpus/slackbot-fuzz/production-seeds-20260602T1540Z/resume-suspended-sandbox-no-rollout-1779992917.connector.json",
+            "thread_key": "slack:C0A82R7S80N:1779992917.355879",
+            "matched_issues": [
+              "runtime_start_failure_visible_text"
+            ],
+            "all_issues": [
+              "no_rollout_found_message",
+              "runtime_start_failure_visible_text",
+              "user_nudge_after_poor_or_slow_response"
+            ]
+          }
+        ],
+        "synthetic_cases": [],
+        "db_snapshot_cases": [],
+        "user_feedback": [],
+        "api_rs_checks": [],
+        "slack_checks": []
+      }
+    }
+  ]
+}

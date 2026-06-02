@@ -364,16 +364,18 @@ async function* parseSessionEventStream(
   stream: ReadableStream<Uint8Array>,
   onEventId: (eventId: number) => void
 ): AsyncIterable<SlackbotV2RendererSource> {
+  let sawFinalAnswerText = false
   for await (const event of parseSseEvents(stream)) {
     if (typeof event.id === 'number') onEventId(event.id)
     if (event.event === 'session.output.line') {
+      sawFinalAnswerText ||= outputLineCarriesFinalAnswerText(event.data)
       yield {
         data: event.data,
         event: event.event,
         eventId: event.id,
         eventKind: event.event
       } satisfies RustSessionStreamEvent
-      if (isTerminalCodexOutputLine(event.data)) return
+      if (isTerminalCodexOutputLine(event.data, { sawFinalAnswerText })) return
       continue
     }
     if (event.event === 'session.execution_failed' || event.event === 'session.stream_error') {
@@ -460,22 +462,59 @@ function parseSseLine(
   return { state }
 }
 
-function isTerminalCodexOutputLine(line: string): boolean {
+function isTerminalCodexOutputLine(
+  line: string,
+  state: { sawFinalAnswerText?: boolean } = {}
+): boolean {
   let payload: unknown
   try {
     payload = JSON.parse(line)
   } catch {
-    return true
+    return false
   }
   if (!isJsonObject(payload)) return false
 
+  if (payload.method === 'turn/completed') {
+    return Boolean(terminalPayloadText(payload) || state.sawFinalAnswerText)
+  }
   return (
-    payload.type === 'turn.completed' ||
+    (payload.type === 'turn.completed' &&
+      Boolean(terminalPayloadText(payload) || state.sawFinalAnswerText)) ||
     payload.type === 'turn.failed' ||
-    payload.type === 'turn.done' ||
+    (payload.type === 'turn.done' &&
+      Boolean(terminalPayloadText(payload) || state.sawFinalAnswerText)) ||
     payload.method === 'error' ||
-    payload.method === 'turn/completed'
+    payload.type === 'result'
   )
+}
+
+function outputLineCarriesFinalAnswerText(line: string): boolean {
+  let payload: unknown
+  try {
+    payload = JSON.parse(line)
+  } catch {
+    return false
+  }
+  if (!isJsonObject(payload)) return false
+  const method = stringValue(payload.method)
+  const type = stringValue(payload.type)
+  if (method === 'item/agentMessage/delta' || type === 'item.agentMessage.delta') {
+    return Boolean(terminalPayloadText(payload))
+  }
+  if (type === 'assistant') {
+    return Boolean(terminalPayloadText(payload))
+  }
+  return false
+}
+
+function terminalPayloadText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (!isJsonObject(value)) return ''
+  for (const key of ['result', 'result_text', 'text', 'final_text', 'message', 'delta', 'content']) {
+    const nested = terminalPayloadText(value[key])
+    if (nested.trim()) return nested
+  }
+  return ''
 }
 
 function sessionErrorMessage(event: ParsedSessionEvent): string {

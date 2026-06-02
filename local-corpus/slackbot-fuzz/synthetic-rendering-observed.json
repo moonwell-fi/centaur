@@ -1,0 +1,361 @@
+{
+  "schema": "centaur.slackbot_synthetic_rendering_observed.v1",
+  "input": "local-corpus/slackbot-fuzz/synthetic-rendering-cases.json",
+  "case_count": 5,
+  "observed": [
+    {
+      "case_id": "nested_terminal_result_loses_final_text",
+      "issue": "Terminal result text nested under result.text is not rendered as markdown_text.",
+      "expected_regression_assertion": "Slack stream should contain visible final text or renderer should normalize nested terminal result text.",
+      "input_event_count": 1,
+      "slackbot_consumed_event_count": 1,
+      "slackbot_stopped_before_all_events": false,
+      "consumed_event_ids": [
+        1
+      ],
+      "markdown_text": "Final answer",
+      "task_errors": 0,
+      "task_updates": [],
+      "plan_updates": [],
+      "closed_messages": [
+        {
+          "type": "chat.session.closed",
+          "message": {
+            "text": "Final answer"
+          },
+          "streamFinalUpdates": true
+        }
+      ],
+      "renderer_events": [
+        {
+          "type": "renderer.message.delta",
+          "delta": "Final answer",
+          "force": true,
+          "planPrefix": false
+        },
+        {
+          "type": "renderer.done",
+          "answerMarkdown": "Final answer",
+          "streamFinalUpdates": true
+        }
+      ],
+      "observed_issues": []
+    },
+    {
+      "case_id": "plain_output_line_stops_before_answer",
+      "issue": "Slackbot session parser treats malformed/plain session.output.line as terminal and stops before later final answer.",
+      "expected_regression_assertion": "Plain output should not stop stream consumption before a later terminal answer.",
+      "input_event_count": 2,
+      "slackbot_consumed_event_count": 2,
+      "slackbot_stopped_before_all_events": false,
+      "consumed_event_ids": [
+        1,
+        2
+      ],
+      "markdown_text": "Final answer",
+      "task_errors": 0,
+      "task_updates": [
+        {
+          "type": "task_update",
+          "id": "Session output",
+          "title": "1. Command execution",
+          "status": "complete",
+          "details": "```sh\nSession output\n```",
+          "output": "```text\nwarning: reconnecting\n```"
+        },
+        {
+          "type": "task_update",
+          "id": "Session output",
+          "title": "1. Command execution",
+          "status": "complete"
+        }
+      ],
+      "plan_updates": [],
+      "closed_messages": [
+        {
+          "type": "chat.session.closed",
+          "message": {
+            "text": "Final answer"
+          },
+          "streamFinalUpdates": true
+        }
+      ],
+      "renderer_events": [
+        {
+          "type": "renderer.task.update",
+          "task": {
+            "id": "Session output",
+            "title": "1. Command execution",
+            "status": "complete",
+            "details": [
+              {
+                "type": "code",
+                "text": "Session output",
+                "language": "sh"
+              }
+            ],
+            "output": [
+              {
+                "type": "code",
+                "text": "warning: reconnecting",
+                "language": "text"
+              }
+            ]
+          },
+          "flush": true
+        },
+        {
+          "type": "renderer.message.delta",
+          "delta": "Final answer",
+          "force": true,
+          "planPrefix": true
+        },
+        {
+          "type": "renderer.task.update",
+          "task": {
+            "id": "Session output",
+            "title": "1. Command execution",
+            "status": "complete"
+          },
+          "flush": true
+        },
+        {
+          "type": "renderer.done",
+          "answerMarkdown": "Final answer",
+          "streamFinalUpdates": true
+        }
+      ],
+      "observed_issues": []
+    },
+    {
+      "case_id": "terminal_before_final_delta",
+      "issue": "Parser returns on turn.completed, so later final_answer deltas are ignored.",
+      "expected_regression_assertion": "Renderer should not report final completion before final-answer deltas are consumed.",
+      "input_event_count": 3,
+      "slackbot_consumed_event_count": 3,
+      "slackbot_stopped_before_all_events": false,
+      "consumed_event_ids": [
+        1,
+        2,
+        3
+      ],
+      "markdown_text": "Final answer",
+      "task_errors": 0,
+      "task_updates": [
+        {
+          "type": "task_update",
+          "id": "plan-1",
+          "title": "Check logs",
+          "status": "complete"
+        }
+      ],
+      "plan_updates": [
+        {
+          "type": "plan_update",
+          "title": "Plan"
+        }
+      ],
+      "closed_messages": [
+        {
+          "type": "chat.session.closed",
+          "message": {
+            "text": "Final answer"
+          },
+          "streamFinalUpdates": true
+        }
+      ],
+      "renderer_events": [
+        {
+          "type": "renderer.plan.update",
+          "title": "Plan"
+        },
+        {
+          "type": "renderer.task.update",
+          "task": {
+            "id": "plan-1",
+            "title": "Check logs",
+            "status": "complete"
+          },
+          "flush": true
+        },
+        {
+          "type": "renderer.message.delta",
+          "delta": "Final answer",
+          "force": false,
+          "planPrefix": true
+        },
+        {
+          "type": "renderer.done",
+          "answerMarkdown": "Final answer",
+          "streamFinalUpdates": true
+        }
+      ],
+      "observed_issues": []
+    },
+    {
+      "case_id": "final_text_classified_as_commentary",
+      "issue": "Final-looking text with phase=commentary renders inside Thinking task and not final markdown.",
+      "expected_regression_assertion": "Thinking task must not be the only visible location for final-answer content.",
+      "input_event_count": 4,
+      "slackbot_consumed_event_count": 4,
+      "slackbot_stopped_before_all_events": false,
+      "consumed_event_ids": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "markdown_text": "",
+      "task_errors": 0,
+      "task_updates": [
+        {
+          "type": "task_update",
+          "id": "thinking-m1",
+          "title": "Thinking",
+          "status": "in_progress"
+        },
+        {
+          "type": "task_update",
+          "id": "thinking-m1",
+          "title": "Thinking",
+          "status": "complete",
+          "details": "Final answer"
+        },
+        {
+          "type": "task_update",
+          "id": "thinking-m1",
+          "title": "Thinking",
+          "status": "complete"
+        }
+      ],
+      "plan_updates": [],
+      "closed_messages": [
+        {
+          "type": "chat.session.closed",
+          "message": {
+            "text": ""
+          },
+          "streamFinalUpdates": true
+        }
+      ],
+      "renderer_events": [
+        {
+          "type": "renderer.task.update",
+          "task": {
+            "id": "thinking-m1",
+            "title": "Thinking",
+            "status": "in_progress"
+          },
+          "flush": true
+        },
+        {
+          "type": "renderer.task.update",
+          "task": {
+            "id": "thinking-m1",
+            "title": "Thinking",
+            "status": "complete",
+            "details": [
+              {
+                "type": "text",
+                "text": "Final answer"
+              }
+            ]
+          },
+          "flush": true
+        },
+        {
+          "type": "renderer.task.update",
+          "task": {
+            "id": "thinking-m1",
+            "title": "Thinking",
+            "status": "complete"
+          },
+          "flush": true
+        },
+        {
+          "type": "renderer.done",
+          "answerMarkdown": "",
+          "streamFinalUpdates": true
+        }
+      ],
+      "observed_issues": [
+        "no_markdown_text_chunk"
+      ]
+    },
+    {
+      "case_id": "execution_failed_error_not_markdown",
+      "issue": "Failure event marks tasks as error, but renderer.done.error is filtered before Slack markdown.",
+      "expected_regression_assertion": "Slack should include visible error text, not only an error-state plan task.",
+      "input_event_count": 2,
+      "slackbot_consumed_event_count": 2,
+      "slackbot_stopped_before_all_events": false,
+      "consumed_event_ids": [
+        1,
+        2
+      ],
+      "markdown_text": "Execution failed: sandbox exited",
+      "task_errors": 1,
+      "task_updates": [
+        {
+          "type": "task_update",
+          "id": "plan-1",
+          "title": "Run command",
+          "status": "in_progress"
+        },
+        {
+          "type": "task_update",
+          "id": "plan-1",
+          "title": "Run command",
+          "status": "error"
+        }
+      ],
+      "plan_updates": [
+        {
+          "type": "plan_update",
+          "title": "Plan"
+        }
+      ],
+      "closed_messages": [
+        {
+          "type": "chat.session.closed",
+          "message": {
+            "text": "",
+            "error": "sandbox exited"
+          },
+          "streamFinalUpdates": true
+        }
+      ],
+      "renderer_events": [
+        {
+          "type": "renderer.plan.update",
+          "title": "Plan"
+        },
+        {
+          "type": "renderer.task.update",
+          "task": {
+            "id": "plan-1",
+            "title": "Run command",
+            "status": "in_progress"
+          },
+          "flush": true
+        },
+        {
+          "type": "renderer.task.update",
+          "task": {
+            "id": "plan-1",
+            "title": "Run command",
+            "status": "error"
+          },
+          "flush": true
+        },
+        {
+          "type": "renderer.done",
+          "answerMarkdown": "",
+          "error": "sandbox exited",
+          "streamFinalUpdates": true
+        }
+      ],
+      "observed_issues": []
+    }
+  ]
+}

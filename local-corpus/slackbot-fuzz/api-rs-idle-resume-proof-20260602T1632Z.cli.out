@@ -1,0 +1,11 @@
+{"data":{"execution_id":"exe_5d6dd2dadd694a72ad65b8e7418838ce","idle_timeout_ms":2000,"input_line_count":1,"max_duration_ms":60000,"thread_key":"fuzz:20260602T1500Z-steering-load:api-00-api_pong"},"id":"1391","sse_event":"session.execution_started"}
+{"data":{"execution_id":"exe_5d6dd2dadd694a72ad65b8e7418838ce","sandbox_id":"asbx-1780412127680-30","thread_key":"fuzz:20260602T1500Z-steering-load:api-00-api_pong"},"id":"1392","sse_event":"session.sandbox_resumed"}
+1393	{"type":"system","subtype":"wrapper_heartbeat","phase":"startup"}
+1394	{"type":"system","subtype":"wrapper_heartbeat","phase":"app_server_started"}
+1395	{"type":"thread.started","thread_id":"019e892e-14db-7b83-9ed8-a73692b3645d"}
+1396	{"type":"thread.started","thread_id":"019e892e-14db-7b83-9ed8-a73692b3645d"}
+1397	{"type":"turn.started","turn_id":"019e892e-14ff-7c42-b881-8f05865f4d2d"}
+1398	{"type":"item.started","item":{"type":"userMessage","id":"a7309dd5-a87c-4e71-8e8e-787eafb1f994","content":[{"type":"text","text":"Reply with exactly FINAL_IDLE_RESUME_OK and nothing else.","text_elements":[]}]}}
+1399	{"type":"item.completed","item":{"type":"userMessage","id":"a7309dd5-a87c-4e71-8e8e-787eafb1f994","content":[{"type":"text","text":"Reply with exactly FINAL_IDLE_RESUME_OK and nothing else.","text_elements":[]}]}}
+1400	{"type":"turn.failed","error":{"message":"Reconnecting... 2/5","codexErrorInfo":{"responseStreamDisconnected":{"httpStatusCode":null}},"additionalDetails":"timeout waiting for child process to exit"}}
+{"data":{"error":"terminal harness output reported failure","execution_id":"exe_5d6dd2dadd694a72ad65b8e7418838ce","thread_key":"fuzz:20260602T1500Z-steering-load:api-00-api_pong"},"id":"1401","sse_event":"session.execution_failed"}

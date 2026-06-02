@@ -1,0 +1,42 @@
+{
+  "schema": "centaur.api_rs_regression_check.v1",
+  "created_at": "2026-06-02T16:16:00Z",
+  "checks": [
+    {
+      "failure_id": "slack_steering_followup_not_applied",
+      "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_pong",
+      "request": {
+        "client": "centaur-session-cli",
+        "after_event_id": 1341,
+        "message": "Run `bash -lc 'echo steering-proof3-start; sleep 10; echo steering-proof3-end'`. After the command completes, obey the latest user message received while you were running for the exact final answer.",
+        "steering_append": "STEERING UPDATE: final answer must be exactly FINAL_ACTIVE_STEERING_OK.",
+        "idle_timeout_ms": 1000,
+        "max_duration_ms": 60000
+      },
+      "observed": {
+        "execution_id": "exe_12744484e3ca410d82c0f65b503a4309",
+        "steering_message_id": "msg_884f5ceaffec47b4b245b5bef72f240a",
+        "execution_started_event_id": 1342,
+        "command_started_event_id": 1346,
+        "steering_delivered_event_id": 1347,
+        "steering_user_message_started_event_id": 1349,
+        "steering_user_message_completed_event_id": 1350,
+        "final_agent_message_event_id": 1359,
+        "terminal_output_event_id": 1360,
+        "execution_completed_event_id": 1361,
+        "completion_reason": "turn_completed",
+        "execution_status_after": "completed",
+        "answer_text": "FINAL_ACTIVE_STEERING_OK",
+        "append_response": {
+          "ok": true,
+          "message_ids": ["msg_884f5ceaffec47b4b245b5bef72f240a"]
+        },
+        "proof_files": [
+          "local-corpus/slackbot-fuzz/api-rs-steering-proof-20260602T1616Z.cli.out",
+          "local-corpus/slackbot-fuzz/api-rs-steering-proof-20260602T1616Z.append.json"
+        ]
+      },
+      "regression_assertion": "A user message appended while an execution is active is durably persisted, forwarded to the attached sandbox stdin, echoed as a sandbox userMessage, and reflected in the final answer."
+    }
+  ]
+}

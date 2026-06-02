@@ -1,0 +1,70 @@
+{
+  "schema": "centaur.slack_regression_check.v1",
+  "created_at": "2026-06-02T16:40:00Z",
+  "thread_key": "slack:C0APUQ8U5T9:1780418218.640919",
+  "channel_id": "C0APUQ8U5T9",
+  "checks": [
+    {
+      "failure_id": "sandbox_auto_pause_not_enforced",
+      "slack_messages": {
+        "root_ts": "1780418218.640919",
+        "bot_reply_ts": "1780418222.975469",
+        "bot_reply_text": "SLACK_IDLE_ROOT2_OK, with interactive elements",
+        "bot_reply_block_types": ["plan", "rich_text"]
+      },
+      "observed": {
+        "execution_id": "exe_a4ad0ecb0a3c49a2a2f1ff8f1857c934",
+        "execution_started_event_id": 1404,
+        "execution_completed_event_id": 1423,
+        "sandbox_paused_event_id": 1425,
+        "sandbox_id": "asbx-1780418223158-1",
+        "answer_text": "SLACK_IDLE_ROOT2_OK",
+        "execution_status_after": "completed"
+      },
+      "regression_assertion": "Slackbot forwards idle_timeout_ms through the session API; after root final output, api-rs records session.sandbox_paused while Slack still shows the final answer."
+    },
+    {
+      "failure_id": "slack_subscribed_idle_reply_does_not_execute",
+      "slack_messages": {
+        "reply_ts": "1780418277.732419",
+        "reply_text": "idle pause Slack repro follow-up after pause. Reply with exactly SLACK_IDLE_RESUME2_OK and nothing else.",
+        "bot_reply_after_reply": false
+      },
+      "observed": {
+        "slackbot_mode": "append",
+        "slackbot_open_stream": false,
+        "slackbot_active_execution": false,
+        "new_execution_observed": false,
+        "latest_event_after_reply": 1425,
+        "thread_status_after_reply": "idle"
+      },
+      "regression_assertion": "A subscribed Slack thread reply while the session is idle should either execute a new turn or make the non-execution policy explicit; it must not silently append with no bot response."
+    },
+    {
+      "failure_id": "slack_idle_forced_resume_final_answer",
+      "slack_messages": {
+        "mention_reply_ts": "1780418349.002339",
+        "bot_reply_ts": "1780418351.644319",
+        "bot_reply_text": "SLACK_IDLE_FORCED_RESUME_OK, with interactive elements",
+        "bot_reply_block_types": ["plan", "rich_text"]
+      },
+      "observed": {
+        "execution_id": "exe_8bf1d00bec6c4e9697ccb4abb85f179a",
+        "execution_started_event_id": 1426,
+        "sandbox_resumed_event_id": 1427,
+        "final_agent_message_event_id": 1444,
+        "execution_completed_event_id": 1446,
+        "sandbox_paused_event_id": 1448,
+        "sandbox_id": "asbx-1780418223158-1",
+        "answer_text": "SLACK_IDLE_FORCED_RESUME_OK",
+        "execution_status_after": "completed"
+      },
+      "regression_assertion": "A mention reply after idle pause resumes the sandbox, produces a final answer in Slack, and re-pauses after the idle timeout."
+    }
+  ],
+  "proof_files": [
+    "local-corpus/slackbot-fuzz/slack-idle-pause-thread-1780418218-root.json",
+    "local-corpus/slackbot-fuzz/slack-idle-pause-thread-1780418218-after-resume.json",
+    "local-corpus/slackbot-fuzz/slack-idle-pause-thread-1780418218-after-forced-resume.json"
+  ]
+}

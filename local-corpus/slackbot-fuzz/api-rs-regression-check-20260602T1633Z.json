@@ -1,0 +1,68 @@
+{
+  "schema": "centaur.api_rs_regression_check.v1",
+  "created_at": "2026-06-02T16:33:00Z",
+  "checks": [
+    {
+      "failure_id": "sandbox_auto_pause_not_enforced",
+      "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_pong",
+      "request": {
+        "client": "centaur-session-cli",
+        "after_event_id": 1374,
+        "message": "Reply with exactly FINAL_IDLE_PAUSE2_OK and nothing else.",
+        "idle_timeout_ms": 2000,
+        "max_duration_ms": 30000
+      },
+      "observed": {
+        "execution_id": "exe_9894d2abfbae4984a70c24e4f9f59efe",
+        "execution_started_event_id": 1375,
+        "final_agent_message_event_id": 1386,
+        "terminal_output_event_id": 1387,
+        "execution_completed_event_id": 1388,
+        "stdout_eof_event_id": 1389,
+        "sandbox_paused_event_id": 1390,
+        "sandbox_id": "asbx-1780412127680-30",
+        "sandbox_replicas_after": 0,
+        "agent_pod_state_after": "Terminating",
+        "answer_text": "FINAL_IDLE_PAUSE2_OK",
+        "execution_status_after": "completed",
+        "proof_files": [
+          "local-corpus/slackbot-fuzz/api-rs-idle-pause-proof-20260602T1631Z.cli.out"
+        ]
+      },
+      "regression_assertion": "idle_timeout_ms is persisted in execution metadata; after terminal output, api-rs pauses the sandbox, records session.sandbox_paused, removes live I/O, and leaves the execution completed."
+    },
+    {
+      "failure_id": "api_idle_resume_no_final_after_pause",
+      "thread_key": "fuzz:20260602T1500Z-steering-load:api-00-api_pong",
+      "request": {
+        "client": "centaur-session-cli",
+        "after_event_id": 1390,
+        "message": "Reply with exactly FINAL_IDLE_RESUME_OK and nothing else.",
+        "idle_timeout_ms": 2000,
+        "max_duration_ms": 60000
+      },
+      "observed": {
+        "execution_id": "exe_5d6dd2dadd694a72ad65b8e7418838ce",
+        "execution_started_event_id": 1391,
+        "sandbox_resumed_event_id": 1392,
+        "startup_output_event_ids": [1393, 1394, 1395, 1396],
+        "turn_started_event_id": 1397,
+        "user_message_event_ids": [1398, 1399],
+        "turn_failed_event_id": 1400,
+        "execution_failed_event_id": 1401,
+        "stdout_eof_event_id": 1402,
+        "sandbox_paused_event_id": 1403,
+        "sandbox_id": "asbx-1780412127680-30",
+        "execution_status_after": "failed",
+        "failure_text": "terminal harness output reported failure",
+        "harness_error_message": "Reconnecting... 2/5",
+        "harness_error_details": "timeout waiting for child process to exit",
+        "final_answer_observed": false,
+        "proof_files": [
+          "local-corpus/slackbot-fuzz/api-rs-idle-resume-proof-20260602T1632Z.cli.out"
+        ]
+      },
+      "regression_assertion": "A reply after an idle pause must resume or recreate the sandbox and produce a final answer from durable thread history; it must not fail after only startup/user-message events."
+    }
+  ]
+}

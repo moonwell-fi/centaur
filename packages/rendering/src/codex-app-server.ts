@@ -289,7 +289,9 @@ export class CodexAppServerRendererEventMapper
 
     if (isTerminalCodexAppServerEvent(event)) {
       const resultText = terminalResultText(event)
-      const willClose = Boolean(resultText || event?.type !== 'result')
+      const hasAnswer = Boolean(this.state.answerText.trim())
+      const terminalFailure = event?.type === 'turn.failed'
+      const willClose = Boolean(resultText || terminalFailure || hasAnswer)
       this.logCodexTerminalEventReceived(event, {
         resultText,
         willClose
@@ -571,6 +573,10 @@ async function* renderChatSdkChunks(
   const outputs = renderer.render(sessionId, event)
   for (const output of outputs) {
     await options.onOutput?.(output, event)
+    if (output.type === 'chat.session.closed' && output.message?.error) {
+      yield { type: 'markdown_text', text: visibleErrorText(output.message.error) }
+      continue
+    }
     if (output.type !== 'chat.stream.append') continue
     for (const chunk of output.chunks) yield chunk
   }
@@ -863,9 +869,18 @@ function isReasoningDeltaEvent(event: any): boolean {
 function terminalResultText(event: any): string {
   for (const key of ['result', 'result_text', 'text', 'final_text']) {
     const value = event?.[key]
-    if (typeof value !== 'string') continue
-    const resultText = value.trim()
+    const resultText = nestedText(value).trim()
     if (resultText) return resultText
+  }
+  return ''
+}
+
+function nestedText(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (!isRecord(value)) return ''
+  for (const key of ['text', 'result', 'result_text', 'final_text', 'message']) {
+    const resultText = nestedText(value[key])
+    if (resultText.trim()) return resultText
   }
   return ''
 }
@@ -959,7 +974,7 @@ function planStatus(value: string | undefined): RendererTaskStatus {
   if (status === 'inprogress' || status === 'in_progress' || status === 'running')
     return 'in_progress'
   if (status === 'completed' || status === 'complete' || status === 'done') return 'complete'
-  if (status === 'failed' || status === 'error') return 'complete'
+  if (status === 'failed' || status === 'error') return 'error'
   return 'pending'
 }
 
@@ -1113,11 +1128,10 @@ function commandTask(
   const displayCommand =
     rawCommand === 'Command' ? rawCommand : oneLine(unwrapShellCommand(rawCommand), 220)
   const status = commandStatus(item, eventType)
-  const exitCode = item.exitCode ?? item.exit_code
   const failed = isCommandFailure(item, eventType)
   const isCompletionUpdate =
     eventType === 'item.completed' || status === 'complete' || status === 'error'
-  const output = commandOutputElements(accumulatedOutput ?? '', exitCode)
+  const output = commandOutputElements(accumulatedOutput ?? '')
   return {
     id,
     title: commandExecutionTitle(commandIndex),
@@ -1139,14 +1153,10 @@ function commandAggregatedOutput(item: any): string {
   return ''
 }
 
-function commandOutputElements(output: string, exitCode?: number | null): RendererTaskBlock[] {
+function commandOutputElements(output: string): RendererTaskBlock[] {
   const elements: RendererTaskBlock[] = []
-  const normalizedOutput =
-    exitCode !== null && exitCode !== undefined && exitCode !== 0
-      ? `exit code ${exitCode}${output ? `\n${output}` : ''}`
-      : output
-  if (normalizedOutput) {
-    const formatted = formatCommandOutput(normalizedOutput)
+  if (output) {
+    const formatted = formatCommandOutput(output)
     elements.push(pre(formatted.body, formatted.language))
   }
   return elements
@@ -1238,7 +1248,7 @@ function mergeTask(existing: HarnessTask | undefined, update: HarnessTask): Harn
 }
 
 function commandStatus(item: any, eventType: string): RendererTaskStatus {
-  if (isCommandFailure(item, eventType)) return 'complete'
+  if (isCommandFailure(item, eventType)) return 'error'
   return itemStatus(item, eventType, item.exitCode ?? item.exit_code)
 }
 
@@ -1256,11 +1266,16 @@ function isCommandFailure(item: any, eventType: string): boolean {
 
 function itemStatus(item: any, eventType: string, _exitCode?: number | null): RendererTaskStatus {
   const status = String(item.status ?? '').toLowerCase()
-  if (status === 'failed' || status === 'declined') return 'complete'
+  if (status === 'failed' || status === 'declined') return 'error'
   if (status === 'completed' || eventType === 'item.completed') {
     return 'complete'
   }
   return 'in_progress'
+}
+
+function visibleErrorText(error: string): string {
+  const trimmed = error.trim()
+  return trimmed.startsWith('Execution failed') ? trimmed : `Execution failed: ${trimmed}`
 }
 
 function titleFor(tool: any): string {
