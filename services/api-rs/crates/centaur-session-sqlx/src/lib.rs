@@ -170,7 +170,8 @@ impl PgSessionStore {
         .bind(ExecutionStatus::Queued.as_ref())
         .bind(metadata)
         .fetch_one(&self.pool)
-        .await?;
+        .await
+        .map_err(|error| map_create_execution_error(error, thread_key))?;
 
         row.try_into()
     }
@@ -197,6 +198,48 @@ impl PgSessionStore {
         row.try_into()
     }
 
+    pub async fn active_execution_for_thread(
+        &self,
+        thread_key: &ThreadKey,
+    ) -> Result<Option<SessionExecution>, SessionStoreError> {
+        let row = sqlx::query_as::<_, SessionExecutionRow>(
+            r#"
+            select execution_id, thread_key, status, metadata, error, created_at, updated_at, started_at, completed_at
+            from session_executions
+            where thread_key = $1 and status in ($2, $3)
+            order by created_at desc, execution_id desc
+            limit 1
+            "#,
+        )
+        .bind(thread_key.as_str())
+        .bind(ExecutionStatus::Queued.as_ref())
+        .bind(ExecutionStatus::Running.as_ref())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
+    pub async fn latest_execution_for_thread(
+        &self,
+        thread_key: &ThreadKey,
+    ) -> Result<Option<SessionExecution>, SessionStoreError> {
+        let row = sqlx::query_as::<_, SessionExecutionRow>(
+            r#"
+            select execution_id, thread_key, status, metadata, error, created_at, updated_at, started_at, completed_at
+            from session_executions
+            where thread_key = $1
+            order by created_at desc, execution_id desc
+            limit 1
+            "#,
+        )
+        .bind(thread_key.as_str())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(TryInto::try_into).transpose()
+    }
+
     pub async fn complete_execution(
         &self,
         execution_id: &str,
@@ -217,6 +260,33 @@ impl PgSessionStore {
         self.set_session_status(&row.thread_key, SessionStatus::Idle)
             .await?;
         row.try_into()
+    }
+
+    pub async fn complete_execution_if_active(
+        &self,
+        execution_id: &str,
+    ) -> Result<Option<SessionExecution>, SessionStoreError> {
+        let row = sqlx::query_as::<_, SessionExecutionRow>(
+            r#"
+            update session_executions
+            set status = $2, completed_at = coalesce(completed_at, now()), updated_at = now()
+            where execution_id = $1 and status in ($3, $4)
+            returning execution_id, thread_key, status, metadata, error, created_at, updated_at, started_at, completed_at
+            "#,
+        )
+        .bind(execution_id)
+        .bind(ExecutionStatus::Completed.as_ref())
+        .bind(ExecutionStatus::Queued.as_ref())
+        .bind(ExecutionStatus::Running.as_ref())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        self.set_session_status(&row.thread_key, SessionStatus::Idle)
+            .await?;
+        Ok(Some(row.try_into()?))
     }
 
     pub async fn fail_execution(
@@ -241,6 +311,35 @@ impl PgSessionStore {
         self.set_session_status(&row.thread_key, SessionStatus::Failed)
             .await?;
         row.try_into()
+    }
+
+    pub async fn fail_execution_if_active(
+        &self,
+        execution_id: &str,
+        error: &str,
+    ) -> Result<Option<SessionExecution>, SessionStoreError> {
+        let row = sqlx::query_as::<_, SessionExecutionRow>(
+            r#"
+            update session_executions
+            set status = $2, error = $3, completed_at = coalesce(completed_at, now()), updated_at = now()
+            where execution_id = $1 and status in ($4, $5)
+            returning execution_id, thread_key, status, metadata, error, created_at, updated_at, started_at, completed_at
+            "#,
+        )
+        .bind(execution_id)
+        .bind(ExecutionStatus::Failed.as_ref())
+        .bind(error)
+        .bind(ExecutionStatus::Queued.as_ref())
+        .bind(ExecutionStatus::Running.as_ref())
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        self.set_session_status(&row.thread_key, SessionStatus::Failed)
+            .await?;
+        Ok(Some(row.try_into()?))
     }
 
     pub async fn append_event(
@@ -395,6 +494,8 @@ pub enum SessionStoreError {
         existing: String,
         requested: String,
     },
+    #[error("session {thread_key} already has an active execution")]
+    ActiveExecution { thread_key: String },
     #[error("invalid persisted value: {0}")]
     InvalidPersistedValue(String),
     #[error("invalid notification payload on {channel}: {payload}: {error}")]
@@ -407,6 +508,24 @@ pub enum SessionStoreError {
     Sqlx(#[from] sqlx::Error),
     #[error(transparent)]
     Migrate(#[from] sqlx::migrate::MigrateError),
+}
+
+fn map_create_execution_error(error: sqlx::Error, thread_key: &ThreadKey) -> SessionStoreError {
+    if is_active_execution_constraint(&error) {
+        return SessionStoreError::ActiveExecution {
+            thread_key: thread_key.as_str().to_owned(),
+        };
+    }
+    error.into()
+}
+
+fn is_active_execution_constraint(error: &sqlx::Error) -> bool {
+    let sqlx::Error::Database(database_error) = error else {
+        return false;
+    };
+    database_error
+        .constraint()
+        .is_some_and(|constraint| constraint == "session_executions_one_active_idx")
 }
 
 #[derive(Debug, FromRow)]
