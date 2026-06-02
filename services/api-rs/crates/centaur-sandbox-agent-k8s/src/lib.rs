@@ -419,6 +419,28 @@ impl AgentSandboxBackend {
         }
     }
 
+    async fn claim_prewarmed_from_warm_pool(
+        &self,
+        spec: SandboxSpec,
+        warm_pool: &SandboxWarmPoolConfig,
+    ) -> SandboxResult<SandboxHandle> {
+        validate_warm_pool_spec(&spec, &self.config)?;
+        let claim_id = SandboxId::new(next_sandbox_name());
+        let claim = build_sandbox_claim(&claim_id, warm_pool, &self.config);
+        self.sandbox_claims(warm_pool)
+            .create(&PostParams::default(), &claim)
+            .await
+            .map_err(|err| map_kube_error("create sandbox warm-pool claim", err))?;
+
+        match self.wait_for_sandbox_claim(&claim_id, warm_pool).await {
+            Ok(id) => Ok(SandboxHandle::new(id, BACKEND_NAME)),
+            Err(err) => {
+                let _ = self.delete_sandbox_claim(&claim_id, warm_pool).await;
+                Err(err)
+            }
+        }
+    }
+
     fn spawn_warm_pool_proxy_prewarm(
         &self,
         warm_pool: SandboxWarmPoolConfig,
@@ -1111,6 +1133,11 @@ impl SandboxBackend for AgentSandboxBackend {
             .await
     }
 
+    async fn claim_prewarmed(&self, spec: SandboxSpec) -> SandboxResult<SandboxHandle> {
+        self.claim_prewarmed_from_warm_pool(spec, &self.config.warm_pool)
+            .await
+    }
+
     async fn prewarm(&self, spec: SandboxSpec) -> SandboxResult<Vec<SandboxId>> {
         let warm_pool = &self.config.warm_pool;
         validate_warm_pool_spec(&spec, &self.config)?;
@@ -1637,6 +1664,7 @@ fn codex_app_server_readiness_probe(spec: &SandboxSpec) -> Option<Value> {
                 ],
             },
             "periodSeconds": 1,
+            "timeoutSeconds": 5,
             "failureThreshold": 30,
         })
     })
@@ -2731,6 +2759,7 @@ mod tests {
                 .contains("app-server")
         );
         assert_eq!(container["readinessProbe"]["periodSeconds"], 1);
+        assert_eq!(container["readinessProbe"]["timeoutSeconds"], 5);
     }
 
     #[test]

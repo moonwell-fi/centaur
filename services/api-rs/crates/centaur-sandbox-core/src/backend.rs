@@ -23,6 +23,12 @@ pub trait SandboxBackend: Send + Sync {
         Ok(Vec::new())
     }
 
+    /// Claim backend-owned warm capacity that was already reconciled and
+    /// pre-initialized by [`SandboxBackend::prewarm`].
+    async fn claim_prewarmed(&self, spec: SandboxSpec) -> SandboxResult<SandboxHandle> {
+        self.create(spec).await
+    }
+
     /// Mark a warm sandbox whose interactive runtime has been initialized by
     /// the control plane before it is assigned to a user thread.
     async fn mark_prewarmed(&self, _id: &SandboxId, _marker: &str) -> SandboxResult<()> {

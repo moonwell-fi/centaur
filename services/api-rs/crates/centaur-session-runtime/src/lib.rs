@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use tokio::{
     io,
+    runtime::Handle,
     sync::{Mutex, broadcast, oneshot},
     time::{Instant, Interval, MissedTickBehavior, interval_at, timeout},
 };
@@ -41,6 +42,9 @@ const CODEX_WORKSPACE_DIR: &str = "/home/agent/workspace";
 const CODEX_APP_SERVER_RPC_TIMEOUT: Duration = Duration::from_secs(60);
 const CODEX_APP_SERVER_INIT_TIMEOUT: Duration = Duration::from_secs(30);
 const CODEX_APP_SERVER_PREWARMED_MARKER: &str = "codex-app-server-initialized";
+const CODEX_APP_SERVER_BACKGROUND_PREWARM_INTERVAL: Duration = Duration::from_millis(500);
+const CODEX_APP_SERVER_BACKGROUND_PREWARM_THREAD_KEY: &str = "warm:codex-app-server";
+const CODEX_APP_SERVER_BACKGROUND_PREWARM_EXECUTION_ID: &str = "background-prewarm";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExistingSandboxReuse {
@@ -54,6 +58,7 @@ pub struct SessionRuntime {
     store: PgSessionStore,
     sandbox_runtime: SandboxRuntime,
     sandbox_pipes: Arc<Mutex<HashMap<String, SessionPipe>>>,
+    codex_prewarm_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -142,10 +147,49 @@ struct EventStreamState {
 
 impl SessionRuntime {
     pub fn new(store: PgSessionStore, sandbox_runtime: SandboxRuntime) -> Self {
-        Self {
+        let runtime = Self {
             store,
             sandbox_runtime,
             sandbox_pipes: Arc::new(Mutex::new(HashMap::new())),
+            codex_prewarm_lock: Arc::new(Mutex::new(())),
+        };
+        runtime.spawn_codex_app_server_background_prewarm();
+        runtime
+    }
+
+    fn spawn_codex_app_server_background_prewarm(&self) {
+        if self.sandbox_runtime.protocol != SandboxProtocol::CodexAppServer {
+            return;
+        }
+        if Handle::try_current().is_err() {
+            warn!("skipping codex warm-pool background prewarm outside tokio runtime");
+            return;
+        }
+        let runtime = self.clone();
+        tokio::spawn(async move {
+            runtime.run_codex_app_server_background_prewarm().await;
+        });
+    }
+
+    async fn run_codex_app_server_background_prewarm(self) {
+        let thread_key = match ThreadKey::parse(CODEX_APP_SERVER_BACKGROUND_PREWARM_THREAD_KEY) {
+            Ok(thread_key) => thread_key,
+            Err(error) => {
+                warn!(%error, "invalid codex background prewarm thread key");
+                return;
+            }
+        };
+        let mut tick = interval_at(Instant::now(), CODEX_APP_SERVER_BACKGROUND_PREWARM_INTERVAL);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            tick.tick().await;
+            let spec = (self.sandbox_runtime.spec_factory)(
+                &thread_key,
+                CODEX_APP_SERVER_BACKGROUND_PREWARM_EXECUTION_ID,
+            );
+            if let Err(error) = self.prewarm_codex_app_server_pool(&spec).await {
+                warn!(%error, "codex warm-pool background prewarm failed");
+            }
         }
     }
 
@@ -315,10 +359,16 @@ impl SessionRuntime {
         }
 
         let spec = (self.sandbox_runtime.spec_factory)(thread_key, execution_id);
+        let mut claim_prewarmed = false;
         if self.sandbox_runtime.protocol == SandboxProtocol::CodexAppServer {
             self.prewarm_codex_app_server_pool(&spec).await?;
+            claim_prewarmed = self.has_unbound_prewarmed_codex_app_server_pipe().await;
         }
-        let handle = self.sandbox_runtime.manager.create_running(spec).await?;
+        let handle = if claim_prewarmed {
+            self.sandbox_runtime.manager.claim_prewarmed(spec).await?
+        } else {
+            self.sandbox_runtime.manager.create_running(spec).await?
+        };
         self.store
             .update_sandbox_id(thread_key, Some(handle.id.as_str()))
             .await?;
@@ -329,6 +379,13 @@ impl SessionRuntime {
         &self,
         spec: &SandboxSpec,
     ) -> Result<(), SessionRuntimeError> {
+        if self.has_unbound_prewarmed_codex_app_server_pipe().await {
+            return Ok(());
+        }
+        let _prewarm_guard = self.codex_prewarm_lock.lock().await;
+        if self.has_unbound_prewarmed_codex_app_server_pipe().await {
+            return Ok(());
+        }
         let candidates = self.sandbox_runtime.manager.prewarm(spec.clone()).await?;
         for id in candidates {
             let sandbox_id = id.as_str().to_owned();
@@ -354,6 +411,30 @@ impl SessionRuntime {
             }
         }
         Ok(())
+    }
+
+    async fn has_unbound_prewarmed_codex_app_server_pipe(&self) -> bool {
+        let pipes = self
+            .sandbox_pipes
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for pipe in pipes {
+            let SessionPipe::CodexAppServer(pipe) = pipe else {
+                continue;
+            };
+            if !pipe.prewarmed {
+                continue;
+            }
+            if pipe.output_thread_key.lock().await.is_none() {
+                return true;
+            }
+        }
+
+        false
     }
 
     async fn ensure_session_pipe(
@@ -565,18 +646,11 @@ impl SessionRuntime {
         input: &ExecuteSessionInput,
     ) -> Result<(), SessionRuntimeError> {
         let _execute_guard = pipe.execute_lock.lock().await;
-        let thread_id = ensure_codex_thread(pipe, resume_thread_id).await?;
-        self.store
-            .update_harness_thread_id(thread_key, Some(thread_id.as_str()))
-            .await?;
-        if resume_thread_id != Some(thread_id.as_str()) {
-            append_output_line(
-                &self.store,
-                thread_key,
-                None,
-                &json!({"type": "thread.started", "thread_id": thread_id}).to_string(),
-            )
-            .await?;
+        if resume_thread_id.is_some() || input_lines_require_codex_thread(&input.input_lines)? {
+            let thread_id = ensure_codex_thread(pipe, resume_thread_id).await?;
+            self.store
+                .update_harness_thread_id(thread_key, Some(thread_id.as_str()))
+                .await?;
         }
 
         for line in &input.input_lines {
@@ -731,7 +805,7 @@ async fn initialize_codex_app_server(pipe: &CodexAppServerPipe) -> Result<(), Se
             return Ok(());
         }
     }
-    codex_request(
+    let initialized = codex_request(
         pipe,
         "initialize",
         json!({
@@ -740,8 +814,14 @@ async fn initialize_codex_app_server(pipe: &CodexAppServerPipe) -> Result<(), Se
         }),
         CODEX_APP_SERVER_INIT_TIMEOUT,
     )
-    .await?;
-    codex_notify(pipe, "initialized", json!({})).await?;
+    .await;
+    match initialized {
+        Ok(_) => {
+            codex_notify(pipe, "initialized", json!({})).await?;
+        }
+        Err(error) if is_codex_already_initialized_error(&error) => {}
+        Err(error) => return Err(error),
+    }
     pipe.state.lock().await.initialized = true;
     Ok(())
 }
@@ -801,14 +881,13 @@ async fn execute_codex_input_line(
 ) -> Result<(), SessionRuntimeError> {
     initialize_codex_app_server(pipe).await?;
     let input = codex_input_from_line(line)?;
-    let thread_id =
-        pipe.state.lock().await.thread_id.clone().ok_or_else(|| {
-            SessionRuntimeError::CodexAppServer("missing Codex thread id".to_owned())
-        })?;
 
     match input {
         CodexInput::Interrupt => interrupt_codex_turn(pipe).await,
         CodexInput::User { items } => {
+            let thread_id = pipe.state.lock().await.thread_id.clone().ok_or_else(|| {
+                SessionRuntimeError::CodexAppServer("missing Codex thread id".to_owned())
+            })?;
             let (goal, items) = split_goal(items);
             if let Some(goal) = goal {
                 let mut terminal_events = pipe.notifications.subscribe();
@@ -861,6 +940,15 @@ async fn execute_codex_input_line(
             wait_for_codex_terminal(&mut terminal_events, max_duration_ms).await
         }
     }
+}
+
+fn input_lines_require_codex_thread(lines: &[String]) -> Result<bool, SessionRuntimeError> {
+    for line in lines {
+        if !matches!(codex_input_from_line(line)?, CodexInput::Interrupt) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 async fn interrupt_codex_turn(pipe: &CodexAppServerPipe) -> Result<(), SessionRuntimeError> {
@@ -1396,6 +1484,14 @@ fn error_message(value: &Value) -> String {
         .or_else(|| value.get("error").and_then(Value::as_str))
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| value.to_string())
+}
+
+fn is_codex_already_initialized_error(error: &SessionRuntimeError) -> bool {
+    matches!(
+        error,
+        SessionRuntimeError::CodexAppServer(message)
+            if message.contains("codex app-server request initialize failed: Already initialized")
+    )
 }
 
 async fn append_output_line(

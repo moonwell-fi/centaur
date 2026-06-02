@@ -48,6 +48,13 @@ where
         Ok(handle)
     }
 
+    pub async fn claim_prewarmed(&self, spec: SandboxSpec) -> SandboxResult<SandboxHandle> {
+        let handle = self.backend.claim_prewarmed(spec.clone()).await?;
+        self.store
+            .set(handle.id.clone(), DesiredSandboxState::Running(spec));
+        Ok(handle)
+    }
+
     pub async fn prewarm(&self, spec: SandboxSpec) -> SandboxResult<Vec<SandboxId>> {
         self.backend.prewarm(spec).await
     }
