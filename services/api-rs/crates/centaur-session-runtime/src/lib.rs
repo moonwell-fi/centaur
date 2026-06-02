@@ -381,27 +381,53 @@ impl SessionRuntime {
         if let Some(sandbox_id) = existing_sandbox_id {
             let id = SandboxId::new(sandbox_id);
             match self.sandbox_runtime.manager.status(&id).await {
-                Ok(SandboxStatus::Running | SandboxStatus::Created) => {
-                    return Ok(sandbox_id.to_owned());
-                }
-                Ok(SandboxStatus::Suspended) => {
-                    self.sandbox_pipes.lock().await.remove(sandbox_id);
-                    self.sandbox_runtime.manager.resume(&id).await?;
-                    self.store
-                        .append_event(
-                            thread_key,
-                            Some(execution_id),
-                            "session.sandbox_resumed",
-                            json!({
-                                "execution_id": execution_id,
-                                "thread_key": thread_key.as_str(),
-                                "sandbox_id": sandbox_id,
-                            }),
-                        )
-                        .await?;
-                    return Ok(sandbox_id.to_owned());
-                }
-                Ok(_) | Err(SandboxError::NotFound(_)) => {}
+                Ok(status) => match existing_sandbox_action(&status) {
+                    ExistingSandboxAction::Reuse => return Ok(sandbox_id.to_owned()),
+                    ExistingSandboxAction::ResumeOrReplace => {
+                        self.sandbox_pipes.lock().await.remove(sandbox_id);
+                        match self.sandbox_runtime.manager.resume(&id).await {
+                            Ok(()) => {
+                                self.store
+                                    .append_event(
+                                        thread_key,
+                                        Some(execution_id),
+                                        "session.sandbox_resumed",
+                                        json!({
+                                            "execution_id": execution_id,
+                                            "thread_key": thread_key.as_str(),
+                                            "sandbox_id": sandbox_id,
+                                        }),
+                                    )
+                                    .await?;
+                                return Ok(sandbox_id.to_owned());
+                            }
+                            Err(error) => {
+                                warn!(
+                                    %thread_key,
+                                    %execution_id,
+                                    %sandbox_id,
+                                    %error,
+                                    "replacing sandbox after resume failed"
+                                );
+                                self.store
+                                    .append_event(
+                                        thread_key,
+                                        Some(execution_id),
+                                        "session.sandbox_resume_failed",
+                                        json!({
+                                            "execution_id": execution_id,
+                                            "thread_key": thread_key.as_str(),
+                                            "sandbox_id": sandbox_id,
+                                            "error": error.to_string(),
+                                        }),
+                                    )
+                                    .await?;
+                            }
+                        }
+                    }
+                    ExistingSandboxAction::Replace => {}
+                },
+                Err(SandboxError::NotFound(_)) => {}
                 Err(error) => return Err(SessionRuntimeError::Sandbox(error)),
             }
         }
@@ -1133,6 +1159,23 @@ fn should_attach_session_pipe(status: &SandboxStatus) -> bool {
     status.can_open_io()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ExistingSandboxAction {
+    Reuse,
+    ResumeOrReplace,
+    Replace,
+}
+
+fn existing_sandbox_action(status: &SandboxStatus) -> ExistingSandboxAction {
+    match status {
+        SandboxStatus::Running => ExistingSandboxAction::Reuse,
+        SandboxStatus::Created | SandboxStatus::Suspended => ExistingSandboxAction::ResumeOrReplace,
+        SandboxStatus::Stopped | SandboxStatus::Gone | SandboxStatus::Unknown(_) => {
+            ExistingSandboxAction::Replace
+        }
+    }
+}
+
 fn is_event_stream_attach_race(error: &SessionRuntimeError) -> bool {
     matches!(
         error,
@@ -1831,6 +1874,34 @@ mod tests {
         assert!(!should_attach_session_pipe(&SandboxStatus::Unknown(
             "other".to_owned()
         )));
+    }
+
+    #[test]
+    fn existing_sandbox_action_repairs_or_replaces_non_attachable_assignments() {
+        assert_eq!(
+            existing_sandbox_action(&SandboxStatus::Running),
+            ExistingSandboxAction::Reuse
+        );
+        assert_eq!(
+            existing_sandbox_action(&SandboxStatus::Suspended),
+            ExistingSandboxAction::ResumeOrReplace
+        );
+        assert_eq!(
+            existing_sandbox_action(&SandboxStatus::Created),
+            ExistingSandboxAction::ResumeOrReplace
+        );
+        assert_eq!(
+            existing_sandbox_action(&SandboxStatus::Stopped),
+            ExistingSandboxAction::Replace
+        );
+        assert_eq!(
+            existing_sandbox_action(&SandboxStatus::Gone),
+            ExistingSandboxAction::Replace
+        );
+        assert_eq!(
+            existing_sandbox_action(&SandboxStatus::Unknown("rollout missing".to_owned())),
+            ExistingSandboxAction::Replace
+        );
     }
 
     #[test]
