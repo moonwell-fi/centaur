@@ -93,7 +93,7 @@ export function createSlackbotV2(options: SlackbotV2Options): SlackbotV2 {
   chat.onSubscribedMessage(async (thread, message) => {
     if (!isAllowedSlackMessage(message, options, logger)) return
     await syncThreadMessageToSession(thread, message, {
-      mode: message.isMention === true ? 'execute' : 'append',
+      mode: 'execute',
       options
     })
   })
