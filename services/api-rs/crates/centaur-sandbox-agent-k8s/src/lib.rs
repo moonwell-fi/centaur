@@ -1,13 +1,8 @@
 //! Agent Sandbox Kubernetes backend.
-//!
-//! The Agent Sandbox CRD types are generated from the upstream CRD with
-//! `just codegen-agent-sandbox-crd`.
-
-pub use generated::agents_x_k8s_io as crd;
 
 mod backend;
 mod config;
-pub mod generated;
+pub mod crd;
 mod resources;
 
 pub use backend::AgentSandboxBackend;

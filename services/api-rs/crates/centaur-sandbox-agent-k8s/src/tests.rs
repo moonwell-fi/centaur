@@ -5,13 +5,13 @@ use centaur_sandbox_core::{
     CredentialProfile, HarnessAuthMode, MountKind, ResourceLimits, SandboxId, SandboxSpec,
     SandboxStatus,
 };
-use k8s_openapi::api::core::v1::{Pod, PodCondition, PodStatus};
+use k8s_openapi::api::core::v1::{EnvVar, Pod, PodCondition, PodStatus};
 
 use crate::resources::*;
 
 use super::*;
 
-fn env_values(env: &[crd::SandboxPodTemplateSpecContainersEnv]) -> BTreeMap<&str, &str> {
+fn env_values(env: &[EnvVar]) -> BTreeMap<&str, &str> {
     env.iter()
         .filter_map(|item| {
             item.value
@@ -77,8 +77,8 @@ fn builds_agent_sandbox_spec_with_limits() {
         Some("sandbox-agent")
     );
     let image_pull_secrets = pod_spec.image_pull_secrets.as_ref().unwrap();
-    assert_eq!(image_pull_secrets[0].name.as_deref(), Some("regcred"));
-    assert_eq!(image_pull_secrets[1].name.as_deref(), Some("mirrorcred"));
+    assert_eq!(image_pull_secrets[0].name, "regcred");
+    assert_eq!(image_pull_secrets[1].name, "mirrorcred");
 }
 
 #[test]

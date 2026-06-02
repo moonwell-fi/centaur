@@ -1,5 +1,6 @@
 use centaur_sandbox_core::{SandboxId, SandboxResult, SandboxSpec};
 use k8s_openapi::api::core::v1::{Container, PodSpec};
+use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
 use super::common::{image_pull_secret_refs, resources, secret_volume, volume_mount};
 use super::iron_proxy::ResolvedIronProxy;
@@ -9,14 +10,10 @@ use crate::{MANAGED_BY_LABEL, MANAGED_BY_VALUE, MANAGED_LABEL, SANDBOX_ID_LABEL,
 mod env;
 mod mounts;
 mod status;
-mod template;
 
 use env::env_vars;
 use mounts::mounts;
 pub(crate) use status::sandbox_status_from_pod;
-use template::{
-    AgentPodTemplate, AgentPodTemplateMetadata, AgentSandboxSpec, agent_sandbox_spec_from,
-};
 
 pub(crate) fn build_agent_sandbox(
     id: &SandboxId,
@@ -60,15 +57,16 @@ pub(crate) fn build_agent_sandbox(
         ..Default::default()
     };
 
-    let crd_spec = agent_sandbox_spec_from(AgentSandboxSpec {
+    let crd_spec = crd::SandboxSpec {
         replicas: Some(1),
         service: Some(false),
         shutdown_policy: Some(crd::SandboxShutdownPolicy::Retain),
-        pod_template: AgentPodTemplate {
-            metadata: AgentPodTemplateMetadata {
+        pod_template: crd::SandboxPodTemplate {
+            metadata: Some(ObjectMeta {
                 labels: Some(pod_labels),
                 annotations: Some(config.annotations.clone()),
-            },
+                ..Default::default()
+            }),
             spec: PodSpec {
                 containers: vec![container],
                 restart_policy: Some("Never".to_owned()),
@@ -80,7 +78,7 @@ pub(crate) fn build_agent_sandbox(
                 ..Default::default()
             },
         },
-    })?;
+    };
     let mut sandbox = crd::Sandbox::new(id.as_str(), crd_spec);
     sandbox.metadata.labels = Some(labels);
     sandbox.metadata.annotations = Some(config.annotations.clone());
