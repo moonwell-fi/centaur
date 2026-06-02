@@ -88,9 +88,4 @@ impl IronProxyPodConfig {
             token_broker_configmap_name: None,
         }
     }
-
-    pub fn with_fragments(mut self, fragments: Vec<ProxyFragment>) -> Self {
-        self.fragments = fragments;
-        self
-    }
 }
