@@ -39,6 +39,8 @@ export type ChatSDKSessionClosed = {
 
 export type ChatSDKOutput = ChatSDKMessageUpsert | ChatSDKSessionClosed | ChatSDKStreamAppend
 
+const MAX_TASK_BODY_CHARS = 3000
+
 export class ChatSDKRenderer implements RendererInterface<ChatSDKOutput> {
   open(): ChatSDKOutput[] {
     return []
@@ -110,7 +112,7 @@ function taskBodyToChatSdkText(
   options: { fenceCode?: boolean } = {}
 ): string {
   const fenceCode = options.fenceCode ?? true
-  return blocks
+  const text = blocks
     .map(block => {
       if (block.type === 'text') return block.text
       if (!fenceCode) return block.text
@@ -119,4 +121,17 @@ function taskBodyToChatSdkText(
     })
     .filter(Boolean)
     .join('\n')
+  return truncateTaskBody(text)
+}
+
+function truncateTaskBody(text: string): string {
+  if (text.length <= MAX_TASK_BODY_CHARS) return text
+  let omitted = text.length - MAX_TASK_BODY_CHARS
+  while (true) {
+    const suffix = `\n[truncated ${omitted} chars from task body]`
+    const keep = Math.max(0, MAX_TASK_BODY_CHARS - suffix.length)
+    const actualOmitted = text.length - keep
+    if (actualOmitted === omitted) return `${text.slice(0, keep).trimEnd()}${suffix}`
+    omitted = actualOmitted
+  }
 }
