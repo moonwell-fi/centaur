@@ -1,4 +1,6 @@
-use centaur_sandbox_core::{CredentialProfile, EnvVar, HarnessAuthModes, SandboxSpec};
+use centaur_sandbox_core::{
+    CredentialProfile, EnvVar, HarnessAuthMode, HarnessAuthModes, SandboxSpec,
+};
 use centaur_session_core::{HarnessType, ThreadKey};
 
 #[derive(Clone, Debug)]
@@ -40,13 +42,12 @@ impl SandboxWorkloadMode {
 impl CodexAppServerWorkload {
     fn spec(&self, thread_key: &ThreadKey, harness_type: &HarnessType) -> SandboxSpec {
         let credential_profile = credential_profile_for(harness_type);
+        let auth_mode = self.auth_modes.mode_for(credential_profile);
         let mut spec = SandboxSpec::new(&self.image)
+            .args(entrypoint_args(credential_profile, auth_mode))
             .env("CENTAUR_THREAD_KEY", thread_key.as_str())
             .env("CENTAUR_API_URL", &self.centaur_api_url)
-            .credential(
-                credential_profile,
-                self.auth_modes.mode_for(credential_profile),
-            );
+            .credential(credential_profile, auth_mode);
         if let Some(api_key) = &self.centaur_api_key {
             spec = spec.env("CENTAUR_API_KEY", api_key);
         }
@@ -54,6 +55,25 @@ impl CodexAppServerWorkload {
             spec = spec.env(&env.name, &env.value);
         }
         spec
+    }
+}
+
+fn entrypoint_args(
+    credential_profile: CredentialProfile,
+    auth_mode: Option<HarnessAuthMode>,
+) -> Vec<String> {
+    match (credential_profile, auth_mode) {
+        (CredentialProfile::Codex, Some(auth_mode)) => vec![
+            "--codex-auth-mode".to_owned(),
+            auth_mode.as_ref().to_owned(),
+            "codex-app-wrapper".to_owned(),
+        ],
+        (CredentialProfile::ClaudeCode, Some(auth_mode)) => vec![
+            "--claude-code-auth-mode".to_owned(),
+            auth_mode.as_ref().to_owned(),
+            "codex-app-wrapper".to_owned(),
+        ],
+        _ => vec!["codex-app-wrapper".to_owned()],
     }
 }
 
@@ -119,6 +139,10 @@ mod tests {
         assert!(!env.contains_key("CODEX_AUTH_MODE"));
         assert!(!env.contains_key("CLAUDE_CODE_AUTH_MODE"));
         assert_eq!(env["NO_PROXY"], "api");
+        assert_eq!(
+            spec.args,
+            ["--codex-auth-mode", "access_token", "codex-app-wrapper"].map(str::to_owned)
+        );
         assert_eq!(
             spec.credentials,
             vec![CredentialRequest {

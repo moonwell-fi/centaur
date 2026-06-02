@@ -96,16 +96,6 @@ deploy:
         --set onepasswordConnect.connect.create=true
       )
     fi
-    if [[ -n "${CODEX_AUTH_MODE:-}" ]]; then
-      extra_args+=(
-        --set sandbox.extraEnv.CODEX_AUTH_MODE=${CODEX_AUTH_MODE}
-      )
-    fi
-    if [[ -n "${CLAUDE_CODE_AUTH_MODE:-}" ]]; then
-      extra_args+=(
-        --set sandbox.extraEnv.CLAUDE_CODE_AUTH_MODE=${CLAUDE_CODE_AUTH_MODE}
-      )
-    fi
     helm upgrade --install {{release}} {{chart}} -n {{namespace}} --create-namespace -f {{dev_values}} ${extra_args[@]+"${extra_args[@]}"}
 
 # Bring up the dev stack; pass `k3s` (just up k3s) to import local images into k3s's containerd.
