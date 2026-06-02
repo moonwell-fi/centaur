@@ -8,7 +8,6 @@ use super::ServerError;
 
 mod ca;
 mod fragments;
-mod image;
 mod labels;
 mod mode;
 mod op_connect;
@@ -18,7 +17,6 @@ mod token_broker;
 
 use ca::IronProxyCaArgs;
 use fragments::IronProxyFragmentsArgs;
-use image::IronProxyImageArgs;
 use labels::parse_label_selector_arg;
 use mode::IronProxyMode;
 use op_connect::OnePasswordConnectArgs;
@@ -35,8 +33,17 @@ pub(super) struct IronProxyArgs {
         default_value = "auto"
     )]
     mode: IronProxyMode,
-    #[command(flatten)]
-    image: IronProxyImageArgs,
+    #[arg(
+        long = "kubernetes-iron-proxy-image",
+        env = "KUBERNETES_IRON_PROXY_IMAGE",
+        default_value = "centaur-iron-proxy:latest"
+    )]
+    image: String,
+    #[arg(
+        long = "kubernetes-iron-proxy-image-pull-policy",
+        env = "KUBERNETES_IRON_PROXY_IMAGE_PULL_POLICY"
+    )]
+    image_pull_policy: Option<String>,
     #[command(flatten)]
     fragments: IronProxyFragmentsArgs,
     #[command(flatten)]
@@ -69,14 +76,17 @@ impl IronProxyArgs {
         let (ca_cert_secret_name, ca_key_secret_name) =
             ca.ok_or(ServerError::MissingIronProxyCaSecret)?;
 
-        let mut config = IronProxyPodConfig::new(
-            self.image.image_name.clone(),
-            ca_cert_secret_name,
-            ca_key_secret_name,
-        )
-        .with_fragments(load_fragment_files(&fragment_paths)?);
+        let mut config =
+            IronProxyPodConfig::new(self.image.clone(), ca_cert_secret_name, ca_key_secret_name)
+                .with_fragments(load_fragment_files(&fragment_paths)?);
 
-        config.image_pull = self.image.image_pull_config(sandbox_image_pull);
+        config.image_pull = ImagePullConfig {
+            policy: self
+                .image_pull_policy
+                .clone()
+                .or_else(|| sandbox_image_pull.policy.clone()),
+            secrets: sandbox_image_pull.secrets.clone(),
+        };
         config.source_policy = self.source.policy();
         self.secret_env.apply_to(&mut config);
         self.op_connect.apply_to(&mut config);
