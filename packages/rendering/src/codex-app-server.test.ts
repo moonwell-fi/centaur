@@ -608,6 +608,35 @@ describe('CodexAppServerRendererEventMapper', () => {
       error: 'sandbox exited'
     })
   })
+
+  it('maps raw turn.failed notifications to a visible failure final', () => {
+    const mapper = new CodexAppServerRendererEventMapper()
+    mapper.process({
+      type: 'item.started',
+      item: { id: 'cmd-1', type: 'commandExecution', command: 'gh auth status' }
+    })
+
+    const events = mapper.process({
+      type: 'turn.failed',
+      error: {
+        message: 'Reconnecting... 2/5',
+        additionalDetails: 'unexpected status 502 Bad Gateway'
+      }
+    })
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'renderer.message.delta',
+        delta: 'Execution failed: Reconnecting... 2/5: unexpected status 502 Bad Gateway'
+      })
+    )
+    expect(events.at(-1)).toMatchObject({
+      type: 'renderer.done',
+      answerMarkdown:
+        'Execution failed: Reconnecting... 2/5: unexpected status 502 Bad Gateway',
+      error: 'Reconnecting... 2/5: unexpected status 502 Bad Gateway'
+    })
+  })
 })
 
 function plain(elements: RendererTaskBlock[] | undefined): string {

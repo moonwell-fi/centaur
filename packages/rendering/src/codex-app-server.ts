@@ -702,11 +702,21 @@ function parseServerNotificationLine(line: string): ServerNotification | null {
 }
 
 function errorMessage(event: any): string {
-  if (String(event?.type ?? '') !== 'error') return ''
+  const eventType = String(event?.type ?? '')
+  if (eventType !== 'error' && eventType !== 'turn.failed') return ''
   const error = event?.error
   if (typeof error === 'string') return error
-  if (isRecord(error) && typeof error.message === 'string') return error.message
-  return String(event?.message ?? 'Execution failed')
+  if (isRecord(error)) {
+    const message = typeof error.message === 'string' ? error.message : ''
+    const details =
+      typeof error.additionalDetails === 'string' ? error.additionalDetails : ''
+    if (message && details && !message.includes(details)) return `${message}: ${details}`
+    if (message) return message
+    if (details) return details
+  }
+  return String(
+    event?.message ?? (eventType === 'turn.failed' ? 'turn failed' : 'Execution failed')
+  )
 }
 
 function content(event: any): any[] {
