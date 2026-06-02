@@ -1,4 +1,4 @@
-use std::{convert::Infallible, convert::TryFrom};
+use std::convert::Infallible;
 
 use axum::{
     Json, Router,
@@ -48,10 +48,9 @@ async fn healthz() -> Json<Value> {
 
 async fn create_or_get_session(
     State(state): State<AppState>,
-    Path(raw_thread_key): Path<String>,
+    Path(thread_key): Path<ThreadKey>,
     Json(request): Json<CreateSessionRequest>,
 ) -> Result<Json<Session>, ApiError> {
-    let thread_key = ThreadKey::try_from(raw_thread_key)?;
     let session = state
         .runtime
         .create_or_get_session(&thread_key, &request.harness_type, request.metadata)
@@ -61,10 +60,9 @@ async fn create_or_get_session(
 
 async fn append_messages(
     State(state): State<AppState>,
-    Path(raw_thread_key): Path<String>,
+    Path(thread_key): Path<ThreadKey>,
     Json(request): Json<AppendMessagesRequest>,
 ) -> Result<Json<AppendMessagesResponse>, ApiError> {
-    let thread_key = ThreadKey::try_from(raw_thread_key)?;
     let message_ids = state
         .runtime
         .append_messages(&thread_key, &request.messages)
@@ -77,10 +75,9 @@ async fn append_messages(
 
 async fn execute_session(
     State(state): State<AppState>,
-    Path(raw_thread_key): Path<String>,
+    Path(thread_key): Path<ThreadKey>,
     Json(request): Json<ExecuteSessionRequest>,
 ) -> Result<Json<ExecuteSessionResponse>, ApiError> {
-    let thread_key = ThreadKey::try_from(raw_thread_key)?;
     let execution = state
         .runtime
         .execute_session(
@@ -97,19 +94,18 @@ async fn execute_session(
         ok: true,
         execution_id: execution.execution_id,
         thread_key: execution.thread_key,
-        status: execution.status.to_string(),
+        status: execution.status,
     }))
 }
 
 async fn stream_events(
     State(state): State<AppState>,
-    Path(raw_thread_key): Path<String>,
+    Path(thread_key): Path<ThreadKey>,
     Query(query): Query<EventsQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let thread_key = ThreadKey::try_from(raw_thread_key)?;
     let events = state
         .runtime
-        .stream_events(&thread_key, query.after_event_id.unwrap_or(0))
+        .stream_events(&thread_key, query.after_event_id)
         .await?;
     let stream = events.map(|result| {
         let sse = match result {

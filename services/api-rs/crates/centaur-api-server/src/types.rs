@@ -1,5 +1,7 @@
 use axum::response::sse::Event;
-use centaur_session_core::{HarnessType, SessionEvent, SessionMessageInput, ThreadKey};
+use centaur_session_core::{
+    ExecutionStatus, HarnessType, SessionEvent, SessionMessageInput, ThreadKey,
+};
 use centaur_session_runtime::SESSION_OUTPUT_LINE_EVENT;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -38,12 +40,13 @@ pub struct ExecuteSessionResponse {
     pub ok: bool,
     pub execution_id: String,
     pub thread_key: ThreadKey,
-    pub status: String,
+    pub status: ExecutionStatus,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
 pub struct EventsQuery {
-    pub after_event_id: Option<i64>,
+    #[serde(default)]
+    pub after_event_id: i64,
 }
 
 pub struct SessionSseEvent(Event);
