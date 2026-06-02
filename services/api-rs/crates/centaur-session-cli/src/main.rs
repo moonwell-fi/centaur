@@ -1,4 +1,8 @@
-use std::str::FromStr;
+use std::{
+    io::{self as stdio, BufRead},
+    str::FromStr,
+    thread,
+};
 
 use centaur_api_server::{
     client::{CentaurClient, ClientError, SseEvent as ApiSseEvent, SseEventStream},
@@ -10,8 +14,7 @@ use eyre::{Result, WrapErr, bail, eyre};
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tokio::{
-    io::{self, AsyncBufReadExt, BufReader},
-    task::JoinHandle,
+    sync::mpsc,
     time::{Duration, sleep},
 };
 use uuid::Uuid;
@@ -303,23 +306,44 @@ async fn run_stream_and_optional_stdin(
         return stream_future.await;
     }
 
-    let mut stdin_task = spawn_stdin_events(
-        client,
-        thread_key,
-        options.idle_timeout_ms,
-        options.max_duration_ms,
-    );
+    let mut lines = spawn_stdin_line_reader();
 
-    tokio::select! {
-        stream_result = &mut stream_future => {
-            stdin_task.abort();
-            stream_result
-        }
-        stdin_result = &mut stdin_task => {
-            stdin_result.wrap_err("join stdin event task")??;
-            stream_future.await
+    loop {
+        tokio::select! {
+            stream_result = &mut stream_future => return stream_result,
+            line = lines.recv() => {
+                let Some(line) = line else {
+                    return stream_future.await;
+                };
+                let line = line.map_err(|message| eyre!("{message}"))?;
+                let keep_running = handle_stdin_line(
+                    &client,
+                    &thread_key,
+                    &line,
+                    options.idle_timeout_ms,
+                    options.max_duration_ms,
+                )
+                .await?;
+                if !keep_running {
+                    return Ok(());
+                }
+            }
         }
     }
+}
+
+fn spawn_stdin_line_reader() -> mpsc::Receiver<Result<String, String>> {
+    let (sender, receiver) = mpsc::channel(16);
+    thread::spawn(move || {
+        let stdin = stdio::stdin();
+        for line in stdin.lock().lines() {
+            let line = line.map_err(|error| format!("read stdin event: {error}"));
+            if sender.blocking_send(line).is_err() {
+                break;
+            }
+        }
+    });
+    receiver
 }
 
 #[derive(Clone, Debug)]
@@ -332,56 +356,85 @@ struct StreamRunOptions {
     max_duration_ms: u64,
 }
 
-fn spawn_stdin_events(
-    client: CentaurClient,
-    thread_key: ThreadKey,
+async fn handle_stdin_line(
+    client: &CentaurClient,
+    thread_key: &ThreadKey,
+    line: &str,
     idle_timeout_ms: u64,
     max_duration_ms: u64,
-) -> JoinHandle<Result<()>> {
-    tokio::spawn(async move {
-        let mut lines = BufReader::new(io::stdin()).lines();
-        while let Some(line) = lines.next_line().await.wrap_err("read stdin event")? {
-            let event = match StdinEvent::parse(&line)? {
-                Some(event) => event,
-                None => continue,
-            };
-            match event {
-                StdinEvent::Message(text) => {
-                    append_user_message(&client, &thread_key, &text).await?;
-                    execute_input_lines(
-                        &client,
-                        &thread_key,
-                        vec![user_input_line(&text)?],
-                        idle_timeout_ms,
-                        max_duration_ms,
-                    )
-                    .await?;
-                }
-                StdinEvent::InputLine(line) => {
-                    execute_input_lines(
-                        &client,
-                        &thread_key,
-                        vec![line],
-                        idle_timeout_ms,
-                        max_duration_ms,
-                    )
-                    .await?;
-                }
-                StdinEvent::InputLines(lines) => {
-                    execute_input_lines(
-                        &client,
-                        &thread_key,
-                        lines,
-                        idle_timeout_ms,
-                        max_duration_ms,
-                    )
-                    .await?;
-                }
-                StdinEvent::Quit => break,
-            }
+) -> Result<bool> {
+    let Some(event) = StdinEvent::parse(line)? else {
+        return Ok(true);
+    };
+    match event {
+        StdinEvent::Message(text) => {
+            append_user_message(client, thread_key, &text).await?;
+            execute_input_lines_or_existing_active_execution(
+                client,
+                thread_key,
+                vec![user_input_line(&text)?],
+                idle_timeout_ms,
+                max_duration_ms,
+            )
+            .await?;
         }
-        Ok(())
-    })
+        StdinEvent::InputLine(line) => {
+            execute_input_lines(
+                client,
+                thread_key,
+                vec![line],
+                idle_timeout_ms,
+                max_duration_ms,
+            )
+            .await?;
+        }
+        StdinEvent::InputLines(lines) => {
+            execute_input_lines(client, thread_key, lines, idle_timeout_ms, max_duration_ms)
+                .await?;
+        }
+        StdinEvent::Quit => return Ok(false),
+    }
+    Ok(true)
+}
+
+async fn execute_input_lines_or_existing_active_execution(
+    client: &CentaurClient,
+    thread_key: &ThreadKey,
+    input_lines: Vec<String>,
+    idle_timeout_ms: u64,
+    max_duration_ms: u64,
+) -> Result<()> {
+    match execute_input_lines(
+        client,
+        thread_key,
+        input_lines,
+        idle_timeout_ms,
+        max_duration_ms,
+    )
+    .await
+    {
+        Ok(()) => Ok(()),
+        Err(error) if is_existing_active_execution_error(&error) => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_existing_active_execution_error(error: &eyre::Report) -> bool {
+    error
+        .downcast_ref::<ClientError>()
+        .is_some_and(is_existing_active_execution_client_error)
+}
+
+fn is_existing_active_execution_client_error(error: &ClientError) -> bool {
+    matches!(
+        error,
+        ClientError::Api { status, body }
+            if is_existing_active_execution_response(status.as_u16(), body)
+    )
+}
+
+fn is_existing_active_execution_response(status: u16, body: &str) -> bool {
+    status == 500 && body.contains("already has an active execution")
 }
 
 async fn stream_output_lines(
@@ -706,7 +759,7 @@ impl FromStr for OutputEventType {
 
 #[cfg(test)]
 mod tests {
-    use super::slack_thread_key_from_url;
+    use super::{is_existing_active_execution_response, slack_thread_key_from_url};
 
     #[test]
     fn slack_url_uses_permalink_timestamp_without_thread_query() {
@@ -734,5 +787,21 @@ mod tests {
             slack_thread_key_from_url("https://tempoxyz.slack.com/client/C0APUQ8U5T9").unwrap_err();
 
         assert!(error.contains("/archives/<channel_id>/p<timestamp>"));
+    }
+
+    #[test]
+    fn active_execution_execute_error_is_steering_success() {
+        assert!(is_existing_active_execution_response(
+            500,
+            r#"{"error":"session cli:test already has an active execution","ok":false}"#
+        ));
+        assert!(!is_existing_active_execution_response(
+            500,
+            r#"{"error":"sandbox failed","ok":false}"#
+        ));
+        assert!(!is_existing_active_execution_response(
+            409,
+            r#"{"error":"session cli:test already has an active execution","ok":false}"#
+        ));
     }
 }
