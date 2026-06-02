@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use centaur_api_server::{
-    client::{CentaurClient, SseEvent as ApiSseEvent, SseEventStream},
+    client::{CentaurClient, ClientError, SseEvent as ApiSseEvent, SseEventStream},
     types::{AppendMessagesRequest, CreateSessionRequest, ExecuteSessionRequest},
 };
 use centaur_session_core::{HarnessType, MessageRole, SessionMessageInput, ThreadKey};
@@ -12,12 +12,15 @@ use serde_json::{Value, json};
 use tokio::{
     io::{self, AsyncBufReadExt, BufReader},
     task::JoinHandle,
+    time::{Duration, sleep},
 };
 use uuid::Uuid;
 
 mod tui;
 
 const DEFAULT_MESSAGE: &str = "Reply with exactly PONG and nothing else.";
+const ATTACH_STREAM_OPEN_RETRIES: usize = 40;
+const ATTACH_STREAM_OPEN_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 pub(crate) type SseFrame = ApiSseEvent;
 
@@ -29,6 +32,9 @@ struct Args {
 
     #[arg(long)]
     thread_key: Option<ThreadKeyArg>,
+
+    #[arg(long)]
+    slack_url: Option<SlackUrlArg>,
 
     #[arg(long)]
     attach: bool,
@@ -82,10 +88,7 @@ async fn main() -> Result<()> {
     let client = CentaurClient::new(args.api_url.as_str());
 
     if attach_mode {
-        let events = client
-            .stream_events(&thread_key, args.after_event_id)
-            .await
-            .wrap_err("open event stream")?;
+        let events = open_attach_event_stream(&client, &thread_key, args.after_event_id).await?;
         if args.tui {
             return tui::run(client, thread_key, events, tui_options(&args)).await;
         }
@@ -146,6 +149,35 @@ async fn main() -> Result<()> {
     run_stream_and_optional_stdin(client, thread_key, events, stream_run_options(&args)).await
 }
 
+async fn open_attach_event_stream(
+    client: &CentaurClient,
+    thread_key: &ThreadKey,
+    after_event_id: i64,
+) -> Result<SseEventStream> {
+    let mut retry_count = 0;
+    loop {
+        match client.stream_events(thread_key, after_event_id).await {
+            Ok(events) => return Ok(events),
+            Err(error) if should_retry_attach_stream_open(&error, retry_count) => {
+                retry_count += 1;
+                sleep(ATTACH_STREAM_OPEN_RETRY_DELAY).await;
+            }
+            Err(error) => return Err(error).wrap_err("open event stream"),
+        }
+    }
+}
+
+fn should_retry_attach_stream_open(error: &ClientError, retry_count: usize) -> bool {
+    if retry_count >= ATTACH_STREAM_OPEN_RETRIES {
+        return false;
+    }
+    matches!(
+        error,
+        ClientError::Api { status, body }
+            if status.as_u16() == 404 && body.contains("session not found")
+    )
+}
+
 fn tui_options(args: &Args) -> tui::TuiOptions {
     tui::TuiOptions {
         debug_visible: args.debug,
@@ -174,14 +206,17 @@ fn stream_run_options(args: &Args) -> StreamRunOptions {
 fn attach_mode(args: &Args) -> bool {
     args.attach
         || (args.after_event_id > 0
-            && args.thread_key.is_some()
+            && (args.thread_key.is_some() || args.slack_url.is_some())
             && args.message.is_none()
             && args.input_lines.is_empty())
 }
 
 fn validate_mode(args: &Args, attach_mode: bool) -> Result<()> {
-    if attach_mode && args.thread_key.is_none() {
-        bail!("attach mode requires --thread-key");
+    if args.thread_key.is_some() && args.slack_url.is_some() {
+        bail!("use either --thread-key or --slack-url, not both");
+    }
+    if attach_mode && args.thread_key.is_none() && args.slack_url.is_none() {
+        bail!("attach mode requires --thread-key or --slack-url");
     }
     if args.attach && (args.message.is_some() || !args.input_lines.is_empty()) {
         bail!("--attach does not accept --message or --input-line");
@@ -193,10 +228,12 @@ fn validate_mode(args: &Args, attach_mode: bool) -> Result<()> {
 }
 
 fn thread_key_arg(args: &Args, attach_mode: bool) -> Result<(ThreadKey, bool)> {
-    match (&args.thread_key, attach_mode) {
-        (Some(thread_key), _) => Ok((thread_key.clone().into_thread_key(), false)),
-        (None, true) => bail!("--attach requires --thread-key"),
-        (None, false) => Ok((
+    match (&args.thread_key, &args.slack_url, attach_mode) {
+        (Some(thread_key), None, _) => Ok((thread_key.clone().into_thread_key(), false)),
+        (None, Some(slack_url), _) => Ok((slack_url.clone().into_thread_key(), false)),
+        (Some(_), Some(_), _) => bail!("use either --thread-key or --slack-url, not both"),
+        (None, None, true) => bail!("--attach requires --thread-key or --slack-url"),
+        (None, None, false) => Ok((
             ThreadKey::parse(format!("cli:{}", Uuid::new_v4().simple()))?,
             true,
         )),
@@ -565,6 +602,70 @@ impl FromStr for ThreadKeyArg {
     }
 }
 
+#[derive(Clone, Debug)]
+struct SlackUrlArg(ThreadKey);
+
+impl SlackUrlArg {
+    fn into_thread_key(self) -> ThreadKey {
+        self.0
+    }
+}
+
+impl FromStr for SlackUrlArg {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        slack_thread_key_from_url(value).map(Self)
+    }
+}
+
+fn slack_thread_key_from_url(value: &str) -> Result<ThreadKey, String> {
+    let (channel_id, message_ts) = parse_slack_permalink(value)?;
+    let thread_ts = slack_query_param(value, "thread_ts").unwrap_or(message_ts);
+    ThreadKey::parse(format!("slack:{channel_id}:{thread_ts}")).map_err(|error| error.to_string())
+}
+
+fn parse_slack_permalink(value: &str) -> Result<(String, String), String> {
+    let Some((_, after_archives)) = value.split_once("/archives/") else {
+        return Err("Slack URL must contain /archives/<channel_id>/p<timestamp>".to_owned());
+    };
+    let mut parts = after_archives.split('/');
+    let channel_id = parts
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Slack URL is missing a channel id".to_owned())?;
+    let message_part = parts
+        .next()
+        .ok_or_else(|| "Slack URL is missing a /p<timestamp> segment".to_owned())?;
+    let message_digits = message_part
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(message_part)
+        .strip_prefix('p')
+        .ok_or_else(|| "Slack URL message segment must start with p".to_owned())?;
+    let message_ts = slack_ts_from_permalink_digits(message_digits)?;
+    Ok((channel_id.to_owned(), message_ts))
+}
+
+fn slack_ts_from_permalink_digits(value: &str) -> Result<String, String> {
+    if value.len() <= 10 || !value.chars().all(|ch| ch.is_ascii_digit()) {
+        return Err("Slack permalink timestamp must be p<10+ digits>".to_owned());
+    }
+    Ok(format!("{}.{}", &value[..10], &value[10..]))
+}
+
+fn slack_query_param(value: &str, key: &str) -> Option<String> {
+    let (_, query) = value.split_once('?')?;
+    for pair in query.split('&') {
+        let (candidate, raw_value) = pair.split_once('=')?;
+        if candidate == key && !raw_value.is_empty() {
+            return Some(raw_value.to_owned());
+        }
+    }
+    None
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum HarnessTypeArg {
     Codex,
@@ -600,5 +701,38 @@ impl FromStr for OutputEventType {
             return Err("output event type must not be empty".to_owned());
         }
         Ok(Self(value.to_owned()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::slack_thread_key_from_url;
+
+    #[test]
+    fn slack_url_uses_permalink_timestamp_without_thread_query() {
+        let key = slack_thread_key_from_url(
+            "https://tempoxyz.slack.com/archives/C0APUQ8U5T9/p1780401331613039",
+        )
+        .unwrap();
+
+        assert_eq!(key.as_str(), "slack:C0APUQ8U5T9:1780401331.613039");
+    }
+
+    #[test]
+    fn slack_url_prefers_thread_ts_query_for_reply_permalink() {
+        let key = slack_thread_key_from_url(
+            "https://tempoxyz.enterprise.slack.com/archives/C0APUQ8U5T9/p1780403149606999?thread_ts=1780403146.499569&cid=C0APUQ8U5T9",
+        )
+        .unwrap();
+
+        assert_eq!(key.as_str(), "slack:C0APUQ8U5T9:1780403146.499569");
+    }
+
+    #[test]
+    fn slack_url_rejects_non_permalink() {
+        let error =
+            slack_thread_key_from_url("https://tempoxyz.slack.com/client/C0APUQ8U5T9").unwrap_err();
+
+        assert!(error.contains("/archives/<channel_id>/p<timestamp>"));
     }
 }
