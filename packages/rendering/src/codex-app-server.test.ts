@@ -162,6 +162,50 @@ describe('CodexAppServerRendererEventMapper', () => {
     })
   })
 
+  it('emits a readable fallback when a completed turn has no final answer text', () => {
+    const mapper = new CodexAppServerRendererEventMapper()
+
+    mapper.process({
+      type: 'item.started',
+      item: {
+        id: 'cmd-1',
+        type: 'commandExecution',
+        command: 'printf done',
+        status: 'inProgress'
+      }
+    })
+    mapper.process({
+      type: 'item.completed',
+      item: {
+        id: 'cmd-1',
+        type: 'commandExecution',
+        command: 'printf done',
+        status: 'completed',
+        aggregatedOutput: 'done\n'
+      }
+    })
+    mapper.process({
+      type: 'item.started',
+      item: { id: 'msg-1', type: 'agentMessage', phase: 'final_answer' }
+    })
+
+    const events = mapper.process({
+      type: 'turn.completed',
+      turn: { id: 'turn-1', items: [], status: 'completed' }
+    })
+
+    expect(events).toContainEqual({
+      type: 'renderer.message.delta',
+      delta: 'Execution completed, but no final text was captured.',
+      force: true,
+      planPrefix: true
+    })
+    expect(events.at(-1)).toMatchObject({
+      type: 'renderer.done',
+      answerMarkdown: 'Execution completed, but no final text was captured.'
+    })
+  })
+
   it('maps thread name updates without making them Slack-specific', () => {
     const mapper = new CodexAppServerRendererEventMapper()
 

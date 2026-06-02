@@ -40,6 +40,7 @@ export type ChatSDKSessionClosed = {
 export type ChatSDKOutput = ChatSDKMessageUpsert | ChatSDKSessionClosed | ChatSDKStreamAppend
 
 const MAX_TASK_BODY_CHARS = 3000
+export const EMPTY_FINAL_ANSWER_TEXT = 'Execution completed, but no final text was captured.'
 
 export class ChatSDKRenderer implements RendererInterface<ChatSDKOutput> {
   open(): ChatSDKOutput[] {
@@ -87,13 +88,18 @@ export class ChatSDKRenderer implements RendererInterface<ChatSDKOutput> {
       {
         type: 'chat.session.closed',
         message: {
-          text: event.answerMarkdown,
+          text: completionText(event.answerMarkdown, event.error),
           error: event.error
         },
         streamFinalUpdates: event.streamFinalUpdates
       }
     ]
   }
+}
+
+function completionText(answerMarkdown: string | undefined, error?: string): string {
+  if (answerMarkdown?.trim()) return answerMarkdown
+  return error ? (answerMarkdown ?? '') : EMPTY_FINAL_ANSWER_TEXT
 }
 
 function taskChunk(task: RendererTaskUpdate): ChatSDKStreamChunk {

@@ -61,6 +61,44 @@ describe('ChatSDKRenderer', () => {
     ])
   })
 
+  it('uses a readable fallback when a successful completion has no final text', () => {
+    const renderer = new ChatSDKRenderer()
+
+    expect(
+      renderer.close('session-1', {
+        type: 'renderer.done',
+        answerMarkdown: ''
+      })
+    ).toEqual([
+      {
+        type: 'chat.session.closed',
+        message: {
+          text: 'Execution completed, but no final text was captured.',
+          error: undefined
+        },
+        streamFinalUpdates: undefined
+      }
+    ])
+  })
+
+  it('does not use the empty-final fallback for failed completions', () => {
+    const renderer = new ChatSDKRenderer()
+
+    expect(
+      renderer.close('session-1', {
+        type: 'renderer.done',
+        answerMarkdown: '',
+        error: 'Execution failed'
+      })
+    ).toEqual([
+      {
+        type: 'chat.session.closed',
+        message: { text: '', error: 'Execution failed' },
+        streamFinalUpdates: undefined
+      }
+    ])
+  })
+
   it('bounds large task details and output before streaming to chat adapters', () => {
     const renderer = new ChatSDKRenderer()
     const largeOutput = 'x'.repeat(10000)
