@@ -473,8 +473,15 @@ describe('CodexAppServerRendererEventMapper', () => {
       },
       flush: true
     })
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'renderer.message.delta',
+        delta: 'Execution failed: sandbox exited'
+      })
+    )
     expect(events.at(-1)).toMatchObject({
       type: 'renderer.done',
+      answerMarkdown: 'Execution failed: sandbox exited',
       error: 'sandbox exited'
     })
   })

@@ -339,6 +339,10 @@ export class CodexAppServerRendererEventMapper
         output: []
       })
     }
+    if (!this.state.answerText.trim()) {
+      this.state.harnessAnswerText += `Execution failed: ${error || 'Execution failed'}`
+      recomposeBuffers(this.state)
+    }
     this.emitActivitySummary(out, { final: true })
     this.emitPendingAssistantText(out, { force: true })
     out.push({
