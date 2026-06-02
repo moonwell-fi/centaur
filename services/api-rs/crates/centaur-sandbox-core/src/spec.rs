@@ -97,6 +97,7 @@ pub enum MountKind {
     EmptyDir,
     NamedVolume(String),
     Bind { source_path: String },
+    Secret { secret_name: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
