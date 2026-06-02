@@ -424,6 +424,36 @@ describe('slackbotv2', () => {
     await Promise.all(waits)
   })
 
+  it('passes the configured session idle timeout to execute requests', async () => {
+    bot = createTestBot({ idleTimeoutMs: 1234 })
+
+    const parent = await postUserMessage('Context for idle timeout.')
+    const mention = await postUserMessage(`<@${BOT_USER_ID}> run with idle timeout`, parent.ts)
+    const waits: Promise<unknown>[] = []
+    const response = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-idle-timeout',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: mention.ts,
+          thread_ts: parent.ts,
+          text: `<@${BOT_USER_ID}> run with idle timeout`
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    expect(codexApi.executes).toHaveLength(1)
+    expect(codexApi.executes[0]!.body.idle_timeout_ms).toBe(1234)
+  })
+
   it('refetches full context on a later mention if the initial execute failed', async () => {
     codexApi.failNextExecute = true
 

@@ -1,9 +1,12 @@
 import { createSlackbotV2, type SlackbotV2Options } from './index'
 
+const DEFAULT_SESSION_IDLE_TIMEOUT_MS = 180_000
+
 const port = numberEnv('PORT', 3002)
 const apiUrl = stringEnv('CENTAUR_API_URL', 'http://127.0.0.1:8080')
 const botToken = requiredEnv('SLACK_BOT_TOKEN')
 const signingSecret = requiredEnv('SLACK_SIGNING_SECRET')
+const idleTimeoutMs = numberEnv('SESSION_IDLE_TIMEOUT_MS', DEFAULT_SESSION_IDLE_TIMEOUT_MS)
 
 const consoleLogger = {
   debug: (message: string, data?: unknown) => log('debug', message, data),
@@ -19,7 +22,7 @@ const options: SlackbotV2Options = {
   assistantStatus: optionalEnv('SLACKBOTV2_ASSISTANT_STATUS'),
   botToken,
   botUserId: optionalEnv('SLACK_BOT_USER_ID'),
-  idleTimeoutMs: optionalNumberEnv('SESSION_IDLE_TIMEOUT_MS'),
+  idleTimeoutMs,
   maxDurationMs: optionalNumberEnv('SESSION_MAX_DURATION_MS'),
   postgresUrl:
     optionalEnv('SLACKBOTV2_DATABASE_URL') ??
@@ -45,7 +48,8 @@ console.log(
     event: 'slackbotv2_started',
     service: 'slackbotv2',
     port: server.port,
-    api_url: apiUrl
+    api_url: apiUrl,
+    session_idle_timeout_ms: idleTimeoutMs
   })
 )
 
