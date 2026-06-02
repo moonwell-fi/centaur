@@ -673,6 +673,13 @@ async fn run_stdout_pump(
     let mut output_state = StdoutPumpState::default();
     while let Some(line) = stdout.next().await {
         let line = line.map_err(codec_error_to_runtime)?;
+        if let Some(harness_thread_id) = harness_thread_id_from_output_line(&line)
+            && let Err(error) = store
+                .update_harness_thread_id(&thread_key, Some(&harness_thread_id))
+                .await
+        {
+            warn!(%thread_key, %harness_thread_id, %error, "failed to persist harness thread id");
+        }
         let active_execution = store.active_execution_for_thread(&thread_key).await?;
         let execution_id = active_execution
             .as_ref()
@@ -1344,6 +1351,21 @@ async fn append_output_line(
     Ok(())
 }
 
+fn harness_thread_id_from_output_line(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    let event_type = value.get("type").and_then(Value::as_str);
+    if event_type != Some("thread.started") {
+        return None;
+    }
+    value
+        .get("thread_id")
+        .or_else(|| value.get("threadId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|thread_id| !thread_id.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn validate_input_lines(lines: &[String]) -> Result<(), SessionRuntimeError> {
     for (index, line) in lines.iter().enumerate() {
         if line.contains('\n') || line.contains('\r') {
@@ -1605,6 +1627,26 @@ mod tests {
     }
 
     #[test]
+    fn harness_thread_id_is_extracted_from_thread_started_output() {
+        assert_eq!(
+            harness_thread_id_from_output_line(
+                r#"{"type":"thread.started","thread_id":"codex-thread-1"}"#
+            ),
+            Some("codex-thread-1".to_owned())
+        );
+        assert_eq!(
+            harness_thread_id_from_output_line(
+                r#"{"type":"thread.started","threadId":"codex-thread-2"}"#
+            ),
+            Some("codex-thread-2".to_owned())
+        );
+        assert_eq!(
+            harness_thread_id_from_output_line(r#"{"type":"turn.started","turn_id":"turn-1"}"#),
+            None
+        );
+    }
+
+    #[test]
     fn codex_workload_applies_mounts_to_sandbox_spec() {
         let workload = SandboxWorkloadMode::codex_app_server(
             "centaur-agent:latest",
@@ -1631,6 +1673,29 @@ mod tests {
             MountKind::Bind {
                 source_path: "/host/github".to_owned(),
             }
+        );
+    }
+
+    #[test]
+    fn codex_workload_does_not_inject_stale_continue_thread_id() {
+        let workload = SandboxWorkloadMode::codex_app_server("centaur-agent:latest", Vec::new());
+        let thread_key = ThreadKey::parse("chat:C123:1780000000.000000").unwrap();
+
+        let spec = workload.spec(&thread_key);
+
+        assert_eq!(
+            spec.env
+                .iter()
+                .find(|env| env.name == "CODEX_CONTINUE_THREAD_ID")
+                .map(|env| env.value.as_str()),
+            None
+        );
+        assert_eq!(
+            spec.env
+                .iter()
+                .find(|env| env.name == "AMP_CONTINUE_THREAD_ID")
+                .map(|env| env.value.as_str()),
+            None
         );
     }
 
