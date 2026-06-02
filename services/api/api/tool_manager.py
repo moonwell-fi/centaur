@@ -22,6 +22,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, ClassVar
 
+import asyncpg
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse
@@ -1137,13 +1138,21 @@ async def _active_execution_parent_context(
     pool = getattr(pool, "db_pool", None) if pool else None
     if pool is None:
         return None
-    row = await pool.fetchrow(
-        "SELECT metadata FROM agent_execution_requests "
-        "WHERE thread_key = $1 AND status IN ('running', 'cancel_requested', 'retry_wait') "
-        "ORDER BY started_at DESC NULLS LAST, claimed_at DESC NULLS LAST, created_at DESC "
-        "LIMIT 1",
-        thread_key,
-    )
+    try:
+        row = await pool.fetchrow(
+            "SELECT metadata FROM agent_execution_requests "
+            "WHERE thread_key = $1 AND status IN ('running', 'cancel_requested', 'retry_wait') "
+            "ORDER BY started_at DESC NULLS LAST, claimed_at DESC NULLS LAST, created_at DESC "
+            "LIMIT 1",
+            thread_key,
+        )
+    except asyncpg.exceptions.UndefinedTableError:
+        log.debug(
+            "tool_parent_context_table_missing",
+            thread_key=thread_key,
+            table="agent_execution_requests",
+        )
+        return None
     if not row:
         return None
     metadata = _decode_jsonb(row["metadata"], {})

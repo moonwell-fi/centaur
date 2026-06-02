@@ -4,8 +4,10 @@ import sys
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Optional, Union
 
+import asyncpg
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -14,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.tool_manager import (  # noqa: E402
     _LIFECYCLE_METHODS,
+    _active_execution_parent_context,
     _describe_method_docstring,
     _friendly_type_name,
     _normalize_for_serialization,
@@ -22,6 +25,11 @@ from api.tool_manager import (  # noqa: E402
     ToolManager,
     ToolMethod,
 )
+
+
+class _MissingLegacyExecutionTablePool:
+    async def fetchrow(self, *_args, **_kwargs):
+        raise asyncpg.exceptions.UndefinedTableError("relation missing")
 
 
 class TestDescribeMethodDocstring:
@@ -73,6 +81,20 @@ class TestDescribeMethodDocstring:
         out = _describe_method_docstring(doc)
         assert len(out) <= 1200
         assert out.endswith("\u2026")
+
+
+@pytest.mark.asyncio
+async def test_active_execution_parent_context_tolerates_missing_legacy_table():
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(db_pool=_MissingLegacyExecutionTablePool())
+        )
+    )
+
+    assert await _active_execution_parent_context(
+        request,
+        {"thread_key": "slack:C0APUQ8U5T9:1780428245.919279"},
+    ) is None
 
 
 # ---------------------------------------------------------------------------
