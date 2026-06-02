@@ -1139,12 +1139,9 @@ function commandAggregatedOutput(item: any): string {
   return ''
 }
 
-function commandOutputElements(output: string, exitCode?: number | null): RendererTaskBlock[] {
+function commandOutputElements(output: string, _exitCode?: number | null): RendererTaskBlock[] {
   const elements: RendererTaskBlock[] = []
-  const normalizedOutput =
-    exitCode !== null && exitCode !== undefined && exitCode !== 0
-      ? `exit code ${exitCode}${output ? `\n${output}` : ''}`
-      : output
+  const normalizedOutput = output
   if (normalizedOutput) {
     const formatted = formatCommandOutput(normalizedOutput)
     elements.push(pre(formatted.body, formatted.language))
@@ -1238,7 +1235,7 @@ function mergeTask(existing: HarnessTask | undefined, update: HarnessTask): Harn
 }
 
 function commandStatus(item: any, eventType: string): RendererTaskStatus {
-  if (isCommandFailure(item, eventType)) return 'complete'
+  if (isCommandFailure(item, eventType)) return 'error'
   return itemStatus(item, eventType, item.exitCode ?? item.exit_code)
 }
 

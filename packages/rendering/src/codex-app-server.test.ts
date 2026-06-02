@@ -318,6 +318,63 @@ describe('CodexAppServerRendererEventMapper', () => {
     })
   })
 
+  it('marks nonzero commands as errors without prefixing exit code into output', async () => {
+    const chunks = await collect(
+      codexAppServerToChatSdkStream(
+        toAsyncIterable([
+          {
+            method: 'item/started',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              item: {
+                id: 'cmd-1',
+                type: 'commandExecution',
+                command: "bash -lc 'echo before; false'",
+                status: 'inProgress'
+              }
+            }
+          },
+          {
+            method: 'item/commandExecution/outputDelta',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              itemId: 'cmd-1',
+              delta: 'before\n'
+            }
+          },
+          {
+            method: 'item/completed',
+            params: {
+              threadId: 'thread-1',
+              turnId: 'turn-1',
+              item: {
+                id: 'cmd-1',
+                type: 'commandExecution',
+                command: "bash -lc 'echo before; false'",
+                status: 'completed',
+                aggregatedOutput: 'before\n',
+                exitCode: 1
+              }
+            }
+          }
+        ])
+      )
+    )
+
+    const taskChunks = chunks.filter(
+      (chunk): chunk is Extract<(typeof chunks)[number], { type: 'task_update' }> =>
+        chunk.type === 'task_update' && chunk.id === 'cmd-1'
+    )
+    expect(taskChunks.filter(chunk => chunk.output).map(chunk => chunk.output)).toEqual(['before\n'])
+    expect(taskChunks.map(chunk => chunk.output).join('\n')).not.toContain('exit code')
+    expect(taskChunks.at(-1)).toMatchObject({
+      id: 'cmd-1',
+      status: 'error'
+    })
+  })
+
   it('omits binary command output from task updates', async () => {
     const chunks = await collect(
       codexAppServerToChatSdkStream(
