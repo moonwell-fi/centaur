@@ -410,11 +410,14 @@ impl SessionRuntime {
     ) -> Result<(), SessionRuntimeError> {
         let id = SandboxId::new(sandbox_id);
         match self.sandbox_runtime.manager.status(&id).await {
-            Ok(SandboxStatus::Running | SandboxStatus::Created) => {
-                self.ensure_session_pipe(thread_key, sandbox_id).await?;
+            Ok(status) if should_attach_session_pipe(&status) => {
+                if let Err(error) = self.ensure_session_pipe(thread_key, sandbox_id).await
+                    && !is_event_stream_attach_race(&error)
+                {
+                    return Err(error);
+                }
             }
-            Ok(SandboxStatus::Suspended | SandboxStatus::Stopped | SandboxStatus::Gone) => {}
-            Ok(SandboxStatus::Unknown(_)) => {}
+            Ok(_) => {}
             Err(SandboxError::NotFound(_)) => {}
             Err(error) => return Err(SessionRuntimeError::Sandbox(error)),
         }
@@ -1115,6 +1118,17 @@ fn duration_millis_u64(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
+fn should_attach_session_pipe(status: &SandboxStatus) -> bool {
+    status.can_open_io()
+}
+
+fn is_event_stream_attach_race(error: &SessionRuntimeError) -> bool {
+    matches!(
+        error,
+        SessionRuntimeError::Sandbox(SandboxError::NotReady(_))
+    )
+}
+
 fn terminal_output(value: &Value, saw_final_answer_text: bool) -> Option<TerminalOutput> {
     let method = value.get("method").and_then(Value::as_str);
     let event_type = value.get("type").and_then(Value::as_str);
@@ -1582,6 +1596,29 @@ mod tests {
             "exe-1",
             "asbx-other"
         ));
+    }
+
+    #[test]
+    fn event_stream_attaches_only_to_running_sandboxes() {
+        assert!(should_attach_session_pipe(&SandboxStatus::Running));
+        assert!(!should_attach_session_pipe(&SandboxStatus::Created));
+        assert!(!should_attach_session_pipe(&SandboxStatus::Suspended));
+        assert!(!should_attach_session_pipe(&SandboxStatus::Stopped));
+        assert!(!should_attach_session_pipe(&SandboxStatus::Gone));
+        assert!(!should_attach_session_pipe(&SandboxStatus::Unknown(
+            "other".to_owned()
+        )));
+    }
+
+    #[test]
+    fn event_stream_tolerates_not_ready_attach_race() {
+        let not_ready =
+            SessionRuntimeError::Sandbox(SandboxError::NotReady("sandbox paused".to_owned()));
+        let backend_error =
+            SessionRuntimeError::Sandbox(SandboxError::Backend("api failed".to_owned()));
+
+        assert!(is_event_stream_attach_race(&not_ready));
+        assert!(!is_event_stream_attach_race(&backend_error));
     }
 
     #[test]
