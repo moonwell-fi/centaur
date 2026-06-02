@@ -32,6 +32,8 @@ pub const SESSION_OUTPUT_LINE_EVENT: &str = "session.output.line";
 
 const MAX_SESSION_OUTPUT_LINE_BYTES: usize = 1024 * 1024;
 const EVENT_STREAM_SAFETY_POLL_INTERVAL: Duration = Duration::from_secs(30);
+const STEERING_STARTUP_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+const STEERING_STARTUP_RETRY_TIMEOUT: Duration = Duration::from_secs(15);
 
 type SandboxSpecFactory = Arc<dyn Fn(&ThreadKey, &str) -> SandboxSpec + Send + Sync>;
 type SessionInputSink = FramedWrite<SandboxWrite, LinesCodec>;
@@ -255,37 +257,14 @@ impl SessionRuntime {
             return;
         };
 
-        let session = match self.store.get_session(thread_key).await {
-            Ok(session) => session,
-            Err(error) => {
-                self.record_steering_failure(
-                    thread_key,
-                    &execution.execution_id,
-                    format!("get session: {error}"),
-                )
-                .await;
-                return;
-            }
-        };
-        let Some(sandbox_id) = session.sandbox_id.as_deref() else {
-            self.record_steering_failure(
-                thread_key,
-                &execution.execution_id,
-                "session has no sandbox assigned".to_owned(),
-            )
-            .await;
-            return;
-        };
-
-        let pipe = match self.ensure_session_pipe(thread_key, sandbox_id).await {
+        let pipe = match self
+            .wait_for_active_steering_pipe(thread_key, &execution.execution_id)
+            .await
+        {
             Ok(pipe) => pipe,
             Err(error) => {
-                self.record_steering_failure(
-                    thread_key,
-                    &execution.execution_id,
-                    error.to_string(),
-                )
-                .await;
+                self.record_steering_failure(thread_key, &execution.execution_id, error)
+                    .await;
                 return;
             }
         };
@@ -312,6 +291,38 @@ impl SessionRuntime {
             .await
         {
             warn!(%thread_key, %error, "failed to record steering delivery");
+        }
+    }
+
+    async fn wait_for_active_steering_pipe(
+        &self,
+        thread_key: &ThreadKey,
+        execution_id: &str,
+    ) -> Result<SessionPipe, String> {
+        let deadline = Instant::now() + STEERING_STARTUP_RETRY_TIMEOUT;
+        loop {
+            let session = self
+                .store
+                .get_session(thread_key)
+                .await
+                .map_err(|error| format!("get session: {error}"))?;
+
+            if let Some(sandbox_id) = session.sandbox_id.as_deref() {
+                match self.ensure_session_pipe(thread_key, sandbox_id).await {
+                    Ok(pipe) => return Ok(pipe),
+                    Err(error)
+                        if is_transient_steering_startup_error(&error)
+                            && Instant::now() < deadline => {}
+                    Err(error) => return Err(error.to_string()),
+                }
+            } else if Instant::now() >= deadline {
+                return Err("session has no sandbox assigned".to_owned());
+            }
+
+            if !execution_still_active(&self.store, thread_key, execution_id).await {
+                return Err("execution is no longer active".to_owned());
+            }
+            sleep(STEERING_STARTUP_RETRY_INTERVAL).await;
         }
     }
 
@@ -1485,6 +1496,25 @@ fn is_sensitive_env_key(key: &str) -> bool {
         || upper.contains("PASSWORD")
 }
 
+async fn execution_still_active(
+    store: &PgSessionStore,
+    thread_key: &ThreadKey,
+    execution_id: &str,
+) -> bool {
+    matches!(
+        store.active_execution_for_thread(thread_key).await,
+        Ok(Some(execution)) if execution.execution_id == execution_id
+    )
+}
+
+fn is_transient_steering_startup_error(error: &SessionRuntimeError) -> bool {
+    matches!(
+        error,
+        SessionRuntimeError::Sandbox(SandboxError::NotFound(_))
+            | SessionRuntimeError::Sandbox(SandboxError::NotReady(_))
+    )
+}
+
 fn harness_thread_id_from_output_line(line: &str) -> Option<String> {
     let value: Value = serde_json::from_str(line).ok()?;
     let event_type = value.get("type").and_then(Value::as_str);
@@ -1758,6 +1788,22 @@ mod tests {
 
         assert!(is_event_stream_attach_race(&not_ready));
         assert!(!is_event_stream_attach_race(&backend_error));
+    }
+
+    #[test]
+    fn steering_startup_retries_only_transient_sandbox_errors() {
+        let not_ready =
+            SessionRuntimeError::Sandbox(SandboxError::NotReady("sandbox starting".to_owned()));
+        let not_found = SessionRuntimeError::Sandbox(SandboxError::NotFound("asbx-1".to_owned()));
+        let io = SessionRuntimeError::Sandbox(SandboxError::Io("stdin closed".to_owned()));
+        let store = SessionRuntimeError::Store(SessionStoreError::NotFound {
+            thread_key: "cli:test".to_owned(),
+        });
+
+        assert!(is_transient_steering_startup_error(&not_ready));
+        assert!(is_transient_steering_startup_error(&not_found));
+        assert!(!is_transient_steering_startup_error(&io));
+        assert!(!is_transient_steering_startup_error(&store));
     }
 
     #[test]
