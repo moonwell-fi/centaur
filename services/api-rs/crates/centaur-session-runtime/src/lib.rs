@@ -1129,7 +1129,7 @@ fn is_event_stream_attach_race(error: &SessionRuntimeError) -> bool {
     )
 }
 
-fn terminal_output(value: &Value, saw_final_answer_text: bool) -> Option<TerminalOutput> {
+fn terminal_output(value: &Value, _saw_final_answer_text: bool) -> Option<TerminalOutput> {
     let method = value.get("method").and_then(Value::as_str);
     let event_type = value.get("type").and_then(Value::as_str);
 
@@ -1142,16 +1142,18 @@ fn terminal_output(value: &Value, saw_final_answer_text: bool) -> Option<Termina
     }
 
     if method == Some("turn/completed") {
-        return success_terminal_when_answer_seen(value, saw_final_answer_text, "turn_completed");
+        return Some(TerminalOutput::Completed {
+            reason: "turn_completed",
+        });
     }
 
     match event_type {
-        Some("turn.completed") => {
-            success_terminal_when_answer_seen(value, saw_final_answer_text, "turn_completed")
-        }
-        Some("turn.done") => {
-            success_terminal_when_answer_seen(value, saw_final_answer_text, "turn_done")
-        }
+        Some("turn.completed") => Some(TerminalOutput::Completed {
+            reason: "turn_completed",
+        }),
+        Some("turn.done") => Some(TerminalOutput::Completed {
+            reason: "turn_done",
+        }),
         Some("result") => {
             if result_is_failure(value) {
                 Some(TerminalOutput::Failed {
@@ -1163,17 +1165,6 @@ fn terminal_output(value: &Value, saw_final_answer_text: bool) -> Option<Termina
         }
         _ => None,
     }
-}
-
-fn success_terminal_when_answer_seen(
-    value: &Value,
-    saw_final_answer_text: bool,
-    reason: &'static str,
-) -> Option<TerminalOutput> {
-    if terminal_payload_text(value).trim().is_empty() && !saw_final_answer_text {
-        return None;
-    }
-    Some(TerminalOutput::Completed { reason })
 }
 
 fn output_line_carries_final_answer_text(value: &Value) -> bool {
@@ -1466,13 +1457,18 @@ mod tests {
     use time::OffsetDateTime;
 
     #[test]
-    fn turn_completed_without_answer_text_is_not_terminal() {
+    fn turn_completed_without_answer_text_is_terminal() {
         let event = json!({
             "type": "turn.completed",
             "turn": {"id": "turn-1", "status": "completed"},
         });
 
-        assert_eq!(terminal_output(&event, false), None);
+        assert_eq!(
+            terminal_output(&event, false),
+            Some(TerminalOutput::Completed {
+                reason: "turn_completed"
+            })
+        );
     }
 
     #[test]
