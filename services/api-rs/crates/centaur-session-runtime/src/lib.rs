@@ -1140,7 +1140,7 @@ fn is_event_stream_attach_race(error: &SessionRuntimeError) -> bool {
     )
 }
 
-fn terminal_output(value: &Value, _saw_final_answer_text: bool) -> Option<TerminalOutput> {
+fn terminal_output(value: &Value, saw_final_answer_text: bool) -> Option<TerminalOutput> {
     let method = value.get("method").and_then(Value::as_str);
     let event_type = value.get("type").and_then(Value::as_str);
 
@@ -1153,15 +1153,13 @@ fn terminal_output(value: &Value, _saw_final_answer_text: bool) -> Option<Termin
     }
 
     if method == Some("turn/completed") {
-        return Some(TerminalOutput::Completed {
-            reason: "turn_completed",
-        });
+        return Some(completed_turn_terminal_output(value, saw_final_answer_text));
     }
 
     match event_type {
-        Some("turn.completed") => Some(TerminalOutput::Completed {
-            reason: "turn_completed",
-        }),
+        Some("turn.completed") => {
+            Some(completed_turn_terminal_output(value, saw_final_answer_text))
+        }
         Some("turn.done") => Some(TerminalOutput::Completed {
             reason: "turn_done",
         }),
@@ -1176,6 +1174,32 @@ fn terminal_output(value: &Value, _saw_final_answer_text: bool) -> Option<Termin
         }
         _ => None,
     }
+}
+
+fn completed_turn_terminal_output(value: &Value, saw_final_answer_text: bool) -> TerminalOutput {
+    match turn_completion_status(value).as_deref() {
+        Some("completed" | "succeeded" | "success") | None => TerminalOutput::Completed {
+            reason: "turn_completed",
+        },
+        Some(_status) if saw_final_answer_text => TerminalOutput::Completed {
+            reason: "turn_completed",
+        },
+        Some(status) => TerminalOutput::Failed {
+            error: format!("turn completed with status {status} before final answer"),
+        },
+    }
+}
+
+fn turn_completion_status(value: &Value) -> Option<String> {
+    [
+        &["turn", "status"][..],
+        &["params", "turn", "status"][..],
+        &["status"][..],
+        &["params", "status"][..],
+    ]
+    .into_iter()
+    .filter_map(|path| string_at_path(value, path))
+    .next()
 }
 
 fn output_line_carries_final_answer_text(value: &Value) -> bool {
@@ -1644,6 +1668,36 @@ mod tests {
         assert!(output_line_carries_final_answer_text(&delta));
         assert_eq!(
             terminal_output(&terminal, true),
+            Some(TerminalOutput::Completed {
+                reason: "turn_completed"
+            })
+        );
+    }
+
+    #[test]
+    fn interrupted_turn_completed_without_answer_is_failure() {
+        let event = json!({
+            "type": "turn.completed",
+            "turn": {"id": "turn-1", "status": "interrupted"},
+        });
+
+        assert_eq!(
+            terminal_output(&event, false),
+            Some(TerminalOutput::Failed {
+                error: "turn completed with status interrupted before final answer".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn interrupted_turn_completed_after_answer_stays_terminal() {
+        let event = json!({
+            "method": "turn/completed",
+            "params": {"turn": {"id": "turn-1", "status": "interrupted"}},
+        });
+
+        assert_eq!(
+            terminal_output(&event, true),
             Some(TerminalOutput::Completed {
                 reason: "turn_completed"
             })
