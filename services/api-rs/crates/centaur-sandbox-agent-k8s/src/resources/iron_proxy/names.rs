@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use centaur_iron_proxy::DEFAULT_BROKER_LISTEN_PORT;
 use centaur_sandbox_core::{SandboxError, SandboxId, SandboxResult};
 
 use super::super::common::unique_suffix;
@@ -63,10 +64,7 @@ pub(crate) fn iron_token_broker_configmap_name(
 }
 
 pub(super) fn token_broker_url(name: &str) -> String {
-    format!(
-        "http://{name}:{}",
-        centaur_iron_proxy::DEFAULT_BROKER_LISTEN_PORT
-    )
+    format!("http://{name}:{DEFAULT_BROKER_LISTEN_PORT}")
 }
 
 pub(crate) fn token_broker_labels() -> BTreeMap<String, String> {

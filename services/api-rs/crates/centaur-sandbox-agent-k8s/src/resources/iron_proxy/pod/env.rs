@@ -39,11 +39,8 @@ pub(super) fn iron_proxy_env_from(iron_proxy: &IronProxyPodConfig) -> Option<Vec
 
 fn management_api_key(env: &mut EnvVars, iron_proxy: &IronProxyPodConfig) {
     if let Some(secret_name) = &iron_proxy.secret_env_name {
-        env.secret_ref(
-            "IRON_MANAGEMENT_API_KEY",
-            secret_name,
-            &iron_proxy.secret_env_prefix,
-        );
+        let prefix = &iron_proxy.secret_env_prefix;
+        env.secret_ref("IRON_MANAGEMENT_API_KEY", secret_name, prefix);
     } else {
         env.value("IRON_MANAGEMENT_API_KEY", "unused-local-sidecar-key");
     }
@@ -53,21 +50,14 @@ fn proxy_secret_refs(env: &mut EnvVars, iron_proxy: &IronProxyPodConfig) {
     let Some(secret_name) = &iron_proxy.secret_env_name else {
         return;
     };
+    let prefix = &iron_proxy.secret_env_prefix;
     if matches!(
         iron_proxy.source_policy.kind,
         SourceKind::OnePasswordConnect
     ) {
-        env.secret_ref(
-            "OP_CONNECT_TOKEN",
-            secret_name,
-            &iron_proxy.secret_env_prefix,
-        );
+        env.secret_ref("OP_CONNECT_TOKEN", secret_name, prefix);
     }
     if iron_proxy.token_broker_name.is_some() {
-        env.secret_ref(
-            "IRON_BROKER_TOKEN",
-            secret_name,
-            &iron_proxy.secret_env_prefix,
-        );
+        env.secret_ref("IRON_BROKER_TOKEN", secret_name, prefix);
     }
 }

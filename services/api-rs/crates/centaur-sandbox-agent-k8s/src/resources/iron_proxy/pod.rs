@@ -22,9 +22,8 @@ pub(crate) fn build_iron_proxy_pod(
     iron_proxy: &IronProxyPodConfig,
     resolved: &ResolvedIronProxy,
 ) -> Pod {
-    let labels = iron_proxy_labels(id);
     Pod {
-        metadata: object_meta(pod_name, labels),
+        metadata: object_meta(pod_name, iron_proxy_labels(id)),
         spec: Some(PodSpec {
             automount_service_account_token: Some(false),
             restart_policy: Some("Never".to_owned()),
