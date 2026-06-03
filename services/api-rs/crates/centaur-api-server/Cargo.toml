@@ -31,3 +31,4 @@ urlencoding.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+tower = { workspace = true, features = ["util"] }

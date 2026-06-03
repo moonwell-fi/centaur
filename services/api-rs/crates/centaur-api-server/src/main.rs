@@ -1,6 +1,6 @@
 mod args;
 
-use centaur_api_server::build_router_with_runtime;
+use centaur_api_server::{SessionRouteConfig, build_router_with_runtime_config};
 use centaur_session_sqlx::PgSessionStore;
 use clap::Parser;
 use thiserror::Error;
@@ -26,9 +26,15 @@ async fn main() -> Result<(), ServerError> {
     let listener = TcpListener::bind(args.server.bind_addr).await?;
     info!(bind_addr = %args.server.bind_addr, "starting centaur api-rs server");
 
-    axum::serve(listener, build_router_with_runtime(store, sandbox_runtime))
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    let route_config = SessionRouteConfig {
+        session_operation_timeout: args.server.session_api_operation_timeout(),
+    };
+    axum::serve(
+        listener,
+        build_router_with_runtime_config(store, sandbox_runtime, route_config),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 

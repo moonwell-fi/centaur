@@ -13,6 +13,11 @@ use thiserror::Error;
 pub enum ApiError {
     #[error("{0}")]
     BadRequest(String),
+    #[error("session operation {action} timed out after {timeout_ms}ms")]
+    Timeout {
+        action: &'static str,
+        timeout_ms: u128,
+    },
     #[error(transparent)]
     Runtime(#[from] SessionRuntimeError),
     #[error(transparent)]
@@ -29,6 +34,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self {
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Self::Timeout { .. } => StatusCode::GATEWAY_TIMEOUT,
             Self::Runtime(SessionRuntimeError::BadRequest(_)) => StatusCode::BAD_REQUEST,
             Self::Runtime(SessionRuntimeError::Store(SessionStoreError::NotFound { .. })) => {
                 StatusCode::NOT_FOUND

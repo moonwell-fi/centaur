@@ -47,6 +47,18 @@ pub(crate) struct ServerArgs {
     pub(crate) bind_addr: SocketAddr,
     #[arg(long, env = "RUN_MIGRATIONS", default_value_t = false)]
     pub(crate) run_migrations: bool,
+    #[arg(
+        long,
+        env = "SESSION_API_OPERATION_TIMEOUT_MS",
+        default_value_t = 25_000
+    )]
+    pub(crate) session_api_operation_timeout_ms: u64,
+}
+
+impl ServerArgs {
+    pub(crate) fn session_api_operation_timeout(&self) -> Duration {
+        Duration::from_millis(self.session_api_operation_timeout_ms)
+    }
 }
 
 #[derive(Debug, ClapArgs)]
