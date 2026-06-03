@@ -1122,11 +1122,39 @@ def _slackbot_streamed_answer_chars(value: Any) -> int:
     return 0
 
 
-def _slackbot_live_delivery_covers_result(result_text: str, streamed_chars: int) -> bool:
+def _slackbot_live_delivery_covers_result(
+    result_text: str, streamed_chars: int
+) -> bool:
     text = result_text.strip()
     if not text:
         return True
     return streamed_chars >= len(text)
+
+
+async def _send_slackbot_terminal_result_if_uncovered(
+    session_id: str,
+    result_text: str,
+    *,
+    slackbot_text_sent: bool,
+    slackbot_streamed_answer_chars: int,
+) -> tuple[bool, bool, int]:
+    terminal_result_text = _clip_slackbot(result_text)
+    if (
+        not session_id
+        or not terminal_result_text.strip()
+        or slackbot_text_sent
+        or slackbot_streamed_answer_chars > 0
+    ):
+        return False, slackbot_text_sent, slackbot_streamed_answer_chars
+
+    sent = await slackbot_client.session_text(session_id, terminal_result_text)
+    if not sent:
+        return False, slackbot_text_sent, slackbot_streamed_answer_chars
+    return (
+        True,
+        True,
+        max(slackbot_streamed_answer_chars, len(terminal_result_text)),
+    )
 
 
 async def _send_slackbot_canonical_event(
@@ -2117,10 +2145,18 @@ async def _mark_execution_terminal(
         decode_jsonb(row["delivery"], {}) if row else {}
     )
     suppress_no_input_delivery = terminal_reason == "no_input"
-    if delivery_platform == "dev" or suppress_legacy_delivery or suppress_no_input_delivery:
+    if (
+        delivery_platform == "dev"
+        or suppress_legacy_delivery
+        or suppress_no_input_delivery
+    ):
         slackbot_agent_session_id = str(metadata.get("slackbot_agent_session_id") or "")
         result_size = payload_size_bytes(result_text)
-        if suppress_legacy_delivery and result_size > 0 and slackbot_streamed_answer_chars <= 0:
+        if (
+            suppress_legacy_delivery
+            and result_size > 0
+            and slackbot_streamed_answer_chars <= 0
+        ):
             log.warning(
                 "final_delivery_skipped_without_live_answer",
                 execution_id=execution_id,
@@ -2210,7 +2246,9 @@ async def _mark_execution_terminal(
                     "result_text": result_text,
                     **({"error_text": error_text} if error_text else {}),
                     **(
-                        {"slackbot_streamed_answer_chars": slackbot_streamed_answer_chars}
+                        {
+                            "slackbot_streamed_answer_chars": slackbot_streamed_answer_chars
+                        }
                         if slackbot_streamed_answer_chars
                         else {}
                     ),
@@ -2599,7 +2637,9 @@ async def _process_execution(pool, row: dict[str, Any]) -> None:
                         },
                     )
                 if status in {"failed_permanent", "cancelled"}:
-                    mark_error(span, str(terminal_reason or terminal["error_text"] or status))
+                    mark_error(
+                        span, str(terminal_reason or terminal["error_text"] or status)
+                    )
 
 
 async def _execution_input_text(
@@ -2641,7 +2681,9 @@ async def _store_execution_span_context(
         "UPDATE agent_execution_requests "
         "SET metadata = metadata || $1::jsonb, updated_at = NOW() "
         "WHERE execution_id = $2",
-        canonical_json({_OTEL_METADATA_KEY: {_OTEL_EXECUTION_SPAN_CONTEXT_KEY: span_context}}),
+        canonical_json(
+            {_OTEL_METADATA_KEY: {_OTEL_EXECUTION_SPAN_CONTEXT_KEY: span_context}}
+        ),
         execution_id,
     )
 
@@ -2804,7 +2846,9 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
     else:
         requester_user_id = None
         if isinstance(delivery, dict):
-            requester_user_id = delivery.get("recipient_user_id") or delivery.get("user_id")
+            requester_user_id = delivery.get("recipient_user_id") or delivery.get(
+                "user_id"
+            )
         requester_user_id = requester_user_id or execution_metadata.get("user_id")
         trace_metadata = _execution_laminar_metadata(
             thread_key=thread_key,
@@ -2837,7 +2881,9 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
             inject_result = await inject_stdin(
                 session,
                 "",
-                platform=delivery.get("platform") if isinstance(delivery, dict) else None,
+                platform=delivery.get("platform")
+                if isinstance(delivery, dict)
+                else None,
                 user_id=requester_user_id,
                 trace_id=inject_span_context.get("trace_id"),
                 traceparent=current_traceparent(span),
@@ -2959,12 +3005,22 @@ async def _process_execution_impl(pool, row: dict[str, Any]) -> None:
         if user_id:
             record_execution_by_user(user_id, harness, status)
         nonlocal slackbot_session_id, slackbot_text_sent, slackbot_done
+        nonlocal slackbot_streamed_answer_chars
         finalize_session_id = slackbot_session_id or str(
             execution_metadata.get("slackbot_agent_session_id") or ""
         )
         if finalize_session_id and not slackbot_done and slackbot_forward_live:
             try:
-                terminal_result_sent_to_slackbot = False
+                (
+                    terminal_result_sent_to_slackbot,
+                    slackbot_text_sent,
+                    slackbot_streamed_answer_chars,
+                ) = await _send_slackbot_terminal_result_if_uncovered(
+                    finalize_session_id,
+                    result_text,
+                    slackbot_text_sent=slackbot_text_sent,
+                    slackbot_streamed_answer_chars=slackbot_streamed_answer_chars,
+                )
                 await slackbot_client.session_done(
                     finalize_session_id, harness_thread_id or None
                 )

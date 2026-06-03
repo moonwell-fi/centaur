@@ -157,11 +157,15 @@ async def open_agent_session(
     return session_id or None
 
 
-async def session_text(session_id: str | None, markdown: str) -> None:
+async def session_text(session_id: str | None, markdown: str) -> bool:
     sanitized = sanitize_for_slack(markdown)
     if not session_id or not sanitized.strip():
-        return
-    await post(f"/api/slack/agent-sessions/{session_id}/text", {"markdown": sanitized})
+        return False
+    return (
+        await post(
+            f"/api/slack/agent-sessions/{session_id}/text", {"markdown": sanitized}
+        )
+    ) is not None
 
 
 async def session_step(

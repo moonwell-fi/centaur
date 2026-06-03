@@ -44,6 +44,43 @@ def test_slackbot_streamed_answer_chars_requires_positive_integer_offset():
     assert _slackbot_live_delivery_covers_result("cut off report", 6) is False
 
 
+@pytest.mark.asyncio
+async def test_slackbot_terminal_result_backstop_only_when_live_sent_no_answer(
+    monkeypatch,
+):
+    from api.runtime_control import _send_slackbot_terminal_result_if_uncovered
+
+    session_text = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        "api.runtime_control.slackbot_client.session_text", session_text
+    )
+
+    sent, text_sent, streamed_chars = await _send_slackbot_terminal_result_if_uncovered(
+        "sess-final",
+        "Final answer",
+        slackbot_text_sent=False,
+        slackbot_streamed_answer_chars=0,
+    )
+
+    assert sent is True
+    assert text_sent is True
+    assert streamed_chars == len("Final answer")
+    session_text.assert_awaited_once_with("sess-final", "Final answer")
+
+    session_text.reset_mock()
+    sent, text_sent, streamed_chars = await _send_slackbot_terminal_result_if_uncovered(
+        "sess-final",
+        "Full final answer",
+        slackbot_text_sent=True,
+        slackbot_streamed_answer_chars=7,
+    )
+
+    assert sent is False
+    assert text_sent is True
+    assert streamed_chars == 7
+    session_text.assert_not_awaited()
+
+
 def _auth(api_key: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {api_key}"}
 
@@ -61,7 +98,9 @@ async def _insert_assignment(db_pool, thread_key: str, generation: int = 1) -> N
 
 
 @pytest.mark.asyncio
-async def test_spawn_assignment_defaults_to_codex_when_no_selector(db_pool, monkeypatch):
+async def test_spawn_assignment_defaults_to_codex_when_no_selector(
+    db_pool, monkeypatch
+):
     from api.runtime_control import spawn_assignment
 
     monkeypatch.delenv("CENTAUR_DEFAULT_HARNESS", raising=False)
@@ -1086,7 +1125,9 @@ async def test_mark_execution_terminal_delays_outbox_claimability(db_pool):
 
 
 @pytest.mark.asyncio
-async def test_mark_execution_terminal_skips_durable_delivery_after_live_answer(db_pool):
+async def test_mark_execution_terminal_skips_durable_delivery_after_live_answer(
+    db_pool,
+):
     from api.runtime_control import _mark_execution_terminal
 
     execution_id = f"exe-{uuid.uuid4().hex[:10]}"
@@ -1645,7 +1686,7 @@ async def test_worker_sends_final_result_when_live_slack_only_streamed_placehold
             "streamedAnswerChars": 0,
         }
 
-    session_text_mock = AsyncMock()
+    session_text_mock = AsyncMock(return_value=True)
     session_done_mock = AsyncMock()
     backend = SimpleNamespace(attach=AsyncMock(), close_streams=AsyncMock())
     with (
@@ -1677,7 +1718,7 @@ async def test_worker_sends_final_result_when_live_slack_only_streamed_placehold
     ):
         await _process_execution(db_pool, row)
 
-    session_text_mock.assert_not_awaited()
+    session_text_mock.assert_awaited_once_with("sess-blank", final_text)
     session_done_mock.assert_awaited_once_with("sess-blank", "turn-059d374be813486b")
     execution = await db_pool.fetchrow(
         "SELECT status, terminal_reason, result_text FROM agent_execution_requests WHERE execution_id = $1",
@@ -1692,11 +1733,8 @@ async def test_worker_sends_final_result_when_live_slack_only_streamed_placehold
         execution_id,
     )
     assert outbox is not None
-    assert outbox["state"] == "pending"
-    final_payload = outbox["final_payload"]
-    if isinstance(final_payload, str):
-        final_payload = json.loads(final_payload)
-    assert final_payload["result_text"] == final_text
+    assert outbox["state"] == "awaiting_terminal"
+    assert outbox["final_payload"] is None
 
 
 @pytest.mark.asyncio
