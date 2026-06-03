@@ -17,6 +17,7 @@ import {
   type SlackbotV2AppendMessagesRequest,
   type SlackbotV2CreateSessionRequest,
   type SlackbotV2ExecuteSessionRequest,
+  type SlackbotV2Fetch,
   type SlackbotV2SessionMessage
 } from '../src/index'
 
@@ -523,6 +524,59 @@ describe('slackbotv2', () => {
     expect(renderedText).toContain(
       'Execution failed: Reconnecting... 2/5: unexpected status 502 Bad Gateway'
     )
+  })
+
+  it('renders session API request timeouts as visible final text', async () => {
+    const fetchWithHangingAppend: SlackbotV2Fetch = async (input, init) => {
+      if (String(input).includes('/messages')) {
+        return new Promise<Response>(() => {})
+      }
+      return fetch(input, init)
+    }
+    bot = createTestBot({
+      fetch: fetchWithHangingAppend,
+      sessionApiTimeoutMs: 20
+    })
+
+    const parent = await postUserMessage('Context before a stalled append.')
+    const mention = await postUserMessage(
+      `<@${BOT_USER_ID}> run despite a stalled append`,
+      parent.ts
+    )
+    const waits: Promise<unknown>[] = []
+    const response = await bot.app.request(
+      '/api/webhooks/slack',
+      signedSlackEvent({
+        event_id: 'Ev-slackbotv2-session-append-timeout',
+        event: {
+          type: 'app_mention',
+          user: USER_ID,
+          channel: CHANNEL_ID,
+          team: TEAM_ID,
+          ts: mention.ts,
+          thread_ts: parent.ts,
+          text: `<@${BOT_USER_ID}> run despite a stalled append`
+        }
+      }),
+      {},
+      waitUntilContext(waits)
+    )
+
+    expect(response.status).toBe(200)
+    await Promise.all(waits)
+    expect(codexApi.creates).toHaveLength(1)
+    expect(codexApi.appends).toHaveLength(0)
+    expect(codexApi.executes).toHaveLength(0)
+
+    const transcripts = slackStreamTranscripts(slackApi.calls)
+    expect(transcripts).toHaveLength(1)
+    const markdownChunks = transcripts[0]!.chunks.filter(chunk => chunk.type === 'markdown_text')
+    expect(markdownChunks).toEqual([
+      {
+        type: 'markdown_text',
+        text: 'Execution failed: Centaur session append session messages timed out after 20ms'
+      }
+    ])
   })
 
   it('starts the Slack stream before a slow session execute returns', async () => {

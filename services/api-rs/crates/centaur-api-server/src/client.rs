@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{pin::Pin, time::Duration};
 
 use centaur_session_core::{Session, ThreadKey};
 use eventsource_stream::Eventsource;
@@ -11,6 +11,9 @@ use crate::types::{
     ExecuteSessionResponse,
 };
 
+const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Clone, Debug)]
 pub struct CentaurClient {
     client: HttpClient,
@@ -19,7 +22,12 @@ pub struct CentaurClient {
 
 impl CentaurClient {
     pub fn new(base_url: impl Into<String>) -> Self {
-        Self::with_client(HttpClient::new(), base_url)
+        let client = HttpClient::builder()
+            .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+            .timeout(DEFAULT_HTTP_TIMEOUT)
+            .build()
+            .expect("failed to build Centaur HTTP client with request timeouts");
+        Self::with_client(client, base_url)
     }
 
     pub fn with_client(client: HttpClient, base_url: impl Into<String>) -> Self {
@@ -121,4 +129,48 @@ pub enum ClientError {
     Api { status: StatusCode, body: String },
     #[error("event stream parse failed: {0}")]
     EventStream(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use centaur_session_core::{HarnessType, ThreadKey};
+    use serde_json::json;
+    use tokio::net::TcpListener;
+
+    use super::{CentaurClient, ClientError};
+    use crate::types::CreateSessionRequest;
+
+    #[tokio::test]
+    async fn post_requests_honor_reqwest_timeout() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _server = tokio::spawn(async move {
+            let Ok((_socket, _addr)) = listener.accept().await else {
+                return;
+            };
+            std::future::pending::<()>().await;
+        });
+
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_millis(25))
+            .build()
+            .unwrap();
+        let client = CentaurClient::with_client(http, format!("http://{addr}"));
+        let thread_key = ThreadKey::parse("cli:timeout-test").unwrap();
+
+        let error = client
+            .create_session(
+                &thread_key,
+                CreateSessionRequest {
+                    harness_type: HarnessType::Codex,
+                    metadata: Some(json!({"source": "test"})),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ClientError::Http(error) if error.is_timeout()));
+    }
 }

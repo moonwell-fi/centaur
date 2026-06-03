@@ -15,6 +15,8 @@ import type {
 } from './types'
 import { elapsedMs, isJsonObject, nowMs, stringValue, toAsyncIterable, traceLog } from './utils'
 
+const DEFAULT_SESSION_API_TIMEOUT_MS = 30_000
+
 export async function collectInitialContext(
   thread: { allMessages: AsyncIterable<Message> },
   currentMessage: Message
@@ -296,7 +298,6 @@ async function bytesToBase64(data: Buffer | Blob): Promise<string> {
 }
 
 async function createSession(options: SlackbotV2Options, threadId: string): Promise<void> {
-  const fetchFn = options.fetch ?? fetch
   const body: SlackbotV2CreateSessionRequest = {
     harness_type: 'codex',
     metadata: {
@@ -305,11 +306,16 @@ async function createSession(options: SlackbotV2Options, threadId: string): Prom
       thread_id: threadId
     }
   }
-  const response = await fetchFn(apiSessionUrl(options.apiUrl, threadId), {
-    method: 'POST',
-    headers: apiHeaders(options),
-    body: JSON.stringify(body)
-  })
+  const response = await fetchSessionApi(
+    options,
+    'create session',
+    apiSessionUrl(options.apiUrl, threadId),
+    {
+      method: 'POST',
+      headers: apiHeaders(options),
+      body: JSON.stringify(body)
+    }
+  )
   await ensureApiOk(response, 'create session')
 }
 
@@ -318,15 +324,19 @@ async function appendSessionMessages(
   threadId: string,
   messages: SlackbotV2ApiMessage[]
 ): Promise<void> {
-  const fetchFn = options.fetch ?? fetch
   const body: SlackbotV2AppendMessagesRequest = {
     messages: messages.map(toSessionMessage)
   }
-  const response = await fetchFn(apiSessionUrl(options.apiUrl, threadId, 'messages'), {
-    method: 'POST',
-    headers: apiHeaders(options),
-    body: JSON.stringify(body)
-  })
+  const response = await fetchSessionApi(
+    options,
+    'append session messages',
+    apiSessionUrl(options.apiUrl, threadId, 'messages'),
+    {
+      method: 'POST',
+      headers: apiHeaders(options),
+      body: JSON.stringify(body)
+    }
+  )
   await ensureApiOk(response, 'append session messages')
 }
 
@@ -335,19 +345,51 @@ async function executeSession(
   threadId: string,
   message: SlackbotV2ApiMessage
 ): Promise<void> {
-  const fetchFn = options.fetch ?? fetch
   const body: SlackbotV2ExecuteSessionRequest = {
     metadata: sessionMetadata(message, { action: 'execute' }),
     input_lines: [toCodexInputLine(message, threadId)],
     ...(options.idleTimeoutMs === undefined ? {} : { idle_timeout_ms: options.idleTimeoutMs }),
     ...(options.maxDurationMs === undefined ? {} : { max_duration_ms: options.maxDurationMs })
   }
-  const response = await fetchFn(apiSessionUrl(options.apiUrl, threadId, 'execute'), {
-    method: 'POST',
-    headers: apiHeaders(options),
-    body: JSON.stringify(body)
-  })
+  const response = await fetchSessionApi(
+    options,
+    'execute session',
+    apiSessionUrl(options.apiUrl, threadId, 'execute'),
+    {
+      method: 'POST',
+      headers: apiHeaders(options),
+      body: JSON.stringify(body)
+    }
+  )
   await ensureApiOk(response, 'execute session')
+}
+
+async function fetchSessionApi(
+  options: SlackbotV2Options,
+  action: string,
+  input: RequestInfo | URL,
+  init: RequestInit
+): Promise<Response> {
+  const fetchFn = options.fetch ?? fetch
+  const timeoutMs = options.sessionApiTimeoutMs ?? DEFAULT_SESSION_API_TIMEOUT_MS
+  const timeoutError = new Error(`Centaur session ${action} timed out after ${timeoutMs}ms`)
+  const controller = new AbortController()
+  let timeout: ReturnType<typeof setTimeout> | undefined
+  try {
+    const response = fetchFn(input, { ...init, signal: controller.signal }).catch(error => {
+      if (controller.signal.aborted) throw timeoutError
+      throw error
+    })
+    const timer = new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => {
+        controller.abort(timeoutError)
+        reject(timeoutError)
+      }, timeoutMs)
+    })
+    return await Promise.race([response, timer])
+  } finally {
+    if (timeout) clearTimeout(timeout)
+  }
 }
 
 async function ensureApiOk(response: Response, action: string): Promise<void> {
@@ -368,8 +410,9 @@ async function streamSessionNotifications(
   afterEventId: number,
   onEventId: (eventId: number) => void
 ): Promise<AsyncIterable<SlackbotV2RendererSource>> {
-  const fetchFn = options.fetch ?? fetch
-  const response = await fetchFn(
+  const response = await fetchSessionApi(
+    options,
+    'stream events',
     `${apiSessionUrl(options.apiUrl, threadId, 'events')}?after_event_id=${afterEventId}`,
     {
       method: 'GET',

@@ -77,6 +77,7 @@ export type SlackbotV2Options = {
   logger?: Logger
   maxDurationMs?: number
   postgresUrl?: string
+  sessionApiTimeoutMs?: number
   signingSecret: string
   slackApiUrl?: string
   state?: StateAdapter
