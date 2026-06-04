@@ -51,6 +51,7 @@ Optional required-by-mode variables:
 | Env var | Set from | Controls |
 | --- | --- | --- |
 | `CENTAUR_DEFAULT_HARNESS` | `api.defaultHarness`. | Default harness for new executions. |
+| `CENTAUR_ENABLED_HARNESSES` | `api.enabledHarnesses` (comma-joined). | Harnesses this deployment can spawn beyond the default. Gates which harness credentials the shared iron-proxy and iron-token-broker manage, so the broker is never handed a brokered credential whose 1Password items are absent (which corrupts its shared SDK client and breaks rotation for every credential). |
 | `CENTAUR_ENVIRONMENT` | `api.extraEnv` or deployment env. | Environment label in traces and telemetry. |
 | `CENTAUR_LOG_LEVEL`, `LOG_LEVEL` | Helm sets `CENTAUR_LOG_LEVEL=info`; override in `api.extraEnv`. | API log level. |
 | `CENTAUR_SERVICE_NAME` | `api.extraEnv`. | Default API log `service` field. |

@@ -258,16 +258,19 @@ def test_render_broker_yaml_skips_non_brokered_secrets(
     assert [c["id"] for c in cfg["credentials"]] == ["codex"]
 
 
-def test_render_broker_yaml_includes_harness_brokered_secrets(
+def test_render_broker_yaml_includes_enabled_harness_brokered_secrets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ToolManager.collect_secrets feeds the broker reconcile path. Both
-    ``anthropic-claude`` and ``openai-codex`` must appear in the rendered
-    iron-token-broker config so the broker manages them whether or not any
-    sandbox is currently using access_token mode."""
+    """ToolManager.collect_secrets feeds the broker reconcile path. When a
+    deployment enables both harnesses, ``anthropic-claude`` and
+    ``openai-codex`` both appear in the rendered iron-token-broker config so
+    the broker manages them whether or not any sandbox is currently using
+    access_token mode."""
     from api.tool_manager import ToolManager
 
     monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
+    monkeypatch.setenv("CENTAUR_DEFAULT_HARNESS", "claude")
+    monkeypatch.setenv("CENTAUR_ENABLED_HARNESSES", "codex")
     tm = ToolManager.__new__(ToolManager)
     tm.tools = {}
     cfg = yaml.safe_load(render_broker_yaml(tm.collect_secrets()))
@@ -285,3 +288,24 @@ def test_render_broker_yaml_includes_harness_brokered_secrets(
         by_id["openai-codex"]["token_endpoint"]
         == "https://auth.openai.com/oauth/token"
     )
+
+
+def test_render_broker_yaml_omits_unenabled_harness_brokered_secrets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The broker config must not carry a brokered credential for a harness
+    the deployment can't reach. iron-token-broker corrupts its shared
+    1Password SDK client the first time it touches a credential whose vault
+    items are missing, which breaks rotation for *every* credential it
+    manages — so a claude-code-only deployment renders ``anthropic-claude``
+    and omits ``openai-codex`` entirely (the regression this gate fixes)."""
+    from api.tool_manager import ToolManager
+
+    monkeypatch.setenv("FIREWALL_MANAGER_SECRET_SOURCE", "onepassword")
+    monkeypatch.setenv("CENTAUR_DEFAULT_HARNESS", "claude")
+    monkeypatch.delenv("CENTAUR_ENABLED_HARNESSES", raising=False)
+    tm = ToolManager.__new__(ToolManager)
+    tm.tools = {}
+    cfg = yaml.safe_load(render_broker_yaml(tm.collect_secrets()))
+
+    assert {c["id"] for c in cfg["credentials"]} == {"anthropic-claude"}

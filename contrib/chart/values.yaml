@@ -112,6 +112,14 @@ api:
     pullPolicy: Always
   executionWorkerEnabled: false
   defaultHarness: codex
+  # Harnesses this deployment can spawn beyond `defaultHarness`. Each entry
+  # joins the set whose harness credentials the API manages (the shared
+  # iron-proxy and, when enabled, iron-token-broker). Leave empty when only
+  # `defaultHarness` is used: handing the broker a brokered credential whose
+  # 1Password items don't exist corrupts its shared SDK client and breaks
+  # token rotation for every credential. Same names/aliases as
+  # `defaultHarness` (amp, claude/claude-code, codex, pi/pi-mono).
+  enabledHarnesses: []
   # The API's worker claims workflow_runs and spawns a per-run sandbox to
   # execute each handler. Disable only if you're running your own claimer.
   workflowWorkerEnabled: true

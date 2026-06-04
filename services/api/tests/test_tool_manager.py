@@ -738,15 +738,58 @@ class TestHarnessSecretSelection:
         assert slack_etl.hosts == ("*.slack.com",)
         assert slack_etl.match_headers == ("Authorization",)
 
-    def test_collect_secrets_returns_union_of_all_harness_variants(self) -> None:
-        """The shared API-side proxy and token broker need every harness
-        credential so they can manage the full set regardless of which mode
-        any individual sandbox is using right now."""
+    def test_collect_secrets_emits_only_enabled_default_harness(
+        self, monkeypatch
+    ) -> None:
+        """A deployment whose only harness is the default emits just that
+        harness's credentials. Both auth-mode variants of the enabled engine
+        appear (the broker manages a credential regardless of the mode a
+        sandbox currently uses), but a harness the deployment can't reach
+        contributes nothing — emitting its brokered credential would poison
+        iron-token-broker's shared SDK client if its vault items are absent."""
+        monkeypatch.setenv("CENTAUR_DEFAULT_HARNESS", "claude")
+        monkeypatch.delenv("CENTAUR_ENABLED_HARNESSES", raising=False)
+        tm = ToolManager.__new__(ToolManager)
+        tm.tools = {}
+        names = self._names(tm.collect_secrets())
+        # claude-code: both the api_key and access_token variants.
+        assert "ANTHROPIC_API_KEY" in names
+        assert "anthropic-claude" in names
+        # codex isn't enabled, so none of its credentials are managed.
+        assert "openai-codex" not in names
+        assert "OPENAI_API_KEY" not in names
+        assert "OPENAI_CODEX_ACCOUNT_ID" not in names
+        # Base infra secrets are independent of the harness gate.
+        assert "SLACK_ETL_TOKEN" in names
+
+    def test_collect_secrets_includes_explicitly_enabled_harnesses(
+        self, monkeypatch
+    ) -> None:
+        """Harnesses a deployment can spawn beyond the default opt in via
+        ``CENTAUR_ENABLED_HARNESSES``; their credentials are then managed
+        alongside the default harness's."""
+        monkeypatch.setenv("CENTAUR_DEFAULT_HARNESS", "claude")
+        monkeypatch.setenv("CENTAUR_ENABLED_HARNESSES", "codex")
         tm = ToolManager.__new__(ToolManager)
         tm.tools = {}
         names = self._names(tm.collect_secrets())
         assert "ANTHROPIC_API_KEY" in names
-        assert "OPENAI_API_KEY" in names
         assert "anthropic-claude" in names
+        assert "OPENAI_API_KEY" in names
         assert "openai-codex" in names
         assert "OPENAI_CODEX_ACCOUNT_ID" in names
+
+    def test_collect_secrets_default_codex_omits_unenabled_claude(
+        self, monkeypatch
+    ) -> None:
+        """The built-in default (codex) with nothing else enabled manages only
+        codex credentials — the claude-code brokered credential is dropped."""
+        monkeypatch.delenv("CENTAUR_DEFAULT_HARNESS", raising=False)
+        monkeypatch.delenv("CENTAUR_ENABLED_HARNESSES", raising=False)
+        tm = ToolManager.__new__(ToolManager)
+        tm.tools = {}
+        names = self._names(tm.collect_secrets())
+        assert "OPENAI_API_KEY" in names
+        assert "openai-codex" in names
+        assert "anthropic-claude" not in names
+        assert "ANTHROPIC_API_KEY" not in names

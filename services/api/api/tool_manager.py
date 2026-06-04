@@ -37,6 +37,7 @@ from api.otel import (
 )
 from api.vm_metrics import record_tool_call
 from api.deps import get_key_info, get_sandbox_claims, verify_api_key
+from api.harness_config import enabled_harnesses
 from api import slackbot_client
 from centaur_sdk import ToolContext, reset_tool_context, set_tool_context
 
@@ -2059,17 +2060,30 @@ class ToolManager:
     def collect_secrets(self) -> list[SecretDef]:
         """Return all secrets the deployment manages.
 
-        Base infra + every tool's secrets + the union of every harness
-        credential variant. Used by the shared API-side iron-proxy and by
-        iron-token-broker so the broker manages every brokered credential
-        regardless of which sandboxes are currently running. Per-sandbox
-        proxies should call :meth:`secrets_for_sandbox` instead.
+        Base infra + every tool's secrets + every harness credential variant
+        for the *enabled* harnesses (see
+        :func:`api.harness_config.enabled_harnesses`). Used by the shared
+        API-side iron-proxy and by iron-token-broker so the broker manages
+        every brokered credential a reachable sandbox might use — both auth
+        modes of an enabled engine — regardless of which sandboxes are
+        currently running. Per-sandbox proxies should call
+        :meth:`secrets_for_sandbox` instead.
+
+        The harness loop is gated on the enabled set on purpose: a
+        ``BrokeredTokenSecret`` whose 1Password items are absent corrupts
+        iron-token-broker's shared SDK client and breaks token rotation for
+        *every* credential it manages, so the deployment must not emit a
+        brokered credential for a harness it hasn't provisioned. Harnesses a
+        deployment can spawn beyond ``CENTAUR_DEFAULT_HARNESS`` opt in via
+        ``CENTAUR_ENABLED_HARNESSES``.
         """
         out: list[SecretDef] = list(self._INFRA_SECRETS)
         for lt in self.tools.values():
             out.extend(lt.all_secrets)
-        for harness_set in self._HARNESS_SECRETS.values():
-            out.extend(harness_set)
+        enabled = enabled_harnesses()
+        for (engine, _mode), harness_set in self._HARNESS_SECRETS.items():
+            if engine in enabled:
+                out.extend(harness_set)
         return out
 
     def reload(self) -> dict[str, Any]:
