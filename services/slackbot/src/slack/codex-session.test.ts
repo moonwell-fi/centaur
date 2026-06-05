@@ -1973,3 +1973,105 @@ function makeFakeSlackClient(
     }
   }
 }
+
+function markdownTextFromStream(calls: Array<{ method: string; params: any }>): string {
+  return calls
+    .filter(call => call.method === 'chat.startStream' || call.method === 'chat.appendStream')
+    .flatMap(call => call.params.chunks ?? [])
+    .filter((chunk: any) => chunk.type === 'markdown_text')
+    .map((chunk: any) => String(chunk.text ?? ''))
+    .join('')
+}
+
+function markdownTextFromStopBlocks(calls: Array<{ method: string; params: any }>): string {
+  const stop = calls.find(call => call.method === 'chat.stopStream')
+  return (stop?.params.blocks ?? [])
+    .filter((block: any) => block.type === 'markdown')
+    .map((block: any) => String(block.text ?? ''))
+    .join('')
+}
+
+describe('CodexSessionRenderer answer-stream divergence', () => {
+  // A tool task makes hasPlan true so answer deltas stream live immediately (rather than waiting
+  // out the pre-stream grace window), and an item.started registers the answer phase so the
+  // agentMessage deltas route to the answer buffer.
+  const TOOL_EVENT = {
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] }
+  }
+  const ITEM_STARTED = {
+    type: 'item.started',
+    item: { id: 'a1', type: 'agentMessage', phase: 'final_answer' }
+  }
+
+  async function openSession(client: Record<string, unknown>) {
+    const { sessionId } = await new AgentSessionRenderer(client as any).open({
+      channel: 'C123',
+      parentTs: '1778866921.505479',
+      recipientTeamId: 'T123',
+      recipientUserId: 'U123',
+      title: 'Centaur execution'
+    })
+    return sessionId
+  }
+
+  it('does not splice misaligned canonical residue when item.completed rewrites streamed text', async () => {
+    // Regression: when the recomposed canonical answer no longer EXTENDS what was already streamed
+    // (an item's accumulated deltas replaced by reformatted canonical text), publishPendingAssistantText
+    // used to slice at the stale offset (answerText.slice(streamedAnswerText.length)) and append that
+    // misaligned fragment to the non-retractable Slack stream — the garbled residue users saw. The fix
+    // detects the divergence and freezes the live answer stream, so the coherent already-streamed text
+    // stands and no misaligned canonical fragment reaches the message.
+    const calls: Array<{ method: string; params: any }> = []
+    const client = makeFakeSlackClient(calls)
+    const sessionId = await openSession(client)
+    const renderer = new CodexSessionRenderer(client as any)
+
+    // CANONICAL deliberately does NOT extend DRAFT (divergence). With the bug, the misaligned
+    // delta CANONICAL.slice(DRAFT.length) leaks the unique tail token 'SENTINEL_ZZZ' into the
+    // delivered message.
+    const DRAFT = 'PROVISIONAL_DRAFT_TEXT'
+    const CANONICAL = 'COMPLETELY_DIFFERENT_CANONICAL_SENTINEL_ZZZ'
+
+    await renderer.event(sessionId, TOOL_EVENT)
+    await renderer.event(sessionId, ITEM_STARTED)
+    await renderer.event(sessionId, { type: 'item.agentMessage.delta', item_id: 'a1', delta: DRAFT })
+    await renderer.event(sessionId, {
+      type: 'item.completed',
+      item: { id: 'a1', type: 'agentMessage', phase: 'final_answer', text: CANONICAL }
+    })
+    await renderer.event(sessionId, { type: 'result', text: CANONICAL })
+
+    // The provisional answer streamed live (the divergence scenario is real)...
+    expect(markdownTextFromStream(calls)).toContain('PROVISIONAL_DRAFT_TEXT')
+    // ...and nowhere in the delivered message (live chunks + final blocks) does a misaligned
+    // fragment of the divergent canonical appear.
+    expect(visibleMarkdown(calls)).not.toContain('SENTINEL_ZZZ')
+  })
+
+  it('keeps streaming live (no canonical re-render) when the answer only grows by appending', async () => {
+    // Guard against false-positive divergence: when the canonical answer equals what was streamed,
+    // the live stream is authoritative and must NOT be re-rendered as a final answer block.
+    const calls: Array<{ method: string; params: any }> = []
+    const client = makeFakeSlackClient(calls)
+    const sessionId = await openSession(client)
+    const renderer = new CodexSessionRenderer(client as any)
+
+    const ANSWER = 'NORMAL-APPEND-CASE-123'
+
+    await renderer.event(sessionId, TOOL_EVENT)
+    await renderer.event(sessionId, ITEM_STARTED)
+    await renderer.event(sessionId, { type: 'item.agentMessage.delta', item_id: 'a1', delta: ANSWER })
+    await renderer.event(sessionId, {
+      type: 'item.completed',
+      item: { id: 'a1', type: 'agentMessage', phase: 'final_answer', text: ANSWER }
+    })
+    await renderer.event(sessionId, { type: 'result', text: ANSWER })
+
+    // Streamed live exactly once, and not duplicated into a final answer block.
+    const streamed = markdownTextFromStream(calls)
+    expect(streamed).toContain('NORMAL-APPEND-CASE-123')
+    expect(countOccurrences(streamed, 'NORMAL-APPEND-CASE-123')).toBe(1)
+    expect(markdownTextFromStopBlocks(calls)).not.toContain('NORMAL-APPEND-CASE-123')
+  })
+})

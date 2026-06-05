@@ -41,6 +41,7 @@ type CodexSessionState = {
   streamedCommentaryText: string
   streamedAnswerText: string
   deliveredAnswerChars: number
+  answerStreamDiverged: boolean
   agentMessagePhase: AgentMessagePhase | null
   agentMessagePhaseByItemId: Map<string, AgentMessagePhase>
   planText: string
@@ -304,6 +305,24 @@ export class CodexSessionRenderer {
     if (!canStream) return
 
     if (state.commentaryText.length > state.streamedCommentaryText.length) return
+    // Live deltas are appended to a Slack stream that cannot be retracted, so streaming is only
+    // safe while the recomposed answer still EXTENDS what we already streamed. recomposeBuffers
+    // can rewrite earlier content (an item's accumulated deltas replaced by reformatted canonical
+    // text on item.completed, or a canonical `assistant` event), making answerText diverge from
+    // streamedAnswerText. Slicing at the now-stale offset would splice garbled residue into the
+    // message, so on divergence we stop streaming the answer: the coherent text already streamed
+    // stands as the final reply, instead of appending a misaligned fragment we cannot take back.
+    if (!state.answerText.startsWith(state.streamedAnswerText)) {
+      if (!state.answerStreamDiverged) {
+        state.answerStreamDiverged = true
+        logInfo('slack_codex_answer_stream_diverged', {
+          agent_session_id: agentSessionId,
+          streamed_answer_chars: state.streamedAnswerText.length,
+          canonical_answer_chars: state.answerText.length
+        })
+      }
+      return
+    }
     if (state.answerText.length <= state.streamedAnswerText.length) return
     const delta = state.answerText.slice(state.streamedAnswerText.length)
     if (!delta) return
@@ -365,6 +384,7 @@ function getState(agentSessionId: string): CodexSessionState {
       streamedCommentaryText: '',
       streamedAnswerText: '',
       deliveredAnswerChars: 0,
+      answerStreamDiverged: false,
       agentMessagePhase: null,
       agentMessagePhaseByItemId: new Map(),
       planText: '',
