@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test'
-import { AgentSessionRenderer, withAgentSessionLock } from './agent-session'
+import {
+  AgentSessionRenderer,
+  unstreamedMarkdownAfterLivePrefix,
+  withAgentSessionLock
+} from './agent-session'
 
 describe('AgentSessionRenderer', () => {
   it('stops calling assistant.threads.setStatus after the channel returns user_not_found', async () => {
@@ -859,3 +863,39 @@ async function waitUntil(predicate: () => boolean): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 0))
   }
 }
+
+describe('unstreamedMarkdownAfterLivePrefix (long-answer finalize path)', () => {
+  // For long answers (streamed past the live cap) closeTextStream appends only the *unstreamed
+  // remainder* as the final block, because Slack accumulates the live chunks. This helper computes
+  // that remainder. Regression (bug B): when the canonical answer no longer extends the streamed
+  // text, it must NOT fall back to a misaligned char-count slice, which spliced garbled residue.
+
+  it('returns the exact tail when the streamed text is a prefix', () => {
+    expect(
+      unstreamedMarkdownAfterLivePrefix('Hello world. Then the tail.', 'Hello world. ')
+    ).toBe('Then the tail.')
+  })
+
+  it('handles a whitespace-normalized prefix', () => {
+    // Streamed text carries trailing spaces the canonical lacks (markdown normalization).
+    expect(
+      unstreamedMarkdownAfterLivePrefix('Line one\nLine two and the tail', 'Line one   \nLine two')
+    ).toBe('and the tail')
+  })
+
+  it('returns nothing when the streamed text already covers the whole answer', () => {
+    expect(unstreamedMarkdownAfterLivePrefix('Same text.', 'Same text.')).toBe('')
+  })
+
+  it('emits the remainder after the longest common prefix when the answer diverges', () => {
+    // The model reformatted already-streamed content, so the streamed text is no longer a prefix.
+    // The old fallback sliced by the streamed char count -> a misaligned mid-token fragment. The
+    // fix slices at the longest common prefix, yielding a clean continuation with no draft residue.
+    const streamed = 'Here is the answer: the result is 42 (streamed draft).'
+    const canonical = 'Here is the answer: the result is forty-two (reformatted final).'
+    const out = unstreamedMarkdownAfterLivePrefix(canonical, streamed)
+    expect(out).toBe('forty-two (reformatted final).')
+    expect(out).not.toContain('streamed draft')
+    expect(out.startsWith('forty-two')).toBe(true)
+  })
+})

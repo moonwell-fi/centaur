@@ -650,23 +650,35 @@ function finalMarkdownForFinalBlocks(
   if (opts.includeStreamedText || !segment.streamedText.trim()) {
     return clipText(trimmed, slackReplyLimits.mixedBodyAndPlan.maxVisibleChars)
   }
-  const streamedPrefix = unstreamedMarkdownAfterLivePrefix(markdown, segment.streamedText)
-  if (streamedPrefix !== null) {
-    return clipText(streamedPrefix, slackReplyLimits.mixedBodyAndPlan.maxVisibleChars)
-  }
-  const unstreamed = markdown.slice(segment.streamedTextSourceChars).trim()
+  const unstreamed = unstreamedMarkdownAfterLivePrefix(markdown, segment.streamedText)
   if (!unstreamed) return ''
   return clipText(unstreamed, slackReplyLimits.mixedBodyAndPlan.maxVisibleChars)
 }
 
-function unstreamedMarkdownAfterLivePrefix(markdown: string, streamedText: string): string | null {
-  if (!streamedText.trim()) return null
+// Returns the portion of the final answer to append as the composed final block — the answer
+// beyond what was already streamed live. Slack accumulates the live appendStream chunks, so the
+// final block must be the *continuation*, not the whole answer (which would duplicate the streamed
+// prefix). When the streamed text is a (whitespace-normalized) prefix of the answer, this is the
+// exact unstreamed tail. When the model reformatted or rewrote already-streamed content, the
+// streamed text is no longer a clean prefix — rather than a char-count slice (misaligned, which
+// splices garbled residue into long replies), emit the answer beyond the LONGEST COMMON PREFIX
+// with the streamed text: drop what the live stream already showed and render only the genuinely
+// new remainder, accepting a small overlap at the divergence point instead of garbage.
+export function unstreamedMarkdownAfterLivePrefix(markdown: string, streamedText: string): string {
+  if (!streamedText.trim()) return markdown.trim()
   if (markdown.startsWith(streamedText)) return markdown.slice(streamedText.length).trim()
 
   const normalizedMarkdown = normalizeFinalMarkdownPrefix(markdown)
   const normalizedStreamed = normalizeFinalMarkdownPrefix(streamedText)
-  if (!normalizedMarkdown.startsWith(normalizedStreamed)) return null
-  return normalizedMarkdown.slice(normalizedStreamed.length).trim()
+  const commonLen = commonPrefixLength(normalizedMarkdown, normalizedStreamed)
+  return normalizedMarkdown.slice(commonLen).trim()
+}
+
+function commonPrefixLength(a: string, b: string): number {
+  const max = Math.min(a.length, b.length)
+  let i = 0
+  while (i < max && a.charCodeAt(i) === b.charCodeAt(i)) i += 1
+  return i
 }
 
 function normalizeFinalMarkdownPrefix(markdown: string): string {
