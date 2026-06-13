@@ -521,6 +521,7 @@ async def spawn_assignment(
     engine: str | None,
     persona_id: str | None,
     agents_md_override: str | None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     persona_info = None
     harness_selector = (harness or "").strip() or None
@@ -581,6 +582,7 @@ async def spawn_assignment(
         "engine": effective_engine,
         "persona_id": effective_persona_id,
         "agents_md_override": effective_agents_md_override,
+        "model": model,
     }
     req_hash = request_hash(payload)
 
@@ -613,6 +615,8 @@ async def spawn_assignment(
         spawn_kwargs: dict[str, Any] = {"engine": effective_engine}
         if effective_persona_id is not None:
             spawn_kwargs["persona"] = effective_persona_id
+        if model is not None:
+            spawn_kwargs["model"] = model
         session = await get_or_spawn(
             thread_key,
             effective_harness,

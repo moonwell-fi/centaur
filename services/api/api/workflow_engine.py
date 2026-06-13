@@ -745,6 +745,7 @@ class WorkflowContext:
         harness: str | None = None,
         persona: str | None = None,
         agents_md_override: str | None = None,
+        model: str | None = None,
         trigger_key: str | None = None,
         eager_start: bool = False,
     ) -> dict[str, Any]:
@@ -757,6 +758,7 @@ class WorkflowContext:
             "harness": harness,
             "persona": persona,
             "agents_md_override": agents_md_override,
+            "model": model,
         }
         if thread_key:
             run_input["thread_key"] = thread_key
@@ -1171,6 +1173,7 @@ async def do_agent_turn(
     harness: str | None = None,
     persona: str | None = None,
     agents_md_override: str | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     """Orchestrate spawn → message → execute → wait-for-terminal.
 
@@ -1227,6 +1230,7 @@ async def do_agent_turn(
                 engine=None,
                 persona_id=persona,
                 agents_md_override=agents_md_override,
+                model=model,
             )
         except Exception as exc:
             try:

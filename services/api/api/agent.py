@@ -821,6 +821,7 @@ async def get_or_spawn(
     *,
     engine: str | None = None,
     persona: str | None = None,
+    model: str | None = None,
 ) -> SandboxSession:
     """Get existing session or spawn a new sandbox.
 
@@ -905,9 +906,12 @@ async def get_or_spawn(
         effective_harness, persona=persona, engine_override=engine
     )
 
-    # Try warm pool first
+    # Try warm pool first. A specific model override forces a cold spawn —
+    # warm containers run the deployment-default model, so claiming one would
+    # silently ignore the requested model.
     should_try_warm = (
         not engine
+        and not model
         and not old_agent_thread_id
         and not old_inflight_turn_id
         and not (effective_harness == "amp" and resolved_engine == "codex")
@@ -950,6 +954,7 @@ async def get_or_spawn(
         resolved_engine,
         persona=resolved_persona,
         repo=repo,
+        model=model,
         resume_thread_id=old_agent_thread_id or None,
         trace_id=trace_id,
     )
