@@ -521,6 +521,7 @@ async def spawn_assignment(
     engine: str | None,
     persona_id: str | None,
     agents_md_override: str | None,
+    model: str | None = None,
 ) -> dict[str, Any]:
     persona_info = None
     harness_selector = (harness or "").strip() or None
@@ -582,6 +583,11 @@ async def spawn_assignment(
         "persona_id": effective_persona_id,
         "agents_md_override": effective_agents_md_override,
     }
+    # Only fold model in when set, so default-model spawns hash identically to
+    # pre-override rows — otherwise a stored spawn_id replayed across the deploy
+    # (e.g. a client retrying POST /agent/spawn) would 409 IDEMPOTENCY_PAYLOAD_MISMATCH.
+    if model is not None:
+        payload["model"] = model
     req_hash = request_hash(payload)
 
     existing_idem = await pool.fetchrow(
@@ -613,6 +619,8 @@ async def spawn_assignment(
         spawn_kwargs: dict[str, Any] = {"engine": effective_engine}
         if effective_persona_id is not None:
             spawn_kwargs["persona"] = effective_persona_id
+        if model is not None:
+            spawn_kwargs["model"] = model
         session = await get_or_spawn(
             thread_key,
             effective_harness,
