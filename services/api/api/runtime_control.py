@@ -582,8 +582,12 @@ async def spawn_assignment(
         "engine": effective_engine,
         "persona_id": effective_persona_id,
         "agents_md_override": effective_agents_md_override,
-        "model": model,
     }
+    # Only fold model in when set, so default-model spawns hash identically to
+    # pre-override rows — otherwise a stored spawn_id replayed across the deploy
+    # (e.g. a client retrying POST /agent/spawn) would 409 IDEMPOTENCY_PAYLOAD_MISMATCH.
+    if model is not None:
+        payload["model"] = model
     req_hash = request_hash(payload)
 
     existing_idem = await pool.fetchrow(
