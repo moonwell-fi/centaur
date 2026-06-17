@@ -579,3 +579,84 @@ describe('normalizeSlackEnvelope', () => {
     expect(normalized?.history_messages).toBeUndefined()
   })
 })
+
+describe('normalizeSlackEnvelope reaction_added (one-click filing)', () => {
+  const cardTs = '1781672675.563119'
+  const card = {
+    type: 'message',
+    bot_id: 'B1',
+    ts: cardTs,
+    text: 'Proposal: fix the createStrategy bug\n\nRepo: moonwell-fi/mamo-queues'
+  }
+  const reactionClient = (messages: unknown[]) =>
+    ({
+      token: 'xoxb-test-token',
+      conversations: { replies: mock(async () => ({ ok: true, messages })) }
+    }) as any
+  const baseEvent = {
+    type: 'reaction_added',
+    user: 'U999',
+    reaction: 'white_check_mark',
+    item: { type: 'message', channel: 'C0BB0LUAJF7', ts: cardTs },
+    item_user: 'UBOT',
+    event_ts: '1781672680.000100'
+  }
+  const opts = (event: unknown, client: unknown) => ({
+    envelope: { type: 'event_callback', team_id: 'T123', event_id: 'Ev-react', event } as any,
+    botUserId: 'UBOT',
+    reactionFileEmojis: ['white_check_mark'],
+    reactionFileChannels: ['C0BB0LUAJF7'],
+    reactionFileInstruction: 'Create this Linear issue and give it the Agent label.',
+    client: client as any
+  })
+
+  it('synthesizes a file turn from a configured reaction on a card', async () => {
+    const normalized = await normalizeSlackEnvelope(opts(baseEvent, reactionClient([card])))
+    expect(normalized?.is_mention).toBe(true)
+    expect(normalized?.thread_ts).toBe(cardTs)
+    expect(normalized?.user_id).toBe('U999')
+    expect(normalized?.parts).toEqual([
+      { type: 'text', text: 'Create this Linear issue and give it the Agent label.' }
+    ])
+    // the reacted card is carried as history so the agent files what it describes
+    expect(JSON.stringify(normalized?.history_messages)).toContain('Repo: moonwell-fi/mamo-queues')
+    // reactor + event_ts → unique, retry-idempotent trigger_key
+    expect(normalized?.message_id).toContain(':react:U999:1781672680.000100')
+  })
+
+  it('ignores a non-configured emoji', async () => {
+    const normalized = await normalizeSlackEnvelope(
+      opts({ ...baseEvent, reaction: 'eyes' }, reactionClient([card]))
+    )
+    expect(normalized).toBeNull()
+  })
+
+  it('ignores a reaction in a non-allowlisted channel', async () => {
+    const normalized = await normalizeSlackEnvelope(
+      opts(
+        { ...baseEvent, item: { type: 'message', channel: 'C-other', ts: cardTs } },
+        reactionClient([card])
+      )
+    )
+    expect(normalized).toBeNull()
+  })
+
+  it('is off when no channels are allowlisted', async () => {
+    const o = opts(baseEvent, reactionClient([card]))
+    o.reactionFileChannels = []
+    const normalized = await normalizeSlackEnvelope(o)
+    expect(normalized).toBeNull()
+  })
+
+  it("ignores the bot's own reaction", async () => {
+    const normalized = await normalizeSlackEnvelope(
+      opts({ ...baseEvent, user: 'UBOT' }, reactionClient([card]))
+    )
+    expect(normalized).toBeNull()
+  })
+
+  it('skips when the reacted card cannot be fetched', async () => {
+    const normalized = await normalizeSlackEnvelope(opts(baseEvent, reactionClient([])))
+    expect(normalized).toBeNull()
+  })
+})

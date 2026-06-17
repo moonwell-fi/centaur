@@ -66,9 +66,15 @@ export async function normalizeSlackEnvelope(opts: {
   botUserId?: string
   botId?: string
   triggerBotAllowlist?: readonly string[]
+  reactionFileEmojis?: readonly string[]
+  reactionFileChannels?: readonly string[]
+  reactionFileInstruction?: string
   client: WebClient
 }): Promise<NormalizedSlackEvent | null> {
   if (opts.envelope.type !== 'event_callback') return null
+  if ((opts.envelope.event as { type?: string } | undefined)?.type === 'reaction_added') {
+    return normalizeReactionAdded(opts)
+  }
   const event = opts.envelope.event as SlackMessageEvent | undefined
   if (!event || !isMessageLikeEvent(event)) return null
   if (event.type === 'message' && event.subtype === 'file_share') return null
@@ -131,6 +137,113 @@ export async function normalizeSlackEnvelope(opts: {
       app_id: event.app_id ?? event.bot_profile?.app_id,
       bot_user_id: event.bot_profile?.user_id
     }
+  }
+}
+
+type SlackReactionEvent = {
+  type?: string
+  user?: string
+  reaction?: string
+  item?: { type?: string; channel?: string; ts?: string }
+  item_user?: string
+  event_ts?: string
+}
+
+// One-click filing: a configured reaction (e.g. ✅) on a bot card in an allowlisted
+// channel synthesizes the SAME slack_thread_turn a human reply would, carrying the
+// configured file instruction + the reacted card as history. Off unless channels are
+// allowlisted, so a stray ✅ anywhere never spawns an agent turn.
+async function normalizeReactionAdded(opts: {
+  envelope: SlackEnvelope
+  botUserId?: string
+  reactionFileEmojis?: readonly string[]
+  reactionFileChannels?: readonly string[]
+  reactionFileInstruction?: string
+  client: WebClient
+}): Promise<NormalizedSlackEvent | null> {
+  const channels = opts.reactionFileChannels ?? []
+  if (!channels.length) return null
+  const emojis = opts.reactionFileEmojis ?? []
+  const event = opts.envelope.event as SlackReactionEvent | undefined
+  if (!event || event.type !== 'reaction_added') return null
+
+  const reaction = (event.reaction ?? '').trim()
+  if (!reaction || !emojis.includes(reaction)) return null
+
+  const item = event.item
+  if (!item || item.type !== 'message' || !item.channel || !item.ts) return null
+  if (!channels.includes(item.channel)) return null
+
+  const reactor = (event.user ?? '').trim()
+  if (!reactor || (opts.botUserId && reactor === opts.botUserId)) return null
+
+  const teamId = opts.envelope.team_id
+  if (!teamId) return null
+
+  // The agent files what the reacted card describes, so it must be in the turn's
+  // history. collectThreadHistory returns [] for a thread-root card (currentTs ===
+  // threadTs), so fetch the card explicitly.
+  const cardParts = await fetchReactedMessageParts(opts.client, item.channel, item.ts, opts.botUserId)
+  if (!cardParts.length) {
+    logWarn('slack_reaction_card_unavailable', { channel: item.channel, ts: item.ts })
+    return null
+  }
+
+  const instruction =
+    (opts.reactionFileInstruction ?? '').trim() ||
+    'Create this Linear issue and give it the Agent label.'
+
+  return {
+    thread_key: `slack:${teamId}:${item.channel}:${item.ts}`,
+    // Reactor + event_ts make the handoff trigger_key unique and idempotent against
+    // Slack's event retries (re-delivery becomes a no-op 409).
+    message_id: `slack:${teamId}:${item.channel}:${item.ts}:react:${reactor}:${event.event_ts ?? ''}`,
+    team_id: teamId,
+    recipient_team_id: teamId,
+    user_id: reactor,
+    channel_id: item.channel,
+    thread_ts: item.ts,
+    is_mention: true,
+    parts: [{ type: 'text', text: instruction }],
+    history_messages: [
+      {
+        message_id: `slack:${teamId}:${item.channel}:${item.ts}`,
+        role: 'assistant',
+        parts: cardParts,
+        user_id: event.item_user,
+        metadata: { platform: 'slack', history_backfill: true }
+      }
+    ],
+    slack: {
+      event_id: opts.envelope.event_id,
+      event_ts: event.event_ts,
+      message_ts: item.ts
+    }
+  }
+}
+
+async function fetchReactedMessageParts(
+  client: WebClient,
+  channel: string,
+  ts: string,
+  botUserId?: string
+): Promise<NormalizedPart[]> {
+  try {
+    const response = await client.conversations.replies({ channel, ts, limit: 1 })
+    const messages = Array.isArray(response.messages) ? response.messages : []
+    const card =
+      (messages.find(message => (message as SlackThreadMessage).ts === ts) ?? messages[0]) as
+        | SlackThreadMessage
+        | undefined
+    if (!card) return []
+    return await partsFromSlackMessage(client, card, botUserId)
+  } catch (error) {
+    logWarn('slack_reaction_card_fetch_failed', {
+      channel,
+      ts,
+      error: error instanceof Error ? error.message : String(error)
+    })
+    return []
   }
 }
 
