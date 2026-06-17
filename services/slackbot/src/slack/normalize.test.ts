@@ -591,7 +591,16 @@ describe('normalizeSlackEnvelope reaction_added (one-click filing)', () => {
   const reactionClient = (messages: unknown[]) =>
     ({
       token: 'xoxb-test-token',
-      conversations: { replies: mock(async () => ({ ok: true, messages })) }
+      conversations: { history: mock(async () => ({ ok: true, messages })) }
+    }) as any
+  const throwingClient = () =>
+    ({
+      token: 'xoxb-test-token',
+      conversations: {
+        history: mock(async () => {
+          throw new Error('slack boom')
+        })
+      }
     }) as any
   const baseEvent = {
     type: 'reaction_added',
@@ -620,8 +629,9 @@ describe('normalizeSlackEnvelope reaction_added (one-click filing)', () => {
     ])
     // the reacted card is carried as history so the agent files what it describes
     expect(JSON.stringify(normalized?.history_messages)).toContain('Repo: moonwell-fi/mamo-queues')
-    // reactor + event_ts → unique, retry-idempotent trigger_key
-    expect(normalized?.message_id).toContain(':react:U999:1781672680.000100')
+    // per-CARD trigger_key (no reactor/event_ts) so repeat reactions dedup to one run
+    expect(normalized?.message_id).toBe(`slack:T123:C0BB0LUAJF7:${cardTs}:react`)
+    expect(normalized?.message_id).not.toContain('U999')
   })
 
   it('ignores a non-configured emoji', async () => {
@@ -657,6 +667,21 @@ describe('normalizeSlackEnvelope reaction_added (one-click filing)', () => {
 
   it('skips when the reacted card cannot be fetched', async () => {
     const normalized = await normalizeSlackEnvelope(opts(baseEvent, reactionClient([])))
+    expect(normalized).toBeNull()
+  })
+
+  it('ignores a reaction on a non-message item', async () => {
+    const normalized = await normalizeSlackEnvelope(
+      opts(
+        { ...baseEvent, item: { type: 'file', channel: 'C0BB0LUAJF7', ts: cardTs } },
+        reactionClient([card])
+      )
+    )
+    expect(normalized).toBeNull()
+  })
+
+  it('skips (no throw) when fetching the card errors', async () => {
+    const normalized = await normalizeSlackEnvelope(opts(baseEvent, throwingClient()))
     expect(normalized).toBeNull()
   })
 })
