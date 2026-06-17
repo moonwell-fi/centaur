@@ -17,6 +17,9 @@ const config: AppConfig = {
   SLACK_FEEDBACK_ALLOWED_CHANNELS: [],
   SLACKBOT_EXTERNAL_ORG_ALLOWLIST: [],
   SLACKBOT_TRIGGER_BOT_ALLOWLIST: [],
+  SLACK_REACTION_FILE_EMOJIS: ["white_check_mark"],
+  SLACK_REACTION_FILE_CHANNELS: [],
+  SLACK_REACTION_FILE_INSTRUCTION: "Create this Linear issue and give it the Agent label.",
 };
 
 afterEach(() => {

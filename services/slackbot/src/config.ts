@@ -65,7 +65,33 @@ const EnvSchema = z.object({
         .split(/[\s,]+/)
         .map(part => part.trim())
         .filter(Boolean)
-    )
+    ),
+  // One-click filing: reacting with one of SLACK_REACTION_FILE_EMOJIS on a bot
+  // message in one of SLACK_REACTION_FILE_CHANNELS synthesizes a slack_thread_turn
+  // carrying SLACK_REACTION_FILE_INSTRUCTION (so the agent files the issue described
+  // in the reacted card). Off by default: with no channels allowlisted, reactions are
+  // ignored, so every workspace ✅ does NOT become an agent turn.
+  SLACK_REACTION_FILE_EMOJIS: z
+    .string()
+    .default('white_check_mark')
+    .transform(value =>
+      value
+        .split(/[\s,]+/)
+        .map(part => part.trim())
+        .filter(Boolean)
+    ),
+  SLACK_REACTION_FILE_CHANNELS: z
+    .string()
+    .default('')
+    .transform(value =>
+      value
+        .split(/[\s,]+/)
+        .map(part => part.trim())
+        .filter(Boolean)
+    ),
+  SLACK_REACTION_FILE_INSTRUCTION: z
+    .string()
+    .default('Create this Linear issue and give it the Agent label.')
 })
 
 export type AppConfig = z.infer<typeof EnvSchema>
