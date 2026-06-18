@@ -1,12 +1,5 @@
 import { z } from 'zod'
 
-// Default reaction-file instruction. Gates the agent on the reacted message actually
-// being a fix proposal, so a ✅ on a digest/report/ack in an allowlisted channel does
-// NOT fabricate a bogus Linear issue. Single source — also the normalize.ts fallback.
-export const DEFAULT_REACTION_FILE_INSTRUCTION =
-  'If the message I reacted to is a fix proposal (a draft Linear issue), create it as a ' +
-  'Linear issue and give it the Agent label. Otherwise, do nothing.'
-
 const EnvSchema = z.object({
   NODE_ENV: z.string().default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
@@ -98,7 +91,7 @@ const EnvSchema = z.object({
     ),
   SLACK_REACTION_FILE_INSTRUCTION: z
     .string()
-    .default(DEFAULT_REACTION_FILE_INSTRUCTION)
+    .default('Create this Linear issue and give it the Agent label.')
 })
 
 export type AppConfig = z.infer<typeof EnvSchema>

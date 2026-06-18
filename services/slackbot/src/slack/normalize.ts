@@ -1,5 +1,4 @@
 import type { WebClient } from '@slack/web-api'
-import { DEFAULT_REACTION_FILE_INSTRUCTION } from '../config'
 import { logWarn } from '../logging'
 import type { NormalizedPart, NormalizedSlackEvent, SlackEnvelope, SlackMessageFile } from './types'
 
@@ -190,15 +189,15 @@ async function normalizeReactionAdded(opts: {
     return null
   }
 
-  const instruction = (opts.reactionFileInstruction ?? '').trim() || DEFAULT_REACTION_FILE_INSTRUCTION
+  const instruction =
+    (opts.reactionFileInstruction ?? '').trim() ||
+    'Create this Linear issue and give it the Agent label.'
 
   return {
     thread_key: `slack:${teamId}:${item.channel}:${item.ts}`,
-    // Per-CARD trigger_key (NOT per-reactor): the first ✅ on a card creates the run;
-    // any further reaction on the same card — a second user, or a remove+re-add — is an
-    // idempotent 409 no-op, so a card is filed at most once. (A human reply still files
-    // via its own message_id; the proposer ledger isn't marked filed — see PR notes.)
-    message_id: `slack:${teamId}:${item.channel}:${item.ts}:react`,
+    // Reactor + event_ts make the handoff trigger_key unique and idempotent against
+    // Slack's event retries (re-delivery becomes a no-op 409).
+    message_id: `slack:${teamId}:${item.channel}:${item.ts}:react:${reactor}:${event.event_ts ?? ''}`,
     team_id: teamId,
     recipient_team_id: teamId,
     user_id: reactor,
@@ -218,8 +217,7 @@ async function normalizeReactionAdded(opts: {
     slack: {
       event_id: opts.envelope.event_id,
       event_ts: event.event_ts,
-      message_ts: item.ts,
-      enterprise_id: opts.envelope.enterprise_id
+      message_ts: item.ts
     }
   }
 }
@@ -231,19 +229,12 @@ async function fetchReactedMessageParts(
   botUserId?: string
 ): Promise<NormalizedPart[]> {
   try {
-    // Fetch exactly the reacted message by ts. conversations.history with
-    // oldest==latest==ts (inclusive) returns just that message for a top-level/
-    // thread-root card; conversations.replies would 404 on a reply ts and its
-    // limit:1 page is ambiguous.
-    const response = await client.conversations.history({
-      channel,
-      latest: ts,
-      oldest: ts,
-      inclusive: true,
-      limit: 1
-    })
+    const response = await client.conversations.replies({ channel, ts, limit: 1 })
     const messages = Array.isArray(response.messages) ? response.messages : []
-    const card = messages[0] as SlackThreadMessage | undefined
+    const card =
+      (messages.find(message => (message as SlackThreadMessage).ts === ts) ?? messages[0]) as
+        | SlackThreadMessage
+        | undefined
     if (!card) return []
     return await partsFromSlackMessage(client, card, botUserId)
   } catch (error) {
