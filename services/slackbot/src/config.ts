@@ -1,12 +1,5 @@
 import { z } from 'zod'
 
-// Default reaction-file instruction. Gates the agent on the reacted message actually
-// being a fix proposal, so a ✅ on a digest/report/ack in an allowlisted channel does
-// NOT fabricate a bogus Linear issue. Single source — also the normalize.ts fallback.
-export const DEFAULT_REACTION_FILE_INSTRUCTION =
-  'If the message I reacted to is a fix proposal (a draft Linear issue), create it as a ' +
-  'Linear issue and give it the Agent label. Otherwise, do nothing.'
-
 const EnvSchema = z.object({
   NODE_ENV: z.string().default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
@@ -72,33 +65,7 @@ const EnvSchema = z.object({
         .split(/[\s,]+/)
         .map(part => part.trim())
         .filter(Boolean)
-    ),
-  // One-click filing: reacting with one of SLACK_REACTION_FILE_EMOJIS on a bot
-  // message in one of SLACK_REACTION_FILE_CHANNELS synthesizes a slack_thread_turn
-  // carrying SLACK_REACTION_FILE_INSTRUCTION (so the agent files the issue described
-  // in the reacted card). Off by default: with no channels allowlisted, reactions are
-  // ignored, so every workspace ✅ does NOT become an agent turn.
-  SLACK_REACTION_FILE_EMOJIS: z
-    .string()
-    .default('white_check_mark')
-    .transform(value =>
-      value
-        .split(/[\s,]+/)
-        .map(part => part.trim())
-        .filter(Boolean)
-    ),
-  SLACK_REACTION_FILE_CHANNELS: z
-    .string()
-    .default('')
-    .transform(value =>
-      value
-        .split(/[\s,]+/)
-        .map(part => part.trim())
-        .filter(Boolean)
-    ),
-  SLACK_REACTION_FILE_INSTRUCTION: z
-    .string()
-    .default(DEFAULT_REACTION_FILE_INSTRUCTION)
+    )
 })
 
 export type AppConfig = z.infer<typeof EnvSchema>

@@ -568,9 +568,6 @@ async function processSlackEvent(envelope: SlackEnvelope): Promise<void> {
         botUserId: installation.botUserId,
         botId: installation.botId,
         triggerBotAllowlist: config.SLACKBOT_TRIGGER_BOT_ALLOWLIST,
-        reactionFileEmojis: config.SLACK_REACTION_FILE_EMOJIS,
-        reactionFileChannels: config.SLACK_REACTION_FILE_CHANNELS,
-        reactionFileInstruction: config.SLACK_REACTION_FILE_INSTRUCTION,
         client
       })
       if (!normalized) {
