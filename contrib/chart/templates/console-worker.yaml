@@ -2,14 +2,16 @@
 {{- if and $console.enabled $console.worker.enabled }}
 {{- $secretEnv := include "centaur.secretEnvName" . }}
 {{- $prefix := .Values.secretManager.envPrefix }}
+{{- $dbName := $console.database.name }}
 # console background job worker — runs Solid Queue (`bin/jobs`) so
 # console's enqueued jobs actually execute. The most important of these is
 # the broker-credential OAuth refresh loop, which mints and refreshes the access
 # tokens delivered inline via `token_broker` sources (e.g. the `openai-codex`
 # brokered token); the web (Puma) pod runs no worker, so without this those jobs
-# never run. The web Deployment owns database setup (create-db init + the image's
-# Rails db:prepare on boot), so this worker only processes jobs and waits for the
-# Solid Queue database to exist before starting.
+# never run. The web Deployment owns primary database setup (create-db init + the
+# image's Rails db:prepare on boot); this worker waits for the Solid
+# Cache/Queue/Cable databases to exist, loads any missing Solid schema (guarded;
+# the web pod's db:prepare migrates them incompletely), then processes jobs.
 #
 # It shares the web image and the same infra-Secret env (DB URL, ActiveRecord
 # encryption keys, SECRET_KEY_BASE) so it can decrypt stored credentials. It uses
@@ -39,20 +41,22 @@ spec:
 {{ toYaml . | nindent 8 }}
       {{- end }}
       initContainers:
-        # Wait for the Solid Queue database (created by the web pod's Rails
-        # db:prepare) so a cold start does not crash-loop before it exists.
-        # Read-only and idempotent; connects as the admin (ai_v2) DSN.
-        - name: wait-for-queue-db
+        # Wait for console's Solid Cache/Queue/Cable databases (created by the web
+        # pod's create-db init) so a cold start does not crash-loop before they
+        # exist. Read-only and idempotent; connects as the admin (ai_v2) DSN.
+        - name: wait-for-secondary-dbs
           image: {{ printf "%s:%s" .Values.postgres.image.repository .Values.postgres.image.tag | quote }}
           imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
           command:
             - /bin/sh
             - -ec
             - |
-              until [ "$(psql "$ADMIN_DATABASE_URL" -tAc \
-                "SELECT 1 FROM pg_database WHERE datname = '$QUEUE_DB_NAME'")" = "1" ]; do
-                echo "waiting for database $QUEUE_DB_NAME to exist…"
-                sleep 2
+              for db in $SECONDARY_DB_NAMES; do
+                until [ "$(psql "$ADMIN_DATABASE_URL" -tAc \
+                  "SELECT 1 FROM pg_database WHERE datname = '$db'")" = "1" ]; do
+                  echo "waiting for database $db to exist…"
+                  sleep 2
+                done
               done
           env:
             - name: ADMIN_DATABASE_URL
@@ -60,9 +64,9 @@ spec:
                 secretKeyRef:
                   name: {{ $secretEnv }}
                   key: {{ printf "%sDATABASE_URL" $prefix }}
-            # Rails 8 names the Solid Queue database "<primary>_queue".
-            - name: QUEUE_DB_NAME
-              value: {{ printf "%s_queue" $console.database.name | quote }}
+            # Rails 8 names the Solid Cache/Queue/Cable databases "<primary>_<role>".
+            - name: SECONDARY_DB_NAMES
+              value: {{ printf "%s_cache %s_queue %s_cable" $dbName $dbName $dbName | quote }}
           securityContext:
 {{ toYaml .Values.containerSecurityContext | nindent 12 }}
             seccompProfile:
@@ -71,10 +75,34 @@ spec:
         - name: console-worker
           image: {{ printf "%s:%s" $console.image.repository $console.image.tag | quote }}
           imagePullPolicy: {{ $console.image.pullPolicy }}
-          # Solid Queue supervisor. Claims and runs jobs from the
-          # <primary>_queue database; serves no HTTP.
+          # Solid Queue supervisor. Claims and runs jobs from the <primary>_queue
+          # database; serves no HTTP. Before starting, ensure the Solid
+          # Cache/Queue/Cable schemas are loaded: the web pod's create-db init
+          # pre-creates those DBs empty, so its `db:prepare` runs the (incomplete)
+          # secondary migrations instead of a full schema load, leaving tables
+          # like solid_queue_recurring_tasks missing and crash-looping `bin/jobs`.
+          # Load each missing secondary schema once — guarded by a marker-table
+          # check so the force:cascade schema files never re-drop live data — then
+          # exec the supervisor. Reuses this container's env (DB URL + AR
+          # encryption keys + SECRET_KEY_BASE), so no separate setup container.
           command:
-            - bin/jobs
+            - /bin/bash
+            - -ec
+            - |
+              missing=$(./bin/rails runner -e "$RAILS_ENV" '
+                names = {"queue" => "solid_queue_recurring_tasks", "cache" => "solid_cache_entries", "cable" => "solid_cable_messages"}
+                out = []
+                names.each do |name, marker|
+                  ActiveRecord::Base.establish_connection(
+                    ActiveRecord::Base.configurations.configs_for(env_name: ENV["RAILS_ENV"], name: name))
+                  out << name unless ActiveRecord::Base.connection.data_source_exists?(marker)
+                end
+                print out.join(" ")')
+              for name in $missing; do
+                echo "console-worker: loading ${name} schema"
+                DISABLE_DATABASE_ENVIRONMENT_CHECK=1 ./bin/rails "db:schema:load:${name}"
+              done
+              exec bin/jobs
           env:
             # Same secretKeyRefs as the web container so the worker can reach
             # Postgres and decrypt stored credentials. No PORT / static-file
