@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_06_23_231036) do
+ActiveRecord::Schema[8.1].define(version: 2026_06_24_000100) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -57,6 +57,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_23_231036) do
     t.string "external_user_key"
     t.integer "failure_count", default: 0, null: false
     t.string "foreign_id"
+    t.string "grant", default: "refresh_token", null: false
     t.jsonb "labels", default: {}, null: false
     t.datetime "last_refresh"
     t.integer "max_refresh_interval_seconds", default: 86400, null: false
@@ -64,6 +65,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_23_231036) do
     t.string "namespace", default: "default", null: false
     t.datetime "next_attempt_at"
     t.bigint "oauth_app_id"
+    t.text "password"
     t.string "provider_email"
     t.string "provider_subject"
     t.integer "refresh_timeout_seconds", default: 30, null: false
@@ -72,6 +74,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_06_23_231036) do
     t.string "token_endpoint", null: false
     t.text "token_endpoint_headers"
     t.datetime "updated_at", null: false
+    t.text "username"
     t.index ["created_by_id"], name: "index_broker_credentials_on_created_by_id"
     t.index ["labels"], name: "index_broker_credentials_on_labels", using: :gin
     t.index ["namespace", "foreign_id"], name: "index_broker_credentials_on_namespace_and_foreign_id", unique: true
