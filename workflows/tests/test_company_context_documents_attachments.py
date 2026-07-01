@@ -23,26 +23,31 @@ def _load_projection_module():
         value if value is not None else default
     )
 
-    vm_metrics = types.ModuleType("api.vm_metrics")
+    company_context_metrics = types.ModuleType("workflows.company_context_metrics")
     for name in (
         "observe_company_context_document_size",
         "record_company_context_documents_changed",
         "set_company_context_projection_lag",
+    ):
+        setattr(company_context_metrics, name, lambda *_args, **_kwargs: None)
+
+    etl_metrics = types.ModuleType("workflows.etl_metrics")
+    for name in (
         "set_etl_active_scopes",
         "set_etl_failed_scopes",
         "set_etl_scope_sync_freshness_seconds",
     ):
-        setattr(vm_metrics, name, lambda *_args, **_kwargs: None)
+        setattr(etl_metrics, name, lambda *_args, **_kwargs: None)
 
     workflow_engine = types.ModuleType("api.workflow_engine")
     workflow_engine.WorkflowContext = object
 
     api_module.runtime_control = runtime_control
-    api_module.vm_metrics = vm_metrics
     api_module.workflow_engine = workflow_engine
     sys.modules.setdefault("api", api_module)
     sys.modules.setdefault("api.runtime_control", runtime_control)
-    sys.modules["api.vm_metrics"] = vm_metrics
+    sys.modules["workflows.company_context_metrics"] = company_context_metrics
+    sys.modules["workflows.etl_metrics"] = etl_metrics
     sys.modules.setdefault("api.workflow_engine", workflow_engine)
 
     return importlib.import_module("workflows.company_context_documents")
@@ -62,6 +67,45 @@ class FakeScopeMetricsPool:
             "failed_scopes": 1,
             "freshness_seconds": 42.0,
         }
+
+
+class FakeWatermarkPool:
+    def __init__(self) -> None:
+        self.query = ""
+        self.args: tuple = ()
+
+    async def fetchrow(self, query, *args):
+        self.query = query
+        self.args = args
+        return {
+            "completed_payload": {
+                "status": "completed",
+                "watermark": "2026-06-18T22:59:36+00:00",
+            }
+        }
+
+
+def test_latest_successful_watermark_reads_absurd_etl_queue():
+    pool = FakeWatermarkPool()
+
+    watermark = asyncio.run(
+        projection._latest_successful_watermark(
+            pool,
+            "4b2eb33c-6377-4b1a-97f0-ec28e4427eb5",
+        )
+    )
+
+    assert watermark == dt.datetime(2026, 6, 18, 22, 59, 36, tzinfo=dt.UTC)
+    assert "absurd.t_centaur_workflows_etl" in pool.query
+    assert "absurd.r_centaur_workflows_etl" in pool.query
+    assert "workflow_runs" not in pool.query
+    assert "t.completed_payload" in pool.query
+    assert "t.params->>'workflow_name' = $1" in pool.query
+    assert "r.run_id::text <> $2" in pool.query
+    assert pool.args == (
+        "company_context_documents",
+        "4b2eb33c-6377-4b1a-97f0-ec28e4427eb5",
+    )
 
 
 def test_etl_scope_metrics_no_longer_emit_slack_scope_gauges(monkeypatch):

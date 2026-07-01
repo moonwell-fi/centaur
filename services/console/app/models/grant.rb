@@ -4,7 +4,9 @@ class Grant < ApplicationRecord
   include SyncConfigCacheInvalidation
 
   GRANTEE_ASSOCIATIONS = %i[principal role].freeze
-  GRANTABLE_ASSOCIATIONS = %i[static_secret gcp_auth_secret aws_auth_secret oauth_token_secret pg_dsn_secret hmac_secret].freeze
+  GRANTABLE_ASSOCIATIONS = %i[
+    static_secret gcp_auth_secret gcp_id_token_secret aws_auth_secret oauth_token_secret pg_dsn_secret hmac_secret
+  ].freeze
 
   # Higher priority wins. When two granted secrets collide at the proxy (iron-proxy
   # applies the last matching transform), the one with the higher priority is
@@ -15,12 +17,14 @@ class Grant < ApplicationRecord
   DEFAULT_ROLE_PRIORITY = 0
 
   attr_readonly :principal_id, :role_id, :static_secret_id, :gcp_auth_secret_id,
-                :aws_auth_secret_id, :oauth_token_secret_id, :pg_dsn_secret_id, :hmac_secret_id
+                :gcp_id_token_secret_id, :aws_auth_secret_id, :oauth_token_secret_id,
+                :pg_dsn_secret_id, :hmac_secret_id
 
   belongs_to :principal, optional: true
   belongs_to :role, optional: true
   belongs_to :static_secret, optional: true
   belongs_to :gcp_auth_secret, optional: true
+  belongs_to :gcp_id_token_secret, optional: true
   belongs_to :aws_auth_secret, optional: true
   belongs_to :oauth_token_secret, optional: true
   belongs_to :pg_dsn_secret, optional: true
@@ -31,6 +35,7 @@ class Grant < ApplicationRecord
 
   validate :exactly_one_grantee
   validate :exactly_one_grantable
+  validate :role_grant_same_namespace
   validates :priority, presence: true, numericality: { only_integer: true }
 
   # The grantee this grant attaches the secret to: a principal or a role.
@@ -71,5 +76,12 @@ class Grant < ApplicationRecord
     set = GRANTABLE_ASSOCIATIONS.count { |assoc| send(assoc).present? }
     return if set == 1
     errors.add(:base, "must reference exactly one of #{GRANTABLE_ASSOCIATIONS.join(", ")}")
+  end
+
+  def role_grant_same_namespace
+    return unless role.present?
+    secret = grantable
+    return unless secret.present?
+    errors.add(:role, "must be in the same namespace as the secret") if role.namespace != secret.namespace
   end
 end

@@ -26,6 +26,7 @@ class ConsoleController < ApplicationController
     @granted = {
       "static" => @principal.granted_static_secrets,
       "gcp_auth" => @principal.granted_gcp_auth_secrets,
+      "gcp_id_token" => @principal.granted_gcp_id_token_secrets,
       "aws_auth" => @principal.granted_aws_auth_secrets,
       "oauth_token" => @principal.granted_oauth_token_secrets,
       "pg_dsn" => @principal.granted_pg_dsn_secrets,
@@ -47,11 +48,16 @@ class ConsoleController < ApplicationController
       @grant_sources[[ kind, grant.public_send("#{assoc}_id") ]] <<
         (grant.role ? { type: :role, role: grant.role } : { type: :direct })
     end
-    # Assignment options for the inline forms. Roles/secrets span all namespaces;
-    # the namespace is shown as a label on each option. Already-directly-granted
-    # secrets are filtered out of the grant dropdown (they're in the table above);
-    # a role-inherited secret stays offered, so it can be promoted to a direct grant.
-    @assignable_roles = Role.where.not(id: @principal.role_ids).order(:namespace, :id)
+    # Assignment options for the inline forms. Roles are namespace-scoped, so
+    # only same-namespace roles are assignable from this principal. Secrets span
+    # all namespaces; the namespace is shown as a label on each option.
+    # Already-directly-granted secrets are filtered out of the grant dropdown
+    # (they're in the table above); a role-inherited secret stays offered, so it
+    # can be promoted to a direct grant.
+    @assignable_roles = Role
+      .where(namespace: @principal.namespace)
+      .where.not(id: @principal.role_ids)
+      .order(:id)
     granted_ids = Hash.new { |h, k| h[k] = [] }
     @direct_grants.each do |grant|
       assoc = Grant::GRANTABLE_ASSOCIATIONS.find { |a| grant.public_send("#{a}_id") }
@@ -79,6 +85,13 @@ class ConsoleController < ApplicationController
 
     @kind = params[:kind]
     @secret = cfg[:model].includes(cfg[:includes]).find_by_oid!(params[:id])
+    grantable = @secret.class.name.underscore.to_sym
+    @role_grants = Grant.where(grantable => @secret).where.not(role_id: nil).includes(:role).order(:id)
+    granted_role_ids = @role_grants.map(&:role_id)
+    @assignable_roles = Role
+      .where(namespace: @secret.namespace)
+      .where.not(id: granted_role_ids)
+      .order(:id)
   end
 
   # Managed broker credentials and their refresh-loop status. Distinct from
@@ -117,6 +130,7 @@ class ConsoleController < ApplicationController
     case record
     when StaticSecret then [ source_segment(record.source) ].compact
     when PgDsnSecret  then [ source_segment(record.dsn_source) ].compact
+    when GcpIdTokenSecret then [ source_segment(record.keyfile_source) ].compact
     when GcpAuthSecret
       if record.keyfile_source
         [ source_segment(record.keyfile_source) ].compact
@@ -157,6 +171,9 @@ class ConsoleController < ApplicationController
     case record
     when StaticSecret  then static_injection(record)
     when GcpAuthSecret  then "Authorization: Bearer"
+    when GcpIdTokenSecret
+      header = record.header.presence || "authorization"
+      "#{header}: Bearer"
     when AwsAuthSecret  then "Authorization: AWS4-HMAC-SHA256"
     when OauthTokenSecret
       header = record.header.presence || "Authorization"
