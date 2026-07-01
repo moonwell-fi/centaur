@@ -2,6 +2,7 @@ import type { RustSessionStreamEvent } from '@centaur/harness-events'
 import type { CodexAppServerToChatStreamOptions } from '@centaur/rendering'
 import type { Attachment, Chat, Logger, StateAdapter } from 'chat'
 import type { Hono } from 'hono'
+import type { SlackDisplayTextSource } from './slack-display-text'
 
 export type JsonPrimitive = string | number | boolean | null
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[]
@@ -29,12 +30,26 @@ export type SlackbotV2ApiAttachment = {
   width?: number
 }
 
+export type SlackbotV2ApiMessageLink = {
+  description?: string
+  imageUrl?: string
+  isSlackMessage?: boolean
+  siteName?: string
+  title?: string
+  url: string
+}
+
 export type SlackbotV2ApiMessage = {
   attachments: SlackbotV2ApiAttachment[]
   author: SlackbotV2ApiAuthor
+  displayText?: string
+  displayTextSource?: SlackDisplayTextSource
   id: string
   isMention: boolean
+  links?: SlackbotV2ApiMessageLink[]
   raw: unknown
+  rawSlackAttachmentCount?: number
+  rawSlackBlockCount?: number
   teamId: string
   text: string
   threadId: string
@@ -96,10 +111,16 @@ export type SlackbotV2Options = {
   maxDurationMs?: number
   postgresUrl?: string
   recoverRenderObligationsOnStart?: boolean
+  /** Maximum Slack message age eligible for startup render recovery. */
+  renderRecoveryMaxObligationAgeMs?: number
   /** Per-thread deadline for one recovery attempt during the startup scan. */
   renderRecoveryThreadTimeoutMs?: number
+  /** Deadline for Centaur session API HTTP calls made during Slack handoff. */
+  sessionApiTimeoutMs?: number
   signingSecret: string
   slackApiUrl?: string
+  /** Deadline for optional Slack Web API metadata lookups. */
+  slackApiTimeoutMs?: number
   state?: StateAdapter
   stateKeyPrefix?: string
   streamTaskDisplayMode?: 'plan' | 'timeline'
@@ -117,8 +138,14 @@ export type SlackbotV2ThreadState = {
   activeExecution?: boolean
   executedMessageIds?: string[]
   forwardedMessageIds?: string[]
+  /** Last thread-level harness selected by Slack flags. Null clears persisted state. */
+  harnessType?: string | null
   historyForwarded?: boolean
   lastEventId?: number
+  /** Last thread-level model selected by Slack flags. Null clears persisted state. */
+  model?: string | null
+  /** Last thread-level model provider selected by Slack flags. Null clears persisted state. */
+  provider?: string | null
   renderObligation?: SlackbotV2RenderObligation | null
 }
 
@@ -137,6 +164,7 @@ export type SlackbotV2Trace = {
   messageId: string
   mode: SlackbotV2MessageMode
   openStream: boolean
+  slackUserId?: string
   startedAtMs: number
   threadId: string
 }
@@ -152,11 +180,13 @@ export type ForwardSessionInput = {
   contextPreamble?: string
   executionId?: string
   executeMessage?: SlackbotV2ApiMessage
-  /** Harness override parsed from message flags (--claude/--amp/--codex). */
+  /** Effective harness selected by sticky thread flags (--claude/--amp/--codex). */
   harnessType?: string
   messages: SlackbotV2ApiMessage[]
-  /** Per-turn model override parsed from message flags (--model/--opus/...). */
+  /** Effective model selected by sticky thread flags (--model/--opus/...). */
   model?: string
+  /** Effective model provider selected by sticky thread flags (--bedrock); codex only. */
+  provider?: string
   /** Per-turn reasoning effort parsed from the `-rsn` flag (codex only). */
   reasoning?: string
   onEventId(eventId: number): void

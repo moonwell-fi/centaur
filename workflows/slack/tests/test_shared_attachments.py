@@ -21,15 +21,18 @@ def _load_shared():
     sys.modules.setdefault("api", api_module)
     sys.modules.setdefault("api.runtime_control", runtime_control)
 
-    vm_metrics = types.ModuleType("api.vm_metrics")
+    slack_metrics = types.ModuleType("workflows.slack.metrics")
+    slack_metrics.record_slack_etl_rate_limit = lambda *_args, **_kwargs: None
+    sys.modules["workflows.slack.metrics"] = slack_metrics
+
+    etl_metrics = types.ModuleType("workflows.etl_metrics")
     for name in (
         "set_etl_active_scopes",
         "set_etl_failed_scopes",
         "set_etl_scope_sync_freshness_seconds",
     ):
-        setattr(vm_metrics, name, lambda *_args, **_kwargs: None)
-    api_module.vm_metrics = vm_metrics
-    sys.modules["api.vm_metrics"] = vm_metrics
+        setattr(etl_metrics, name, lambda *_args, **_kwargs: None)
+    sys.modules["workflows.etl_metrics"] = etl_metrics
 
     centaur_sdk = types.ModuleType("centaur_sdk")
     centaur_sdk.secret = lambda _name, default=None: default
@@ -41,7 +44,7 @@ def _load_shared():
 def _load_backfill():
     api_module = sys.modules.setdefault("api", types.ModuleType("api"))
 
-    vm_metrics = types.ModuleType("api.vm_metrics")
+    etl_metrics = types.ModuleType("workflows.etl_metrics")
     for name in (
         "record_etl_items_deleted",
         "record_etl_items_enqueued",
@@ -54,9 +57,26 @@ def _load_backfill():
         "set_etl_failed_scopes",
         "set_etl_scope_sync_freshness_seconds",
     ):
-        setattr(vm_metrics, name, lambda *_args, **_kwargs: None)
-    api_module.vm_metrics = vm_metrics
-    sys.modules["api.vm_metrics"] = vm_metrics
+        setattr(etl_metrics, name, lambda *_args, **_kwargs: None)
+    sys.modules["workflows.etl_metrics"] = etl_metrics
+
+    slack_metrics = types.ModuleType("workflows.slack.metrics")
+    for name in (
+        "observe_slack_retention_run_duration",
+        "record_slack_etl_rate_limit",
+        "record_slack_retention_api_rate_limited",
+        "record_slack_retention_api_request",
+        "record_slack_retention_backfill_job",
+        "record_slack_retention_backfill_job_failure",
+        "record_slack_retention_backfill_terminal_skip",
+        "record_slack_retention_failure",
+        "record_slack_retention_messages_processed",
+        "record_slack_retention_run",
+        "set_slack_retention_last_failure_timestamp",
+        "set_slack_retention_watermark_lag_seconds",
+    ):
+        setattr(slack_metrics, name, lambda *_args, **_kwargs: None)
+    sys.modules["workflows.slack.metrics"] = slack_metrics
 
     workflow_engine = types.ModuleType("api.workflow_engine")
 
@@ -71,6 +91,145 @@ def _load_backfill():
 
 
 shared = _load_shared()
+
+
+class _FakeSlackResponse(dict):
+    def __init__(
+        self,
+        *,
+        error: str = "ratelimited",
+        headers: dict[str, str] | None = None,
+        status_code: int = 429,
+    ) -> None:
+        super().__init__({"error": error})
+        self.headers = headers or {}
+        self.status_code = status_code
+
+
+class _FakeSlackError(Exception):
+    def __init__(self, response: _FakeSlackResponse) -> None:
+        super().__init__("rate limited")
+        self.response = response
+
+
+def test_retry_on_ratelimit_records_slept_retry_by_workflow(monkeypatch):
+    client = object.__new__(shared.SlackEtlClient)
+    client._workflow_name = "slack_backfill"
+    client._ratelimit_deadlines = {}
+    calls = {"api": 0, "sleep": [], "metrics": []}
+    clock = {"now": 1000.0}
+
+    def fake_api_call():
+        calls["api"] += 1
+        if calls["api"] == 1:
+            raise _FakeSlackError(_FakeSlackResponse(headers={"Retry-After": "2"}))
+        return {"ok": True}
+
+    monkeypatch.setattr(
+        shared,
+        "record_slack_etl_rate_limit",
+        lambda *args: calls["metrics"].append(args),
+    )
+
+    def fake_sleep(seconds):
+        calls["sleep"].append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(shared.time, "sleep", fake_sleep)
+    monkeypatch.setattr(shared.time, "time", lambda: clock["now"])
+
+    result = client._retry_on_ratelimit(
+        fake_api_call,
+        method_key="etl.conversations.history",
+    )
+
+    assert result == {"ok": True}
+    assert calls["sleep"] == [2.25]
+    assert calls["metrics"] == [
+        ("slack_backfill", "etl.conversations.history", "slept_retry", 2.25)
+    ]
+
+
+def test_retry_on_ratelimit_records_failed_fast_by_workflow(monkeypatch):
+    client = object.__new__(shared.SlackEtlClient)
+    client._workflow_name = "slack_sync"
+    client._ratelimit_deadlines = {}
+    calls = []
+
+    def fake_api_call():
+        raise _FakeSlackError(_FakeSlackResponse(headers={"Retry-After": "45"}))
+
+    monkeypatch.setattr(
+        shared,
+        "record_slack_etl_rate_limit",
+        lambda *args: calls.append(args),
+    )
+
+    try:
+        client._retry_on_ratelimit(
+            fake_api_call,
+            method_key="etl.conversations.replies",
+        )
+    except shared.SlackEtlRateLimitError as exc:
+        assert exc.payload["retry_after_seconds"] == 45.25
+    else:
+        raise AssertionError("expected SlackEtlRateLimitError")
+
+    assert calls == [
+        ("slack_sync", "etl.conversations.replies", "failed_fast", 45.25)
+    ]
+
+
+def test_list_etl_channels_preserves_slack_created_timestamp():
+    client = object.__new__(shared.SlackEtlClient)
+    client._workflow_name = "slack_sync"
+
+    def fake_conversations_list(**_kwargs):
+        raise AssertionError("wrapped Slack client call should not be used directly")
+
+    client._client = types.SimpleNamespace(conversations_list=fake_conversations_list)
+
+    def fake_retry(_func, **_kwargs):
+        return {
+            "channels": [
+                {
+                    "id": "C123",
+                    "name": "eng-infra",
+                    "created": 1718123456,
+                    "purpose": {"value": "infra"},
+                    "topic": {"value": "ops"},
+                    "num_members": 42,
+                    "is_archived": False,
+                    "is_private": False,
+                    "is_member": True,
+                },
+                {
+                    "id": "G123",
+                    "name": "private-room",
+                    "created": 1718123000,
+                    "is_private": True,
+                },
+            ],
+            "response_metadata": {},
+        }
+
+    client._retry_on_ratelimit = fake_retry
+
+    channels = client._list_etl_channels()
+
+    assert channels == [
+        {
+            "id": "C123",
+            "name": "eng-infra",
+            "created": 1718123456,
+            "purpose": "infra",
+            "topic": "ops",
+            "member_count": 42,
+            "is_archived": False,
+            "is_private": False,
+            "is_member": True,
+        }
+    ]
 
 
 def test_serialize_message_downloads_slack_file_bytes(monkeypatch):
@@ -342,7 +501,7 @@ def test_backfill_handler_terminally_skips_permanent_slack_errors(monkeypatch):
     monkeypatch.setattr(backfill, "_emit_backfill_job_metrics", fake_noop)
     monkeypatch.setattr(backfill, "emit_slack_checkpoint_metrics", fake_noop)
     monkeypatch.setattr(backfill, "claim_backfill_jobs", fake_claim_jobs)
-    monkeypatch.setattr(backfill, "shared_client", lambda: FakeClient())
+    monkeypatch.setattr(backfill, "shared_client", lambda **_kwargs: FakeClient())
     monkeypatch.setattr(backfill, "record_run_start", fake_noop)
     monkeypatch.setattr(backfill, "record_run_finish", fake_record_finish)
     monkeypatch.setattr(

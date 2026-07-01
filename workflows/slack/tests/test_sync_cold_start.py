@@ -20,16 +20,34 @@ def _load_sync():
     api_module.runtime_control = runtime_control
     sys.modules["api.runtime_control"] = runtime_control
 
-    vm_metrics = types.ModuleType("api.vm_metrics")
+    etl_metrics = types.ModuleType("workflows.etl_metrics")
     for name in (
         "record_etl_items_enqueued",
         "record_etl_items_failed",
         "record_etl_items_seen",
         "record_etl_items_upserted",
+        "set_etl_active_scopes",
+        "set_etl_failed_scopes",
+        "set_etl_scope_sync_freshness_seconds",
     ):
-        setattr(vm_metrics, name, lambda *_args, **_kwargs: None)
-    api_module.vm_metrics = vm_metrics
-    sys.modules["api.vm_metrics"] = vm_metrics
+        setattr(etl_metrics, name, lambda *_args, **_kwargs: None)
+    sys.modules["workflows.etl_metrics"] = etl_metrics
+
+    slack_metrics = types.ModuleType("workflows.slack.metrics")
+    for name in (
+        "observe_slack_retention_run_duration",
+        "record_slack_etl_rate_limit",
+        "record_slack_retention_api_rate_limited",
+        "record_slack_retention_api_request",
+        "record_slack_retention_channel_failure",
+        "record_slack_retention_failure",
+        "record_slack_retention_messages_processed",
+        "record_slack_retention_run",
+        "set_slack_retention_last_failure_timestamp",
+        "set_slack_retention_watermark_lag_seconds",
+    ):
+        setattr(slack_metrics, name, lambda *_args, **_kwargs: None)
+    sys.modules["workflows.slack.metrics"] = slack_metrics
 
     workflow_engine = types.ModuleType("api.workflow_engine")
     workflow_engine.WorkflowContext = object
@@ -135,6 +153,7 @@ def _patch_handler_io(monkeypatch, sync, *, checkpoint=None, client=None):
     monkeypatch.setattr(sync, "_update_checkpoint_success", fake_update_checkpoint_success)
     monkeypatch.setattr(sync, "_update_checkpoint_failure", _noop)
     monkeypatch.setattr(sync, "enqueue_backfill_job", fake_enqueue_backfill_job)
+    monkeypatch.setattr(sync, "emit_slack_checkpoint_metrics", _noop)
     monkeypatch.setattr(sync, "record_run_start", _noop)
     monkeypatch.setattr(sync, "record_run_finish", fake_record_run_finish)
     monkeypatch.setattr(
@@ -198,4 +217,3 @@ def test_watermarked_channel_keeps_incremental_overlap(monkeypatch):
             "priority": 150,
         }
     ]
-

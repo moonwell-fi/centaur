@@ -3,8 +3,8 @@
 use std::str::FromStr;
 
 use centaur_session_core::{
-    ExecutionStatus, HarnessType, Session, SessionEvent, SessionExecution, SessionMessage,
-    SessionMessageInput, SessionStatus, ThreadKey, empty_object,
+    ExecutionStatus, HarnessType, SandboxCapabilities, Session, SessionEvent, SessionExecution,
+    SessionMessage, SessionMessageInput, SessionStatus, ThreadKey, empty_object,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -16,6 +16,7 @@ use thiserror::Error;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+// The API binary embeds these migrations at compile time.
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
 pub const SESSION_EVENTS_CHANNEL: &str = "centaur_session_events";
@@ -34,6 +35,19 @@ pub struct ClaimExecutionResult {
     /// `running`. False means another request already claimed it (or it is
     /// terminal), so the caller must not drive the execution.
     pub claimed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IdleSandboxCandidate {
+    pub thread_key: ThreadKey,
+    pub sandbox_id: String,
+    pub execution_id: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorkflowOwnedSandbox {
+    pub thread_key: ThreadKey,
+    pub sandbox_id: String,
 }
 
 #[derive(Clone)]
@@ -112,7 +126,7 @@ impl PgSessionStore {
     pub async fn get_session(&self, thread_key: &ThreadKey) -> Result<Session, SessionStoreError> {
         let row = sqlx::query_as::<_, SessionRow>(
             r#"
-            select thread_key, sandbox_id, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
+            select thread_key, sandbox_id, sandbox_repo_cache_enabled, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
             from sessions
             where thread_key = $1
             "#,
@@ -484,6 +498,112 @@ impl PgSessionStore {
         rows.into_iter().map(TryInto::try_into).collect()
     }
 
+    pub async fn execution_event_exists(
+        &self,
+        execution_id: &str,
+        event_type: &str,
+    ) -> Result<bool, SessionStoreError> {
+        let exists = sqlx::query_scalar::<_, bool>(
+            r#"
+            select exists (
+                select 1
+                from session_events
+                where execution_id = $1
+                  and event_type = $2
+                limit 1
+            )
+            "#,
+        )
+        .bind(execution_id)
+        .bind(event_type)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(exists)
+    }
+
+    pub async fn list_referenced_sandbox_ids(&self) -> Result<Vec<String>, SessionStoreError> {
+        let rows = sqlx::query_scalar::<_, String>(
+            r#"
+            select sandbox_id
+            from sessions
+            where sandbox_id is not null
+
+            union
+
+            select sandbox_id
+            from session_warm_sandboxes
+            where status in ('ready', 'claimed')
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
+    pub async fn list_idle_sandbox_candidates(
+        &self,
+        idle_backstop: std::time::Duration,
+    ) -> Result<Vec<IdleSandboxCandidate>, SessionStoreError> {
+        let rows = sqlx::query_as::<_, IdleSandboxCandidateRow>(
+            r#"
+            with latest as (
+                select distinct on (thread_key)
+                    execution_id,
+                    thread_key,
+                    status,
+                    completed_at
+                from session_executions
+                order by thread_key, created_at desc, execution_id desc
+            )
+            select
+                s.thread_key,
+                s.sandbox_id as sandbox_id,
+                latest.execution_id
+            from sessions s
+            join latest on latest.thread_key = s.thread_key
+            where s.sandbox_id is not null
+              and latest.status in ('completed', 'failed', 'cancelled')
+              and latest.completed_at is not null
+              and latest.completed_at <= now() - ($1::float8 * interval '1 second')
+              and not exists (
+                  select 1
+                  from session_executions active
+                  where active.thread_key = s.thread_key
+                    and active.status in ('queued', 'running')
+              )
+            order by latest.completed_at, s.thread_key
+            "#,
+        )
+        .bind(idle_backstop.as_secs_f64())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
+    pub async fn list_workflow_owned_sandboxes(
+        &self,
+        workflow_run_id: &str,
+    ) -> Result<Vec<WorkflowOwnedSandbox>, SessionStoreError> {
+        let rows = sqlx::query_as::<_, WorkflowOwnedSandboxRow>(
+            r#"
+            select thread_key, sandbox_id as sandbox_id
+            from sessions
+            where sandbox_id is not null
+              and metadata->>'workflow_owned_thread' = 'true'
+              and metadata->>'workflow_run_id' = $1
+            order by thread_key
+            "#,
+        )
+        .bind(workflow_run_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(TryInto::try_into).collect()
+    }
+
     pub async fn update_sandbox_id(
         &self,
         thread_key: &ThreadKey,
@@ -492,9 +612,13 @@ impl PgSessionStore {
         let row = sqlx::query_as::<_, SessionRow>(
             r#"
             update sessions
-            set sandbox_id = $2, updated_at = now()
+            set
+                sandbox_id = $2,
+                sandbox_repo_cache_enabled = null,
+                sandbox_observability_enabled = null,
+                updated_at = now()
             where thread_key = $1
-            returning thread_key, sandbox_id, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
+            returning thread_key, sandbox_id, sandbox_repo_cache_enabled, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
             "#,
         )
         .bind(thread_key.as_str())
@@ -503,6 +627,58 @@ impl PgSessionStore {
         .await?;
 
         row.try_into()
+    }
+
+    pub async fn update_sandbox_assignment(
+        &self,
+        thread_key: &ThreadKey,
+        sandbox_id: &str,
+        capabilities: &SandboxCapabilities,
+    ) -> Result<Session, SessionStoreError> {
+        let row = sqlx::query_as::<_, SessionRow>(
+            r#"
+            update sessions
+            set
+                sandbox_id = $2,
+                sandbox_repo_cache_enabled = $3,
+                sandbox_observability_enabled = $4,
+                updated_at = now()
+            where thread_key = $1
+            returning thread_key, sandbox_id, sandbox_repo_cache_enabled, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
+            "#,
+        )
+        .bind(thread_key.as_str())
+        .bind(sandbox_id)
+        .bind(capabilities.repo_cache_enabled)
+        .bind(capabilities.observability_enabled)
+        .fetch_one(&self.pool)
+        .await?;
+
+        row.try_into()
+    }
+
+    pub async fn clear_sandbox_id_if_matches(
+        &self,
+        thread_key: &ThreadKey,
+        sandbox_id: &str,
+    ) -> Result<bool, SessionStoreError> {
+        let result = sqlx::query(
+            r#"
+            update sessions
+            set
+                sandbox_id = null,
+                sandbox_repo_cache_enabled = null,
+                sandbox_observability_enabled = null,
+                updated_at = now()
+            where thread_key = $1 and sandbox_id = $2
+            "#,
+        )
+        .bind(thread_key.as_str())
+        .bind(sandbox_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() > 0)
     }
 
     /// Move an existing session onto a different harness. Clears the sandbox
@@ -519,10 +695,12 @@ impl PgSessionStore {
             set harness_type = $2,
                 harness_thread_id = null,
                 sandbox_id = null,
+                sandbox_repo_cache_enabled = null,
+                sandbox_observability_enabled = null,
                 status = $3,
                 updated_at = now()
             where thread_key = $1
-            returning thread_key, sandbox_id, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
+            returning thread_key, sandbox_id, sandbox_repo_cache_enabled, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
             "#,
         )
         .bind(thread_key.as_str())
@@ -547,7 +725,7 @@ impl PgSessionStore {
             update sessions
             set iron_control_principal = $2, updated_at = now()
             where thread_key = $1
-            returning thread_key, sandbox_id, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
+            returning thread_key, sandbox_id, sandbox_repo_cache_enabled, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
             "#,
         )
         .bind(thread_key.as_str())
@@ -655,7 +833,7 @@ impl PgSessionStore {
             update sessions
             set harness_thread_id = $2, updated_at = now()
             where thread_key = $1
-            returning thread_key, sandbox_id, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
+            returning thread_key, sandbox_id, sandbox_repo_cache_enabled, sandbox_observability_enabled, harness_type, harness_thread_id, persona_id, status, iron_control_principal, created_at, updated_at
             "#,
         )
         .bind(thread_key.as_str())
@@ -754,6 +932,8 @@ pub enum SessionStoreError {
 struct SessionRow {
     thread_key: String,
     sandbox_id: Option<String>,
+    sandbox_repo_cache_enabled: Option<bool>,
+    sandbox_observability_enabled: Option<bool>,
     harness_type: String,
     harness_thread_id: Option<String>,
     persona_id: Option<String>,
@@ -770,6 +950,18 @@ impl TryFrom<SessionRow> for Session {
         Ok(Self {
             thread_key: parse_persisted(row.thread_key)?,
             sandbox_id: row.sandbox_id,
+            sandbox_capabilities: match (
+                row.sandbox_repo_cache_enabled,
+                row.sandbox_observability_enabled,
+            ) {
+                (Some(repo_cache_enabled), Some(observability_enabled)) => {
+                    Some(SandboxCapabilities {
+                        repo_cache_enabled,
+                        observability_enabled,
+                    })
+                }
+                _ => None,
+            },
             harness_type: parse_persisted(row.harness_type)?,
             harness_thread_id: row.harness_thread_id,
             persona_id: row.persona_id,
@@ -824,6 +1016,42 @@ struct SessionExecutionRow {
     updated_at: OffsetDateTime,
     started_at: Option<OffsetDateTime>,
     completed_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, FromRow)]
+struct IdleSandboxCandidateRow {
+    thread_key: String,
+    sandbox_id: String,
+    execution_id: String,
+}
+
+impl TryFrom<IdleSandboxCandidateRow> for IdleSandboxCandidate {
+    type Error = SessionStoreError;
+
+    fn try_from(row: IdleSandboxCandidateRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            thread_key: parse_persisted(row.thread_key)?,
+            sandbox_id: row.sandbox_id,
+            execution_id: row.execution_id,
+        })
+    }
+}
+
+#[derive(Debug, FromRow)]
+struct WorkflowOwnedSandboxRow {
+    thread_key: String,
+    sandbox_id: String,
+}
+
+impl TryFrom<WorkflowOwnedSandboxRow> for WorkflowOwnedSandbox {
+    type Error = SessionStoreError;
+
+    fn try_from(row: WorkflowOwnedSandboxRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            thread_key: parse_persisted(row.thread_key)?,
+            sandbox_id: row.sandbox_id,
+        })
+    }
 }
 
 impl TryFrom<SessionExecutionRow> for SessionExecution {
