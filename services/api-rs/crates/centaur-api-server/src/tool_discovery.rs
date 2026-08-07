@@ -38,23 +38,38 @@ const DEFAULT_MATCH_HEADERS: &[&str] = &[
 ];
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct ToolDiscoveryConfig {
-    pub(crate) tool_dirs: Option<String>,
-    pub(crate) tools_path: Option<PathBuf>,
-    pub(crate) tools_overlay_path: Option<PathBuf>,
-    pub(crate) plugins_dir: Option<PathBuf>,
-    pub(crate) tools_config: Option<PathBuf>,
+pub struct ToolDiscoveryConfig {
+    pub tool_dirs: Option<String>,
+    pub public_tool_dirs: Option<String>,
+    pub tools_path: Option<PathBuf>,
+    pub tools_overlay_path: Option<PathBuf>,
+    pub plugins_dir: Option<PathBuf>,
+    pub tools_config: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct DiscoveredToolProxyFragment {
-    pub(crate) fragment: ProxyFragment,
-    pub(crate) tool_count: usize,
-    pub(crate) secret_count: usize,
+pub struct DiscoveredToolProxyFragment {
+    pub fragment: ProxyFragment,
+    pub tool_count: usize,
+    pub secret_count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DiscoveredToolCatalog {
+    pub(crate) tools: Vec<DiscoveredTool>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DiscoveredTool {
+    pub(crate) name: String,
+    pub(crate) package: String,
+    pub(crate) description: Option<String>,
+    pub(crate) client_module: String,
+    pub(crate) project_dir: PathBuf,
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum ToolDiscoveryError {
+pub enum ToolDiscoveryError {
     #[error("failed to read {path}: {source}")]
     Read {
         path: PathBuf,
@@ -72,7 +87,7 @@ pub(crate) enum ToolDiscoveryError {
 }
 
 impl ToolDiscoveryConfig {
-    pub(crate) fn resolve_tool_dirs(&self) -> Result<Vec<PathBuf>, ToolDiscoveryError> {
+    pub fn resolve_tool_dirs(&self) -> Result<Vec<PathBuf>, ToolDiscoveryError> {
         if let Some(tool_dirs) = clean_optional_str(self.tool_dirs.as_deref()) {
             return Ok(split_tool_dirs(&tool_dirs));
         }
@@ -111,9 +126,17 @@ impl ToolDiscoveryConfig {
         });
         Ok(vec![root.join("tools")])
     }
+
+    pub fn resolve_public_tool_dirs(&self) -> Vec<PathBuf> {
+        self.public_tool_dirs
+            .as_deref()
+            .and_then(|value| clean_optional_str(Some(value)))
+            .map(|value| split_tool_dirs(&value))
+            .unwrap_or_default()
+    }
 }
 
-pub(crate) fn discover_tool_proxy_fragment(
+pub fn discover_tool_proxy_fragment(
     tool_dirs: &[PathBuf],
 ) -> Result<DiscoveredToolProxyFragment, ToolDiscoveryError> {
     let tools = collect_plugin_metadata(tool_dirs)?.tools;
@@ -136,13 +159,32 @@ pub(crate) fn discover_tool_proxy_fragment(
     })
 }
 
-pub(crate) fn discover_persona_registry(
+pub fn discover_persona_registry(
     tool_dirs: &[PathBuf],
     default_persona_id: Option<String>,
 ) -> Result<PersonaRegistry, ToolDiscoveryError> {
     let plugins = collect_plugin_metadata(tool_dirs)?;
     PersonaRegistry::new(plugins.personas, default_persona_id, plugins.overlay_chain)
         .map_err(ToolDiscoveryError::Invalid)
+}
+
+pub(crate) fn discover_tool_catalog(
+    tool_dirs: &[PathBuf],
+) -> Result<DiscoveredToolCatalog, ToolDiscoveryError> {
+    let mut tools = Vec::new();
+    for tool in collect_plugin_metadata(tool_dirs)?.tools {
+        for script_name in tool.script_names {
+            tools.push(DiscoveredTool {
+                name: script_name,
+                package: tool.package.clone(),
+                description: tool.description.clone(),
+                client_module: tool.client_module.clone(),
+                project_dir: tool.dir.clone(),
+            });
+        }
+    }
+    tools.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(DiscoveredToolCatalog { tools })
 }
 
 fn split_tool_dirs(value: &str) -> Vec<PathBuf> {
@@ -281,6 +323,11 @@ fn parse_toml(path: &Path, contents: &str) -> Result<TomlValue, ToolDiscoveryErr
 #[derive(Clone, Debug)]
 struct LoadedToolMeta {
     name: String,
+    dir: PathBuf,
+    package: String,
+    description: Option<String>,
+    client_module: String,
+    script_names: Vec<String>,
     secrets: Vec<ToolSecret>,
 }
 
@@ -436,7 +483,7 @@ fn load_plugin_meta(
         .and_then(|value| value.get("centaur"))
         .unwrap_or(&default_tool_conf);
     if tool_conf.get("type").and_then(TomlValue::as_str) != Some("persona") {
-        return load_tool_meta(source_root, plugin_dir, tool_conf)
+        return load_tool_meta(source_root, plugin_dir, &pyproject, tool_conf)
             .map(|meta| meta.map(LoadedPluginMeta::Tool));
     }
     let id = plugin_dir
@@ -458,7 +505,7 @@ fn load_plugin_meta(
     })?;
     let prompt_hash = {
         let digest = Sha256::digest(prompt.as_bytes());
-        format!("sha256:{digest:x}")
+        format!("sha256:{}", hex::encode(digest))
     };
     Ok(Some(LoadedPluginMeta::Persona(PersonaDefinition {
         id,
@@ -473,6 +520,7 @@ fn load_plugin_meta(
 fn load_tool_meta(
     source_root: &Path,
     tool_dir: &Path,
+    pyproject: &TomlValue,
     tool_conf: &TomlValue,
 ) -> Result<Option<LoadedToolMeta>, ToolDiscoveryError> {
     let name = tool_dir
@@ -482,6 +530,40 @@ fn load_tool_meta(
             ToolDiscoveryError::Invalid(format!("invalid tool path {}", tool_dir.display()))
         })?
         .to_owned();
+    let default_project_conf = TomlValue::Table(Default::default());
+    let project_conf = pyproject.get("project").unwrap_or(&default_project_conf);
+    let package = project_conf
+        .get("name")
+        .and_then(TomlValue::as_str)
+        .map(str::to_owned)
+        .unwrap_or_else(|| name.clone());
+    let description = project_conf
+        .get("description")
+        .and_then(TomlValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
+    let client_module = tool_conf
+        .get("module")
+        .and_then(TomlValue::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("client.py")
+        .to_owned();
+    let script_names = project_conf
+        .get("scripts")
+        .and_then(TomlValue::as_table)
+        .map(|scripts| {
+            let mut names = scripts
+                .keys()
+                .filter(|script| !script.contains('/') && !script.contains('\0'))
+                .cloned()
+                .collect::<Vec<_>>();
+            names.sort();
+            names
+        })
+        .filter(|names| !names.is_empty())
+        .unwrap_or_else(|| vec![name.clone()]);
     let default_hosts = string_array(tool_conf.get("hosts"));
     let labels = tool_labels(&name, &overlay_name_for_root(source_root));
     let secrets = match parse_secret_list(tool_conf.get("secrets"), &default_hosts, &labels)
@@ -503,7 +585,15 @@ fn load_tool_meta(
             return Ok(None);
         }
     };
-    Ok(Some(LoadedToolMeta { name, secrets }))
+    Ok(Some(LoadedToolMeta {
+        name,
+        dir: tool_dir.to_path_buf(),
+        package,
+        description,
+        client_module,
+        script_names,
+        secrets,
+    }))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -894,14 +984,24 @@ fn parse_pg_dsn_setting_value_from(
     })?;
     let principal_label = optional_str(table, "principal_label").map(ToOwned::to_owned);
     let principal_field = optional_str(table, "principal_field").map(ToOwned::to_owned);
-    if principal_label.is_none() && principal_field.is_none() {
+    let proxy_label = optional_str(table, "proxy_label").map(ToOwned::to_owned);
+    let declared = [
+        principal_label.as_ref(),
+        principal_field.as_ref(),
+        proxy_label.as_ref(),
+    ]
+    .into_iter()
+    .filter(|value| value.is_some())
+    .count();
+    if declared != 1 {
         return Err(ToolDiscoveryError::Invalid(
-            "pg_dsn setting value_from must declare principal_label or principal_field".to_owned(),
+            "pg_dsn setting value_from must declare exactly one of principal_label, principal_field, or proxy_label".to_owned(),
         ));
     }
     Ok(Some(PgDsnSettingValueFrom {
         principal_label,
         principal_field,
+        proxy_label,
     }))
 }
 
@@ -1491,6 +1591,22 @@ mod tests {
     }
 
     #[test]
+    fn resolves_public_tool_dirs_from_explicit_env_string() {
+        let config = ToolDiscoveryConfig {
+            public_tool_dirs: Some("/public-base:/public-overlay".to_owned()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            config.resolve_public_tool_dirs(),
+            vec![
+                PathBuf::from("/public-base"),
+                PathBuf::from("/public-overlay")
+            ]
+        );
+    }
+
+    #[test]
     fn resolves_sandbox_style_tools_path_and_overlay_path() {
         let config = ToolDiscoveryConfig {
             tools_path: Some(PathBuf::from("/base")),
@@ -1513,15 +1629,41 @@ mod tests {
             secret_ref: "RESHIFT_DSN".to_owned(),
             labels: tool_labels("company_context", "centaur"),
             database: "warehouse".to_owned(),
-            role: Some("centaur_slack_reader".to_owned()),
-            settings: vec![PgDsnSetting {
-                name: "centaur.slack_channel_id".to_owned(),
-                value: None,
-                value_from: Some(PgDsnSettingValueFrom {
-                    principal_label: Some("slack_channel_id".to_owned()),
-                    principal_field: None,
-                }),
-            }],
+            role: Some("centaur_company_context_reader".to_owned()),
+            settings: vec![
+                PgDsnSetting {
+                    name: "centaur.slack_channel_id".to_owned(),
+                    value: None,
+                    value_from: Some(PgDsnSettingValueFrom {
+                        principal_label: Some("slack_channel_id".to_owned()),
+                        principal_field: None,
+                        proxy_label: None,
+                    }),
+                },
+                PgDsnSetting {
+                    name: "centaur.slack_user_id".to_owned(),
+                    value: None,
+                    value_from: Some(PgDsnSettingValueFrom {
+                        principal_label: None,
+                        principal_field: None,
+                        proxy_label: Some("centaur.slack_user_id".to_owned()),
+                    }),
+                },
+                PgDsnSetting {
+                    name: "centaur.slack_history_channel_ids".to_owned(),
+                    value: None,
+                    value_from: Some(PgDsnSettingValueFrom {
+                        principal_label: None,
+                        principal_field: Some("slack_history_channel_ids".to_owned()),
+                        proxy_label: None,
+                    }),
+                },
+                PgDsnSetting {
+                    name: "centaur.slack_include_public".to_owned(),
+                    value: Some("true".to_owned()),
+                    value_from: None,
+                },
+            ],
         })])
         .unwrap();
 
@@ -1530,10 +1672,55 @@ mod tests {
         assert_eq!(sandbox_env.database.as_deref(), Some("warehouse"));
         assert_eq!(
             listeners[0].extra.get("role").and_then(YamlValue::as_str),
-            Some("centaur_slack_reader")
+            Some("centaur_company_context_reader")
         );
-        assert_eq!(listeners[0].settings.len(), 1);
+        assert_eq!(listeners[0].settings.len(), 4);
         assert_eq!(listeners[0].settings[0].name, "centaur.slack_channel_id");
+        assert_eq!(listeners[0].settings[1].name, "centaur.slack_user_id");
+        assert_eq!(
+            listeners[0].settings[1]
+                .value_from
+                .as_ref()
+                .and_then(|value_from| value_from.proxy_label.as_deref()),
+            Some("centaur.slack_user_id")
+        );
+        assert_eq!(
+            listeners[0].settings[2].name,
+            "centaur.slack_history_channel_ids"
+        );
+        assert_eq!(
+            listeners[0].settings[2]
+                .value_from
+                .as_ref()
+                .and_then(|value_from| value_from.principal_field.as_deref()),
+            Some("slack_history_channel_ids")
+        );
+        assert_eq!(listeners[0].settings[3].value.as_deref(), Some("true"));
+    }
+
+    #[test]
+    fn rejects_pg_dsn_value_from_with_multiple_selectors() {
+        let value: TomlValue = toml::from_str(
+            r#"
+database = "warehouse"
+settings = [
+  { name = "centaur.slack_user_id", value_from = { principal_label = "slack_user_id", proxy_label = "centaur.slack_user_id" } }
+]
+"#,
+        )
+        .unwrap();
+        let err = parse_pg_dsn_secret(
+            value.as_table().unwrap(),
+            "RESHIFT_DSN".to_owned(),
+            "RESHIFT_DSN".to_owned(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("must declare exactly one"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -4,9 +4,8 @@
 //! Today the proxy config is rendered from fragments and baked into a
 //! per-sandbox ConfigMap. Under iron-control the same fragments become durable
 //! control-plane state: each fragment's secrets are upserted as typed secret
-//! resources and granted to a role. api-rs currently folds infra, harness, and
-//! discovered tool fragments into the single shared infra role so each sandbox
-//! principal only needs one assignment.
+//! resources and granted to a role. api-rs registers infra and harness
+//! fragments against the shared infra role.
 //!
 //! [`secret_inputs_from_fragment`] is the pure translation (fragment → secret
 //! inputs) and is unit-tested without a server; [`register_role`] drives the
@@ -566,10 +565,12 @@ fn pg_setting_from_listener(setting: &PgDsnSetting) -> PgDsnSettingInput {
             |PgDsnSettingValueFrom {
                  principal_label,
                  principal_field,
+                 proxy_label,
              }| {
                 PgDsnSettingValueFromInput {
                     principal_label: principal_label.clone(),
                     principal_field: principal_field.clone(),
+                    proxy_label: proxy_label.clone(),
                 }
             },
         ),
@@ -1121,6 +1122,9 @@ postgres:
       - name: centaur.slack_channel_id
         value_from:
           principal_label: slack_channel_id
+      - name: centaur.slack_user_id
+        value_from:
+          proxy_label: centaur.slack_user_id
 "#,
         )
         .unwrap();
@@ -1134,7 +1138,7 @@ postgres:
         assert_eq!(input.name, "analytics");
         assert_eq!(input.database, "analytics_db");
         assert_eq!(input.role.as_deref(), Some("readonly"));
-        assert_eq!(input.settings.len(), 1);
+        assert_eq!(input.settings.len(), 2);
         assert_eq!(input.settings[0].name, "centaur.slack_channel_id");
         assert_eq!(
             input.settings[0]
@@ -1142,6 +1146,14 @@ postgres:
                 .as_ref()
                 .and_then(|value_from| value_from.principal_label.as_deref()),
             Some("slack_channel_id")
+        );
+        assert_eq!(input.settings[1].name, "centaur.slack_user_id");
+        assert_eq!(
+            input.settings[1]
+                .value_from
+                .as_ref()
+                .and_then(|value_from| value_from.proxy_label.as_deref()),
+            Some("centaur.slack_user_id")
         );
         assert_eq!(input.dsn.source_type, "env");
         assert_eq!(input.dsn.config, json!({ "var": "PG_ANALYTICS_DSN" }));
