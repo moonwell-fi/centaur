@@ -106,7 +106,7 @@ module ApplicationHelper
   def secret_option_label(secret)
     primary = secret.try(:name).presence || secret.foreign_id.presence || secret.oid
     identifier = secret.foreign_id.presence || secret.oid
-    details = [ (identifier unless identifier == primary), secret.namespace ].compact_blank
+    details = [ (identifier unless identifier == primary) ].compact_blank
 
     details.any? ? "#{primary} (#{details.join(", ")})" : primary
   end
@@ -124,6 +124,11 @@ module ApplicationHelper
       outline_icon(
         classes,
         "M9 17.25v1.007a3 3 0 0 1-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0 1 15 18.257V17.25m6-12V15A2.25 2.25 0 0 1 18.75 17.25H5.25A2.25 2.25 0 0 1 3 15V5.25A2.25 2.25 0 0 1 5.25 3h13.5A2.25 2.25 0 0 1 21 5.25Z"
+      )
+    when "clock"
+      outline_icon(
+        classes,
+        "M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
       )
     when "id-badge"
       outline_icon(
@@ -371,18 +376,9 @@ module ApplicationHelper
     record.broker_credential
   end
 
-  # The muted secondary line shown under a record's primary identifier in console
-  # tables: the namespace, optionally preceded by the opaque oid and a small dot.
-  # Pass oid: when the primary line is the foreign_id (so the oid still shows);
-  # omit it when the oid is already the primary line.
-  def id_meta_line(namespace, oid: nil)
-    inner =
-      if oid
-        safe_join([ oid, tag.span("·", class: "mx-1 text-zinc-600"), namespace ])
-      else
-        namespace
-      end
-    tag.div(inner, class: "text-xs text-zinc-500")
+  # The muted opaque-id line shown when a table uses foreign_id as its primary label.
+  def id_meta_line(oid)
+    tag.div(oid, class: "text-xs text-zinc-500")
   end
 
   # Renders a UTC timestamp that the `localtime` Stimulus controller rewrites in

@@ -1,5 +1,7 @@
 module SlackDm
   class SyncCredentialJob < ApplicationJob
+    MAX_RETRYABLE_EXECUTIONS = 2
+
     queue_as :default
 
     limits_concurrency to: 1, key: ->(credential_id) { "slack_dm_sync_#{credential_id}" }
@@ -13,6 +15,16 @@ module SlackDm
       return unless SlackDm::SyncCredential.required_scopes_granted?(credential.scopes)
 
       SlackDm::SyncCredential.new(credential).call
+    rescue SlackApi::RetryableError => e
+      if executions >= MAX_RETRYABLE_EXECUTIONS
+        Rails.logger.warn do
+          "Slack sync job dropped after repeated retryable API failures: " \
+            "credential_id=#{credential_id} executions=#{executions}"
+        end
+        return
+      end
+
+      retry_job wait: e.retry_after.seconds, error: e
     end
   end
 end
