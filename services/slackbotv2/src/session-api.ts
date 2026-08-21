@@ -1,4 +1,5 @@
 import type { RustSessionStreamEvent } from '@centaur/harness-events'
+import { isRetryableCodexErrorNotification } from '@centaur/rendering'
 import type { Attachment, LinkPreview, Message } from 'chat'
 import { renderSlackDisplayText, slackMessagePromptText } from './slack-display-text'
 import type {
@@ -479,7 +480,9 @@ export async function forwardToSessionApi(
       options,
       input.threadId,
       input.harnessType,
-      sessionRequesterMessage(input)
+      sessionRequesterMessage(input),
+      input.restartOnHarnessConflict,
+      input.harnessAssignment
     ),
     sessionApiTimeoutMs(options),
     'create session'
@@ -758,9 +761,9 @@ export function clearConversationNameCacheForTests(): void {
 }
 
 type CreateSessionOutcome = {
-  /** The harness persisted by the API after applying control-plane policy. */
+  /** The harness persisted by the API. */
   harnessType?: string
-  /** The experiment/cohort used to select the persisted harness. */
+  /** The Slack-owned experiment/cohort used to select the persisted harness. */
   harnessAssignment?: SlackbotV2HarnessAssignment
   /** The API restarted the thread onto the requested harness. */
   harnessSwitched: boolean
@@ -770,7 +773,9 @@ async function createSession(
   options: SlackbotV2Options,
   threadId: string,
   harnessType?: string,
-  message?: SlackbotV2ApiMessage
+  message?: SlackbotV2ApiMessage,
+  restartOnHarnessConflict?: boolean,
+  harnessAssignment?: SlackbotV2HarnessAssignment
 ): Promise<CreateSessionOutcome> {
   const requested = harnessType ?? options.defaultHarnessType ?? DEFAULT_HARNESS_TYPE
   // A sticky --claude/--amp/--codex/--nanocodex selection restarts a thread
@@ -780,10 +785,11 @@ async function createSession(
     threadId,
     requested,
     message,
-    harnessType ? 'restart' : undefined
+    (restartOnHarnessConflict ?? Boolean(harnessType)) ? 'restart' : undefined,
+    harnessAssignment
   )
   if (response.ok) {
-    return sessionOutcomeFromResponse(response)
+    return sessionOutcomeFromResponse(response, harnessAssignment)
   }
 
   let body = ''
@@ -798,9 +804,16 @@ async function createSession(
   // harness instead of failing the message.
   const existing = response.status === 409 ? existingHarnessFromConflict(body) : undefined
   if (existing && existing !== requested) {
-    const retry = await postCreateSession(options, threadId, existing, message)
+    const retry = await postCreateSession(
+      options,
+      threadId,
+      existing,
+      message,
+      undefined,
+      harnessAssignment
+    )
     await ensureApiOk(retry, 'create session')
-    return sessionOutcomeFromResponse(retry)
+    return sessionOutcomeFromResponse(retry, harnessAssignment)
   }
   throw new SessionApiError({
     action: 'create session',
@@ -816,7 +829,8 @@ async function postCreateSession(
   threadId: string,
   harnessType: string,
   message?: SlackbotV2ApiMessage,
-  onHarnessConflict?: 'reject' | 'restart'
+  onHarnessConflict?: 'reject' | 'restart',
+  harnessAssignment?: SlackbotV2HarnessAssignment
 ): Promise<Response> {
   const fetchFn = options.fetch ?? fetch
   // The conversation name becomes the session principal's display name in
@@ -833,7 +847,11 @@ async function postCreateSession(
       source: 'slackbotv2',
       platform: 'slack',
       thread_id: threadId,
+      ...slackHomeTeamMetadata(options),
       ...sessionRequesterMetadata(message, requesterIdentity),
+      ...(harnessAssignment
+        ? { harness_assignment: harnessAssignmentMetadata(harnessAssignment) }
+        : {}),
       ...(conversationName ? { slack_conversation_name: conversationName } : {})
     },
     ...(onHarnessConflict ? { on_harness_conflict: onHarnessConflict } : {})
@@ -851,39 +869,38 @@ async function postCreateSession(
   )
 }
 
-async function sessionOutcomeFromResponse(response: Response): Promise<CreateSessionOutcome> {
+async function sessionOutcomeFromResponse(
+  response: Response,
+  harnessAssignment?: SlackbotV2HarnessAssignment
+): Promise<CreateSessionOutcome> {
   try {
     const payload = await response.json()
     const harnessType = isJsonObject(payload) ? stringValue(payload.harness_type) : undefined
-    const harnessAssignment = isJsonObject(payload)
-      ? harnessAssignmentFromResponse(payload.harness_assignment)
-      : undefined
+    const resolvedAssignment =
+      harnessAssignment &&
+      (!harnessType || harnessType === 'codex' || harnessType === 'nanocodex')
+        ? { ...harnessAssignment, cohort: harnessType ?? harnessAssignment.cohort }
+        : undefined
     return {
       harnessSwitched: isJsonObject(payload) && payload.harness_switched === true,
       ...(harnessType ? { harnessType } : {}),
-      ...(harnessAssignment ? { harnessAssignment } : {})
+      ...(resolvedAssignment ? { harnessAssignment: resolvedAssignment } : {})
     }
   } catch {
-    return { harnessSwitched: false }
+    return {
+      harnessSwitched: false,
+      ...(harnessAssignment ? { harnessAssignment } : {})
+    }
   }
 }
 
-function harnessAssignmentFromResponse(value: unknown): SlackbotV2HarnessAssignment | undefined {
-  if (!isJsonObject(value)) return undefined
-  const experiment = stringValue(value.experiment)
-  const requestedHarness = stringValue(value.requested_harness)
-  const cohort = stringValue(value.cohort)
-  const rolloutPercent = value.rollout_percent
-  if (
-    !experiment ||
-    !requestedHarness ||
-    !cohort ||
-    typeof rolloutPercent !== 'number' ||
-    !Number.isFinite(rolloutPercent)
-  ) {
-    return undefined
+function harnessAssignmentMetadata(assignment: SlackbotV2HarnessAssignment): JsonObject {
+  return {
+    experiment: assignment.experiment,
+    requested_harness: assignment.requestedHarness,
+    cohort: assignment.cohort,
+    rollout_percent: assignment.rolloutPercent
   }
-  return { experiment, requestedHarness, cohort, rolloutPercent }
 }
 
 function existingHarnessFromConflict(body: string): string | undefined {
@@ -908,7 +925,10 @@ function sessionRequesterMetadata(
   identity?: RequesterIdentity
 ): JsonObject {
   const slackUserId = identity?.slackUserId ?? messageRequesterUserId(message)
-  const slackTeamId = identity?.slackTeamId ?? messageSlackTeamId(message)
+  // A resolved identity's team is authoritative even when absent: it may have
+  // been deliberately dropped as unverified (see homeGatedTeamId), so it must
+  // not be resurrected from the raw message.
+  const slackTeamId = identity ? identity.slackTeamId : messageSlackTeamId(message)
   const slackChannelId = message ? slackConversationId(message) : undefined
   const slackUserName = identity?.slackUserName ?? message?.author.userName
   const slackDisplayName = identity?.slackDisplayName ?? message?.author.fullName
@@ -929,6 +949,20 @@ function messageSlackTeamId(message: SlackbotV2ApiMessage | undefined): string |
   return message.teamId || slackTeamId(message.raw) || rawSlackString(message.raw, 'team_id')
 }
 
+// Event-derived teams are trusted only when they name the bot's own workspace:
+// Slack does not document the Connect payloads' `team` as the sender's home
+// workspace, and the DM principal foreign id is keyed on this value. A foreign
+// team must come from the users.info override in resolveRequesterIdentity.
+// Without a resolved home team there is nothing to verify against, so the
+// event team passes through.
+function homeGatedTeamId(
+  teamId: string | undefined,
+  options: SlackbotV2Options
+): string | undefined {
+  if (!options.slackHomeTeamId) return teamId
+  return teamId === options.slackHomeTeamId ? teamId : undefined
+}
+
 function messageRequesterUserId(message: SlackbotV2ApiMessage | undefined): string | undefined {
   if (!message) return undefined
   const rawUserId = rawSlackUserId(message.raw)
@@ -944,7 +978,7 @@ async function resolveRequesterIdentity(
   const identity: RequesterIdentity = {
     slackDisplayName: stringValue(message.author.fullName),
     slackMention: slackUserId ? `<@${slackUserId}>` : undefined,
-    slackTeamId: messageSlackTeamId(message),
+    slackTeamId: homeGatedTeamId(messageSlackTeamId(message), options),
     slackUserId,
     slackUserName: stringValue(message.author.userName)
   }
@@ -966,7 +1000,16 @@ async function resolveRequesterIdentity(
     ?? stringValue(profile.real_name)
     ?? stringValue(profile.name)
     ?? identity.slackDisplayName
-  identity.slackEmail = stringValue(profile.email) ?? identity.slackEmail
+  // users.info `team_id` is the user's home workspace — authoritative over
+  // event-derived teams, which can name the delivery workspace for Slack
+  // Connect senders. The DM principal foreign id is keyed on this value.
+  identity.slackTeamId = stringValue(profile.team_id) ?? identity.slackTeamId
+  if (
+    options.slackHomeTeamId
+    && stringValue(profile.team_id) === options.slackHomeTeamId
+  ) {
+    identity.slackEmail = stringValue(profile.email) ?? identity.slackEmail
+  }
   identity.slackUserName = stringValue(profile.name) ?? identity.slackUserName
 
   const github = extractGithubHandleFromSlackProfile(profile)
@@ -984,7 +1027,7 @@ function requesterIdentityCacheKey(
   message: SlackbotV2ApiMessage,
   slackUserId: string
 ): string | undefined {
-  const teamId = message.teamId || slackTeamId(message.raw) || rawSlackString(message.raw, 'team_id')
+  const teamId = messageSlackTeamId(message)
   return teamId ? `slack:${teamId}:${slackUserId}` : `slack:${slackUserId}`
 }
 
@@ -1019,7 +1062,9 @@ function mergeRequesterIdentity(
     slackDisplayName: cached.slackDisplayName ?? fallback.slackDisplayName,
     slackEmail: cached.slackEmail ?? fallback.slackEmail,
     slackMention: fallback.slackMention ?? cached.slackMention,
-    slackTeamId: fallback.slackTeamId ?? cached.slackTeamId,
+    // Cached identities carry the profile-verified team; the fallback's team
+    // is message-derived and home-gated (see homeGatedTeamId).
+    slackTeamId: cached.slackTeamId ?? fallback.slackTeamId,
     slackUserId: fallback.slackUserId ?? cached.slackUserId,
     slackUserName: cached.slackUserName ?? fallback.slackUserName
   }
@@ -1144,6 +1189,17 @@ async function fetchSlackChannelName(
     name
   })
   return name
+}
+
+export async function resolveSlackHomeTeamId(
+  options: SlackbotV2Options
+): Promise<string> {
+  const payload = await slackApiGet(options, 'auth.test', {})
+  const teamId = stringValue(payload?.team_id)
+  if (!teamId) {
+    throw new Error('Slack auth.test failed to resolve the bot home team ID')
+  }
+  return teamId
 }
 
 async function slackApiGet(
@@ -1294,25 +1350,20 @@ async function executeSession(
     // it. Metadata only; the harness receives `model` via input_lines and only
     // when explicitly overridden.
     metadata: sessionMetadata(
+      options,
       message,
       {
         action: 'execute',
         ...(recordedModel ? { model: recordedModel } : {}),
         ...(metadataHarnessType ? { harness_type: metadataHarnessType } : {}),
         ...(harnessAssignment
-          ? {
-              harness_assignment: {
-                experiment: harnessAssignment.experiment,
-                requested_harness: harnessAssignment.requestedHarness,
-                cohort: harnessAssignment.cohort,
-                rollout_percent: harnessAssignment.rolloutPercent
-              }
-            }
+          ? { harness_assignment: harnessAssignmentMetadata(harnessAssignment) }
           : {})
       },
       requesterIdentity
     ),
     input_lines: toCodexInputLines(
+      options,
       message,
       threadId,
       model,
@@ -1442,7 +1493,7 @@ async function toSessionMessage(
     client_message_id: message.id,
     role: message.author.isMe ? 'assistant' : 'user',
     parts: sessionMessageParts(message, requesterIdentity),
-    metadata: sessionMetadata(message, {}, requesterIdentity)
+    metadata: sessionMetadata(options, message, {}, requesterIdentity)
   }
 }
 
@@ -1478,6 +1529,7 @@ function sessionAttachmentPart(attachment: SlackbotV2ApiAttachment): JsonObject 
 }
 
 function sessionMetadata(
+  options: SlackbotV2Options,
   message: SlackbotV2ApiMessage,
   extra: JsonObject = {},
   requesterIdentity?: RequesterIdentity
@@ -1492,9 +1544,15 @@ function sessionMetadata(
     user_id: message.author.userId,
     user_name: message.author.userName,
     ...sessionSlackTextMetadata(message),
+    ...slackHomeTeamMetadata(options),
     ...sessionRequesterMetadata(message, requesterIdentity),
     ...extra
   }
+}
+
+function slackHomeTeamMetadata(options: SlackbotV2Options): JsonObject {
+  const slackHomeTeamId = stringValue(options.slackHomeTeamId)
+  return slackHomeTeamId ? { slack_home_team_id: slackHomeTeamId } : {}
 }
 
 function sessionSlackTextMetadata(message: SlackbotV2ApiMessage): JsonObject {
@@ -1513,6 +1571,7 @@ function sessionSlackTextMetadata(message: SlackbotV2ApiMessage): JsonObject {
 }
 
 function toCodexInputLines(
+  options: SlackbotV2Options,
   message: SlackbotV2ApiMessage,
   threadId: string,
   model?: string,
@@ -1527,6 +1586,7 @@ function toCodexInputLines(
   for (const attachment of executableAttachments(message, contextMessages)) {
     if (!attachment.dataBase64) continue
     const inlineLine = toCodexInputLineWithStaged(
+      options,
       message,
       threadId,
       staged,
@@ -1549,6 +1609,7 @@ function toCodexInputLines(
   }
   lines.push(
     toCodexInputLineWithStaged(
+      options,
       message,
       threadId,
       staged,
@@ -1577,6 +1638,7 @@ function executableAttachments(
 }
 
 function toCodexInputLineWithStaged(
+  options: SlackbotV2Options,
   message: SlackbotV2ApiMessage,
   threadId: string,
   staged: Map<SlackbotV2ApiAttachment, string>,
@@ -1590,7 +1652,7 @@ function toCodexInputLineWithStaged(
   return JSON.stringify({
     type: 'user',
     thread_key: threadId,
-    trace_metadata: sessionMetadata(message, { action: 'execute' }, requesterIdentity),
+    trace_metadata: sessionMetadata(options, message, { action: 'execute' }, requesterIdentity),
     ...(model ? { model } : {}),
     ...(provider ? { provider } : {}),
     ...(reasoning ? { reasoning } : {}),
@@ -2060,6 +2122,7 @@ function isTerminalCodexOutputLine(line: string): boolean {
     return false
   }
   if (!isJsonObject(payload)) return false
+  if (isRetryableCodexErrorNotification(payload)) return false
 
   return (
     payload.type === 'turn.completed' ||

@@ -12,9 +12,7 @@ module SlackDm
     CONVERSATIONS_MEMBERS_ENDPOINT = "https://slack.com/api/conversations.members"
     CONVERSATIONS_HISTORY_ENDPOINT = "https://slack.com/api/conversations.history"
     CONVERSATIONS_REPLIES_ENDPOINT = "https://slack.com/api/conversations.replies"
-
-    SlackApiError = Class.new(StandardError)
-
+    API_READ_TIMEOUT_SECONDS = 120
     class << self
       attr_accessor :slack_api_http
 
@@ -36,10 +34,11 @@ module SlackDm
       end
     end
 
-    def initialize(credential, api_client: CentaurApiClient.new, slack_api_http: nil)
+    def initialize(credential, api_client: nil, slack_api_http: nil, http_client: nil)
       @credential = credential
-      @api_client = api_client
+      @api_client = api_client || CentaurApiClient.new(read_timeout: API_READ_TIMEOUT_SECONDS)
       @slack_api_http = slack_api_http || self.class.slack_api_http
+      @http_client = http_client
       @run_id = "sdms_#{SecureRandom.hex(16)}"
       @messages_fetched = 0
       @replies_fetched = 0
@@ -61,6 +60,7 @@ module SlackDm
         sync_history(conversation, home_team_id, checkpoints[conversation.fetch("id")], batch)
         batch[:run][:conversations_synced] += 1
       rescue StandardError => e
+        raise if e.is_a?(SlackApi::RetryableError)
         raise if Rails.env.test?
 
         batch[:run][:conversations_failed] += 1
@@ -75,7 +75,7 @@ module SlackDm
       batch[:run][:replies_fetched] = @replies_fetched
       batch[:run][:replies_upserted] = batch[:messages].count { |message| message[:parent_message_ts].present? }
       batch[:run][:finished] = true
-      @api_client.ingest_slack_dm_sync_batch(batch)
+      @api_client.ingest_slack_dm_sync_batch(sanitize_for_postgres(batch))
     end
 
     private
@@ -122,7 +122,7 @@ module SlackDm
 
     def list_conversations
       types = self.class.supported_conversation_types(@credential.scopes)
-      raise SlackApiError, "Slack credential has no supported conversation scopes" if types.empty?
+      raise SlackApi::Error, "Slack credential has no supported conversation scopes" if types.empty?
 
       each_page(
         CONVERSATIONS_LIST_ENDPOINT,
@@ -173,7 +173,7 @@ module SlackDm
         complete = false if truncated
       end
       unless complete
-        raise SlackApiError,
+        raise SlackApi::Error,
               "Slack membership pagination truncated for #{conversation.fetch('id')}"
       end
 
@@ -187,7 +187,7 @@ module SlackDm
       return "im" if conversation["is_im"]
       return "private_channel" if conversation["is_private"]
 
-      raise SlackApiError, "Unsupported Slack conversation #{conversation['id']}"
+      raise SlackApi::Error, "Unsupported Slack conversation #{conversation['id']}"
     end
 
     def sync_history(conversation, home_team_id, checkpoint, batch)
@@ -322,18 +322,13 @@ module SlackDm
         )
       end
 
-      response = HttpClient.new(open_timeout: slack_timeout, read_timeout: slack_timeout).get(
+      http_client = @http_client || HttpClient.new(open_timeout: slack_timeout, read_timeout: slack_timeout)
+      response = http_client.get(
         endpoint,
         params: params,
         headers: { "Authorization" => "Bearer #{@credential.access_token}" }
       )
-      raise SlackApiError, "Slack API rate limited" if response.status == 429
-
-      parsed = response.json
-      raise SlackApiError, "Slack API returned HTTP #{response.status}" unless response.success?
-      raise SlackApiError, "Slack API returned #{parsed['error']}" unless parsed["ok"] == true
-
-      parsed
+      SlackApi.parse_response!(response, max_rate_limit_wait: rate_limit_max_wait)
     end
 
     def max_slack_ts(left, right)
@@ -348,7 +343,23 @@ module SlackDm
       [ seconds.to_i, micros.to_s.ljust(6, "0")[0, 6].to_i ]
     end
 
+    def sanitize_for_postgres(value)
+      case value
+      when Hash
+        value.to_h do |key, nested_value|
+          [ sanitize_for_postgres(key), sanitize_for_postgres(nested_value) ]
+        end
+      when Array
+        value.map { |nested_value| sanitize_for_postgres(nested_value) }
+      when String
+        value.delete("\u0000")
+      else
+        value
+      end
+    end
+
     def slack_timeout = positive_env("SLACK_DM_SYNC_TIMEOUT_SECONDS", 20)
+    def rate_limit_max_wait = positive_env("SLACK_DM_SYNC_RATE_LIMIT_MAX_WAIT_SECONDS", 5.minutes.to_i)
     def list_page_size = positive_env("SLACK_DM_SYNC_LIST_PAGE_SIZE", 200)
     def list_max_pages = positive_env("SLACK_DM_SYNC_LIST_MAX_PAGES", 10)
     def members_page_size = positive_env("SLACK_DM_SYNC_MEMBERS_PAGE_SIZE", 200)

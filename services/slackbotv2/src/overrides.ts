@@ -4,6 +4,7 @@
  *                                                  pick the harness for the thread
  *   --bedrock                                    codex via the AWS Bedrock provider
  *   --meta                                       codex via Meta AI direct
+ *   --provider <name>                            codex via a configured provider
  *   --model <name> (or --model=<name>)           pick the model within that harness
  *   -rsn <effort> (or -rsn=<effort>)             per-turn reasoning effort (codex/nanocodex)
  *   --fable | --opus | --sonnet | --haiku        model shortcuts (imply claude-code)
@@ -44,13 +45,16 @@ const HARNESS_FLAGS: Record<string, string> = {
   'claude-code': 'claudecode',
   claudecode: 'claudecode',
   codex: 'codex',
+  hermes: 'hermes',
   nanocodex: 'nanocodex'
 }
 
 // Provider flags select a model provider within the codex harness (and imply
 // it). Bedrock rides codex's built-in `amazon-bedrock` provider, whose wire
 // value is passed through as the blocks-protocol `provider` field.
-const PROVIDER_FLAGS: Record<string, { provider: string; harnessType: string }> = {
+type ProviderMapping = { provider: string; harnessType: string; model?: string }
+
+const PROVIDER_FLAGS: Record<string, ProviderMapping> = {
   bedrock: { provider: 'amazon-bedrock', harnessType: 'codex' },
   meta: { provider: 'responses', harnessType: 'codex' }
 }
@@ -72,7 +76,7 @@ const MODEL_SHORTCUTS: Record<string, { harnessType: string; model: string }> =
     ])
   )
 
-const STRATEGY_HARNESSES = new Set(['amp', 'claudecode', 'codex', 'nanocodex'])
+const STRATEGY_HARNESSES = new Set(['amp', 'claudecode', 'codex', 'hermes', 'nanocodex'])
 const STRATEGY_PROVIDERS = new Set(['amazon-bedrock', 'openrouter', 'responses'])
 const STRATEGY_REASONING_EFFORTS = new Set([
   'none',
@@ -113,6 +117,11 @@ const FLAG_VALUE_BOUNDARY = String.raw`(?=[^\S\r\n]|\r?\n|\r|<br\s*/?>|$)`
 
 const MODEL_FLAG_PATTERN = new RegExp(
   String.raw`(?:^|\s)--model${MODEL_VALUE_SEPARATOR}([A-Za-z0-9._/-]+)${FLAG_VALUE_BOUNDARY}`,
+  'i'
+)
+
+const PROVIDER_FLAG_PATTERN = new RegExp(
+  String.raw`(?:^|\s)--provider${MODEL_VALUE_SEPARATOR}([A-Za-z][A-Za-z0-9_-]*)${FLAG_VALUE_BOUNDARY}`,
   'i'
 )
 
@@ -162,6 +171,15 @@ export function extractMessageOverrides(text: string): MessageOverrides {
     }
   }
 
+  const providerMatch = PROVIDER_FLAG_PATTERN.exec(cleaned)
+  if (providerMatch) {
+    const mapping = providerMapping(providerMatch[1]!)!
+    provider = mapping.provider
+    harnessType ??= mapping.harnessType
+    model ??= mapping.model
+    cleaned = stripMatch(cleaned, providerMatch)
+  }
+
   for (const [flag, harness] of Object.entries(HARNESS_FLAGS)) {
     const match = flagPattern(flag).exec(cleaned)
     if (!match) continue
@@ -182,6 +200,7 @@ export function extractMessageOverrides(text: string): MessageOverrides {
     if (!match) continue
     provider ??= mapping.provider
     harnessType ??= mapping.harnessType
+    model ??= mapping.model
     cleaned = stripMatch(cleaned, match)
   }
 
@@ -251,7 +270,8 @@ export function validateStrategyOverrides(
  * `{ harness, model, provider, reasoning }` config through the same vocabulary
  * as the flag parser (harness/provider/model aliases; a provider implies its
  * harness, like `--bedrock`). Fields are independent; unrecognized harness /
- * provider / reasoning values are reported via `onError` and dropped.
+ * reasoning values and malformed provider ids are reported via `onError` and
+ * dropped.
  */
 export function normalizeHarnessOverrides(
   raw: { harness?: unknown; model?: unknown; provider?: unknown; reasoning?: unknown },
@@ -270,12 +290,13 @@ export function normalizeHarnessOverrides(
 
   const providerRaw = cleanString(raw.provider)
   if (providerRaw) {
-    const mapping = PROVIDER_FLAGS[providerRaw.toLowerCase()]
+    const mapping = providerMapping(providerRaw)
     if (mapping) {
       provider = mapping.provider
       harnessType ??= mapping.harnessType // a provider implies its harness, like --bedrock
+      model ??= mapping.model
     } else {
-      onError?.(`unknown provider "${providerRaw}"`)
+      onError?.(`invalid provider id "${providerRaw}"`)
     }
   }
 
@@ -295,6 +316,30 @@ function cleanString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   return trimmed === '' ? undefined : trimmed
+}
+
+function providerMapping(value: string): ProviderMapping | undefined {
+  const provider = value.toLowerCase()
+  if (!/^[a-z][a-z0-9_-]*$/.test(provider)) return undefined
+  return (
+    PROVIDER_FLAGS[provider] ?? {
+      provider,
+      harnessType: 'codex',
+      model: customProviderDefaultModel(provider)
+    }
+  )
+}
+
+function customProviderDefaultModel(provider: string): string | undefined {
+  const raw = process.env.CODEX_CUSTOM_PROVIDERS
+  if (!raw) return undefined
+  try {
+    const config = JSON.parse(raw)?.[provider]
+    const model = config?.defaultModel
+    return typeof model === 'string' && model.trim() ? model.trim() : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function flagPattern(flag: string): RegExp {

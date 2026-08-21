@@ -1,5 +1,7 @@
 import { createSlackbotV2, type SlackbotV2Options } from './index'
 import { parseChannelDefaults } from './channel-defaults'
+import { resolveSlackHomeTeamId } from './session-api'
+import { resolveSlackBotUserId } from './slack-user'
 import {
   createFlagMessageOverridesStrategy,
   createOpenAiMessageOverridesStrategy
@@ -9,6 +11,14 @@ const port = numberEnv('PORT', 3002)
 const apiUrl = stringEnv('CENTAUR_API_URL', 'http://127.0.0.1:8080')
 const botToken = requiredEnv('SLACK_BOT_TOKEN')
 const signingSecret = requiredEnv('SLACK_SIGNING_SECRET')
+const slackApiUrl = optionalEnv('SLACK_API_URL')
+const slackApiTimeoutMs = optionalNumberEnv('SLACKBOTV2_SLACK_API_TIMEOUT_MS')
+const botUserId = await resolveSlackBotUserId({
+  botToken,
+  configuredBotUserId: optionalEnv('SLACK_BOT_USER_ID'),
+  slackApiUrl,
+  timeoutMs: slackApiTimeoutMs
+})
 const messageOverridesStrategyMode = messageOverridesStrategyModeEnv(
   'SLACKBOTV2_MESSAGE_OVERRIDES_STRATEGY'
 )
@@ -41,9 +51,13 @@ const options: SlackbotV2Options = {
   activitySummaryStatusEnabled: booleanEnv('SLACKBOTV2_ACTIVITY_SUMMARY_STATUS_ENABLED', false),
   autoJoinCreatedChannels: booleanEnv('SLACKBOTV2_AUTO_JOIN_CREATED_CHANNELS', false),
   botToken,
-  botUserId: optionalEnv('SLACK_BOT_USER_ID'),
+  botUserId,
   channelDefaults: parseChannelDefaults(optionalEnv('SLACKBOTV2_CHANNEL_DEFAULTS'), reason =>
     consoleLogger.warn('slackbotv2 SLACKBOTV2_CHANNEL_DEFAULTS', { reason })
+  ),
+  codexNanocodexRolloutPercent: percentEnv(
+    'SLACKBOTV2_CODEX_NANOCODEX_ROLLOUT_PERCENT',
+    0
   ),
   consolePublicUrl: optionalEnv('CENTAUR_CONSOLE_PUBLIC_URL'),
   responseMetadataMode: responseMetadataModeEnv('SLACKBOTV2_RESPONSE_METADATA_MODE'),
@@ -76,12 +90,13 @@ const options: SlackbotV2Options = {
   ),
   sessionApiTimeoutMs: optionalNumberEnv('SLACKBOTV2_SESSION_API_TIMEOUT_MS'),
   signingSecret,
-  slackApiUrl: optionalEnv('SLACK_API_URL'),
-  slackApiTimeoutMs: optionalNumberEnv('SLACKBOTV2_SLACK_API_TIMEOUT_MS'),
+  slackApiUrl,
+  slackApiTimeoutMs,
   stateKeyPrefix: optionalEnv('SLACKBOTV2_STATE_KEY_PREFIX'),
   userName: stringEnv('SLACKBOTV2_USER_NAME', 'centaur'),
   logger: consoleLogger
 }
+options.slackHomeTeamId = await resolveSlackHomeTeamId(options)
 
 const { app } = createSlackbotV2(options)
 const server = Bun.serve({
@@ -148,6 +163,16 @@ function responseMetadataModeEnv(name: string): 'first' | 'always' | 'never' {
   if (!value) return 'first'
   if (value === 'first' || value === 'always' || value === 'never') return value
   throw new Error(`${name} must be "first", "always", or "never"`)
+}
+
+function percentEnv(name: string, fallback: number): number {
+  const value = optionalEnv(name)
+  if (!value) return fallback
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 100) {
+    throw new Error(`${name} must be an integer from 0 to 100`)
+  }
+  return parsed
 }
 
 function createMessageOverridesStrategy(): SlackbotV2Options['messageOverridesStrategy'] {
