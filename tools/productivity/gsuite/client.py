@@ -1,4 +1,4 @@
-"""GSuite API client for Gmail, Calendar, and Drive."""
+"""GSuite API client for Gmail, Calendar, Directory, and Drive."""
 
 import base64
 import io
@@ -6,6 +6,7 @@ import mimetypes
 import os
 import re
 import urllib.request
+from collections.abc import Callable
 from email.mime.text import MIMEText
 from pathlib import Path
 from urllib.parse import quote, urljoin, urlparse, urlsplit
@@ -14,7 +15,7 @@ import httplib2
 import socks
 from google.auth.credentials import AnonymousCredentials
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
+from googleapiclient.http import HttpRequest, MediaIoBaseDownload, MediaIoBaseUpload
 
 from centaur_sdk import current_thread_key, save_attachment, secret
 
@@ -83,6 +84,11 @@ def get_gmail_service():
 def get_calendar_service():
     """Get authenticated Calendar service."""
     return build("calendar", "v3", http=_build_http())
+
+
+def get_people_service():
+    """Get the People service using the shared proxy transport."""
+    return build("people", "v1", http=_build_http())
 
 
 def get_drive_service():
@@ -1759,6 +1765,101 @@ def docs_get_text(document_id: str) -> str:
         return extract_text_from_content(content)
 
 
+DRIVE_COMMENT_FIELDS = (
+    "id,content,htmlContent,anchor,quotedFileContent,resolved,deleted,"
+    "createdTime,modifiedTime,assigneeEmailAddress,mentionedEmailAddresses,"
+    "author(displayName,photoLink,me),"
+    "replies(id,content,htmlContent,action,deleted,createdTime,modifiedTime,"
+    "assigneeEmailAddress,mentionedEmailAddresses,author(displayName,photoLink,me))"
+)
+
+
+def _normalize_drive_comment_user(user: dict) -> dict:
+    return {
+        "display_name": user.get("displayName", ""),
+        "photo_link": user.get("photoLink", ""),
+        "is_me": user.get("me", False),
+    }
+
+
+def _normalize_drive_reply(reply: dict) -> dict:
+    return {
+        "id": reply.get("id", ""),
+        "content": reply.get("content", ""),
+        "html_content": reply.get("htmlContent", ""),
+        "action": reply.get("action", ""),
+        "deleted": reply.get("deleted", False),
+        "created_time": reply.get("createdTime", ""),
+        "modified_time": reply.get("modifiedTime", ""),
+        "author": _normalize_drive_comment_user(reply.get("author") or {}),
+        "assignee_email": reply.get("assigneeEmailAddress", ""),
+        "mentioned_emails": reply.get("mentionedEmailAddresses") or [],
+    }
+
+
+def _normalize_drive_comment(comment: dict) -> dict:
+    quoted_content = comment.get("quotedFileContent") or {}
+    return {
+        "id": comment.get("id", ""),
+        "content": comment.get("content", ""),
+        "html_content": comment.get("htmlContent", ""),
+        "anchor": comment.get("anchor", ""),
+        "quoted_file_content": {
+            "mime_type": quoted_content.get("mimeType", ""),
+            "value": quoted_content.get("value", ""),
+        },
+        "resolved": comment.get("resolved", False),
+        "deleted": comment.get("deleted", False),
+        "created_time": comment.get("createdTime", ""),
+        "modified_time": comment.get("modifiedTime", ""),
+        "author": _normalize_drive_comment_user(comment.get("author") or {}),
+        "assignee_email": comment.get("assigneeEmailAddress", ""),
+        "mentioned_emails": comment.get("mentionedEmailAddresses") or [],
+        "replies": [_normalize_drive_reply(reply) for reply in comment.get("replies", [])],
+    }
+
+
+def docs_list_comments(
+    document_id: str,
+    max_results: int = 100,
+    include_deleted: bool = False,
+) -> list[dict]:
+    """List comments and replies on a Google Doc.
+
+    Args:
+        document_id: The document ID
+        max_results: Maximum number of comments to return
+        include_deleted: Whether to include deleted comments and replies
+
+    Returns:
+        Comments with their quoted document content and replies
+    """
+    if max_results < 1:
+        raise ValueError("max_results must be at least 1")
+
+    service = get_drive_service()
+    comments: list[dict] = []
+    page_token: str | None = None
+
+    while len(comments) < max_results:
+        request_args = {
+            "fileId": document_id,
+            "pageSize": min(100, max_results - len(comments)),
+            "includeDeleted": include_deleted,
+            "fields": f"nextPageToken,comments({DRIVE_COMMENT_FIELDS})",
+        }
+        if page_token:
+            request_args["pageToken"] = page_token
+
+        result = service.comments().list(**request_args).execute()
+        comments.extend(_normalize_drive_comment(comment) for comment in result.get("comments", []))
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+
+    return comments[:max_results]
+
+
 def docs_append(
     document_id: str,
     text: str,
@@ -2149,6 +2250,41 @@ def sheets_read(spreadsheet_id: str, range_notation: str = "A1:Z1000") -> dict:
         .execute()
     )
 
+    return _sheets_read_result(spreadsheet_id, range_notation, result)
+
+
+def sheets_batch_read(spreadsheet_id: str, range_notations: list[str]) -> list[dict]:
+    """Read data from one Google Sheet, across several ranges.
+
+    Args:
+        spreadsheet_id: The spreadsheet ID (from URL)
+        range_notations: A1 notation range (e.g., "Sheet1!A1:D10" or "A1:Z1000")
+
+    Returns:
+        List of dicts in requested order, each with the same spreadsheet_id,
+        range, headers, rows, and raw_values fields as sheets_read.
+        The first row of each range is treated as its headers.
+    """
+    if not range_notations:
+        raise ValueError("Provide at least one range")
+
+    service = get_sheets_service()
+
+    result = (
+        service.spreadsheets()
+        .values()
+        .batchGet(spreadsheetId=spreadsheet_id, ranges=range_notations)
+        .execute()
+    )
+
+    return [
+        _sheets_read_result(spreadsheet_id, range_notation, value_range)
+        for range_notation, value_range in zip(range_notations, result["valueRanges"], strict=True)
+    ]
+
+
+def _sheets_read_result(spreadsheet_id: str, range_notation: str, result: dict) -> dict:
+    """Normalize a values response for single and batch reads."""
     values = result.get("values", [])
 
     if not values:
@@ -2662,8 +2798,89 @@ def analytics_get_daily_users(
     )
 
 
+# Directory functions
+
+
+def directory_list() -> list[dict]:
+    """List all visible Directory profiles.
+
+    Returns:
+        People with resource_name, name, and email_addresses
+    """
+    service = get_people_service()
+    request_args = {
+        "readMask": "names,emailAddresses",
+        "sources": ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"],
+        "pageSize": 1000,
+    }
+
+    return _paginate_directory_people(service.people().listDirectoryPeople, request_args)
+
+
+def directory_search(query: str, max_results: int = 20) -> list[dict]:
+    """Search Directory profiles.
+
+    Args:
+        query: People API prefix search query, e.g. name, email
+        max_results: Maximum number of people to return
+
+    Returns:
+        People with resource_name, name, and email_addresses.
+    """
+    service = get_people_service()
+    request_args = {
+        "readMask": "names,emailAddresses",
+        "sources": ["DIRECTORY_SOURCE_TYPE_DOMAIN_PROFILE"],
+        "query": query,
+        "pageSize": max_results,
+    }
+
+    return _paginate_directory_people(
+        service.people().searchDirectoryPeople, request_args, max_results=max_results
+    )
+
+
+def _paginate_directory_people(
+    request: Callable[..., HttpRequest],
+    request_args: dict,
+    max_results: int | None = None,
+) -> list[dict]:
+    """Execute directory requests, paginate, and return normalized people."""
+    people: list[dict] = []
+
+    while max_results is None or len(people) < max_results:
+        result = request(**request_args).execute()
+
+        for person in result.get("people") or []:
+            names = person.get("names") or []
+            primary_name = next(
+                (name for name in names if (name.get("metadata") or {}).get("primary")),
+                names[0] if names else {},
+            )
+            people.append(
+                {
+                    "resource_name": person.get("resourceName", ""),
+                    "name": primary_name.get("displayName", ""),
+                    "email_addresses": [
+                        email["value"]
+                        for email in person.get("emailAddresses") or []
+                        if email.get("value")
+                    ],
+                }
+            )
+
+        page_token = result.get("nextPageToken")
+        if not page_token:
+            break
+        # People requires every other parameter, including pageSize, to stay
+        # unchanged while following a page token.
+        request_args["pageToken"] = page_token
+
+    return people[:max_results]
+
+
 class GSuiteClient:
-    """GSuite API client wrapping Gmail, Calendar, Drive, Docs, Sheets, Slides, and Analytics."""
+    """GSuite client for Gmail, Calendar, Directory, Drive, Docs, Sheets, Slides, and Analytics."""
 
     # --- Gmail ---
 
@@ -3226,6 +3443,28 @@ class GSuiteClient:
         """
         return docs_get_text(document_id)
 
+    def docs_list_comments(
+        self,
+        document_id: str,
+        max_results: int = 100,
+        include_deleted: bool = False,
+    ) -> list[dict]:
+        """List comments and replies on a Google Doc.
+
+        Args:
+            document_id: The document ID
+            max_results: Maximum number of comments to return
+            include_deleted: Whether to include deleted comments and replies
+
+        Returns:
+            Comments with their quoted document content and replies
+        """
+        return docs_list_comments(
+            document_id,
+            max_results=max_results,
+            include_deleted=include_deleted,
+        )
+
     def docs_append(
         self,
         document_id: str,
@@ -3423,6 +3662,15 @@ class GSuiteClient:
             Dict with spreadsheet_id, range, headers, and rows (list of dicts)
         """
         return sheets_read(spreadsheet_id, range_notation=range_notation)
+
+    def sheets_batch_read(self, spreadsheet_id: str, range_notations: list[str]) -> list[dict]:
+        """Read multiple A1 ranges from one spreadsheet in one API request.
+
+        Returns a list of dicts in requested order with the same fields as
+        sheets_read. The range list must be non-empty; the first row of each
+        range is treated as its headers.
+        """
+        return sheets_batch_read(spreadsheet_id, range_notations)
 
     def sheets_update(
         self,
@@ -3636,6 +3884,16 @@ class GSuiteClient:
     ) -> dict:
         """Get daily active users over time."""
         return analytics_get_daily_users(start_date=start_date, end_date=end_date)
+
+    # --- Directory ---
+
+    def directory_list(self) -> list[dict]:
+        """List all visible Workspace directory profiles with names and emails."""
+        return directory_list()
+
+    def directory_search(self, query: str, max_results: int = 20) -> list[dict]:
+        """Search Workspace directory profiles by prefix query."""
+        return directory_search(query, max_results=max_results)
 
 
 def _client() -> GSuiteClient:

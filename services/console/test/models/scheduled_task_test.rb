@@ -26,6 +26,16 @@ class ScheduledTaskTest < ActiveSupport::TestCase
     end
   end
 
+  test "allows a task without a recurring schedule" do
+    task = ScheduledTask.create!(valid_attributes(cron_expression: nil))
+
+    assert_nil task.cron_expression
+    assert_nil task.next_run_at
+    assert_equal "manual", task.schedule_preset
+    assert_equal "Manual only", task.schedule_label
+    assert_nil ScheduledTask.cron_for("manual")
+  end
+
   test "maps the requested weekday presets to cron schedules" do
     assert_equal "0 9 * * 1-5", ScheduledTask.cron_for("weekdays")
     assert_equal "0 9 * * 1", ScheduledTask.cron_for("mondays")
@@ -96,6 +106,7 @@ class ScheduledTaskTest < ActiveSupport::TestCase
         prompt: "Summarize open incidents.",
         principal: principal.foreign_id,
         channel: "C0123456789",
+        slack_user_id: "U0123456789",
         scheduled_task_id: task.oid,
         scheduled_task_name: "Incident summary"
       },
