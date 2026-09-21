@@ -14,6 +14,7 @@ class ScheduledTask < ApplicationRecord
     "fridays" => "0 9 * * 5"
   }.freeze
   SCHEDULE_PRESET_LABELS = {
+    "manual" => "Manual only",
     "daily" => "Every day",
     "weekdays" => "Every weekday",
     "mondays" => "Mondays",
@@ -40,8 +41,8 @@ class ScheduledTask < ApplicationRecord
 
   scope :due, ->(now = Time.current) { where(enabled: true, next_run_at: ..now) }
 
-  normalizes :name, :delivery_channel, :cron_expression, :timezone,
-             with: ->(value) { value.to_s.strip }
+  normalizes :name, :delivery_channel, :timezone, with: ->(value) { value.to_s.strip }
+  normalizes :cron_expression, with: ->(value) { value.to_s.strip.presence }
   normalizes :prompt, with: ->(value) { value.to_s.gsub("\r\n", "\n").strip }
 
   before_validation :set_default_timezone
@@ -55,12 +56,12 @@ class ScheduledTask < ApplicationRecord
                                  with: DELIVERY_DESTINATION_FORMAT,
                                  message: "must be a Slack channel or user ID"
                                }
-  validates :cron_expression, presence: true
   validates :timezone, presence: true
   validate :cron_schedule_is_valid
   validate :delivery_destination_is_available_to_author
 
   def self.cron_for(preset, custom_expression = nil, custom_days: [], custom_time: nil)
+    return if preset.to_s == "manual"
     return custom_expression.to_s.strip if preset.to_s == "cron"
     return custom_cron(custom_days, custom_time) if preset.to_s == "custom"
 
@@ -82,10 +83,14 @@ class ScheduledTask < ApplicationRecord
   end
 
   def schedule_preset
+    return "manual" if cron_expression.blank?
+
     SCHEDULE_PRESETS.key(cron_expression) || "custom"
   end
 
   def schedule_label
+    return "Manual only" if cron_expression.blank?
+
     preset_label = SCHEDULE_LABELS[schedule_preset]
     return preset_label if preset_label.present?
 
@@ -109,7 +114,8 @@ class ScheduledTask < ApplicationRecord
   end
 
   def api_input
-    unless SlackDeliveryPolicy.new(author).allowed?(delivery_channel)
+    delivery_policy = SlackDeliveryPolicy.new(author)
+    unless delivery_policy.allowed?(delivery_channel)
       raise DeliveryDestinationUnavailable, "Slack delivery destination is no longer available to the author"
     end
 
@@ -117,6 +123,7 @@ class ScheduledTask < ApplicationRecord
       prompt: prompt,
       principal: execution_principal.foreign_id,
       channel: delivery_channel,
+      slack_user_id: delivery_policy.slack_user_id,
       scheduled_task_id: oid,
       scheduled_task_name: name
     }
@@ -186,10 +193,12 @@ class ScheduledTask < ApplicationRecord
   end
 
   def refresh_next_run_at
-    self.next_run_at = enabled? ? next_occurrence : nil
+    self.next_run_at = enabled? && cron_expression.present? ? next_occurrence : nil
   end
 
   def cron_schedule_is_valid
+    return if cron_expression.blank?
+
     errors.add(:cron_expression, "is not a valid cron schedule") unless parsed_cron
   end
 
