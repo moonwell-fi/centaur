@@ -176,7 +176,7 @@ jobs:
           retention-days: 1
 
   merge:
-    runs-on: depot-ubuntu-24.04-16
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     needs: build
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork }}
     strategy:
@@ -249,7 +249,7 @@ jobs:
     name: Notify Paradigm Overlay
     needs: merge
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     environment: centaur-paradigm-dispatch
     permissions: {}
     steps:
