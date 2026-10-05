@@ -1,6 +1,7 @@
 """CLI for GSuite operations - Gmail, Calendar, Directory, Drive."""
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import typer
@@ -402,6 +403,7 @@ def calendar_create(
     description: str = typer.Option(None, "--description", "-d", help="Event description"),
     location: str = typer.Option(None, "--location", "-l", help="Event location"),
     attendees: str = typer.Option(None, "--attendees", "-a", help="Comma-separated emails"),
+    meet: bool = typer.Option(False, "--meet", "-m", help="Add a Google Meet link"),
 ):
     """Create a calendar event.
 
@@ -409,6 +411,7 @@ def calendar_create(
         gsuite calendar create "Team Meeting" "2024-01-15T10:00:00Z" "2024-01-15T11:00:00Z"
         gsuite calendar create "All-day event" "2024-01-15" "2024-01-16"
         gsuite calendar create "Meeting" "..." "..." -a "a@b.com,c@d.com" -l "Room 1"
+        gsuite calendar create "Standup" "..." "..." --meet
     """
     from .client import calendar_create_event
 
@@ -423,9 +426,12 @@ def calendar_create(
             description=description,
             location=location,
             attendees=attendee_list,
+            conference=meet,
         )
         console.print("[green]✓ Event created[/]")
         console.print(f"[dim]{result['html_link']}[/]")
+        if result.get("meet_link"):
+            console.print(f"[dim]{result['meet_link']}[/]")
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)
@@ -441,6 +447,12 @@ def calendar_update(
     description: str = typer.Option(None, "--description", "-d", help="New description"),
     location: str = typer.Option(None, "--location", "-l", help="New location"),
     add_attendees: str = typer.Option(None, "--add", "-a", help="Comma-separated emails to add"),
+    meet: bool = typer.Option(False, "--meet", "-m", help="Add a Google Meet link"),
+    notify: bool = typer.Option(
+        None,
+        "--notify/--no-notify",
+        help="Email attendees (default: on a material change to an event with attendees)",
+    ),
 ):
     """Update a calendar event.
 
@@ -448,6 +460,8 @@ def calendar_update(
         gsuite calendar update "event_id" --summary "New Title"
         gsuite calendar update "event_id" --start "2024-01-15T14:00:00Z" --end "2024-01-15T15:00:00Z"
         gsuite calendar update "event_id" --add "a@b.com,c@d.com"
+        gsuite calendar update "event_id" --meet
+        gsuite calendar update "event_id" --start "..." --end "..." --no-notify
     """
     from .client import calendar_update_event
 
@@ -463,12 +477,40 @@ def calendar_update(
             description=description,
             location=location,
             add_attendees=attendee_list,
+            conference=meet,
+            notify=notify,
         )
         console.print("[green]✓ Event updated[/]")
         console.print(f"[dim]{result['html_link']}[/]")
+        if result.get("meet_link"):
+            console.print(f"[dim]{result['meet_link']}[/]")
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)
+
+
+@calendar_app.command("delete")
+def calendar_delete(
+    event_id: str = typer.Argument(..., help="Event ID"),
+    calendar: str = typer.Option("primary", "--calendar", "-c", help="Calendar ID"),
+    notify: bool = typer.Option(
+        True, "--notify/--no-notify", help="Email attendees that the event was cancelled"
+    ),
+):
+    """Delete a calendar event.
+
+    Examples:
+        gsuite calendar delete "event_id"
+        gsuite calendar delete "event_id" --no-notify
+    """
+    from .client import calendar_delete_event
+
+    try:
+        calendar_delete_event(event_id=event_id, calendar_id=calendar, notify=notify)
+        console.print("[green]✓ Event deleted[/]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/]")
+        raise typer.Exit(1) from e
 
 
 @calendar_app.command("rsvp")
@@ -578,6 +620,35 @@ def drive_list(
         size = f"{f['size'] / 1024:.1f} KB" if f["size"] else "-"
         modified = f["modified_time"][:10] if f["modified_time"] else ""
         table.add_row(f["id"], name, mime, size, modified)
+
+    console.print(table)
+
+
+@drive_app.command("drives")
+def drive_drives(
+    limit: int = typer.Option(100, "--limit", "-n", help="Max results"),
+):
+    """List the shared drives the account is a member of.
+
+    Use a drive ID with `gsuite drive list --folder <id>` to browse its top level.
+
+    Examples:
+        gsuite drive drives
+    """
+    from .client import drive_list_drives
+
+    results = drive_list_drives(max_results=limit)
+
+    if not results:
+        console.print("[yellow]No shared drives found.[/]")
+        raise typer.Exit()
+
+    table = Table(title=f"Shared Drives ({len(results)})")
+    table.add_column("Name", style="cyan", max_width=40)
+    table.add_column("ID", style="dim")
+
+    for d in results:
+        table.add_row(d["name"][:40], d["id"])
 
     console.print(table)
 
@@ -1544,38 +1615,34 @@ def _get_channel_member_emails_via_cli(channel: str) -> list[str]:
     return data.get("emails", [])
 
 
-@docs_app.command("create")
-def docs_create_cmd(
-    title: str = typer.Argument(..., help="Document title"),
-    channel: str | None = typer.Option(
-        None, "--channel", help="Optional Slack channel to share with"
-    ),
-    owner: str = typer.Option(..., "--owner", help="Email of new owner (required)"),
-    content: str = typer.Option(None, "--content", "-c", help="Initial content"),
-):
-    """Create a new Google Doc with automatic permission setup.
+def _create_and_share(
+    kind: str,
+    create: Callable[[], dict],
+    id_key: str,
+    channel: str | None,
+    owner: str | None,
+    folder: str | None,
+) -> None:
+    """Create a native Google file, then share it and transfer ownership.
 
-    This command:
-    1. Creates the document
-    2. Shares with all channel members when --channel is provided (writer role)
-    3. Transfers ownership to the specified owner
-
-    The original owner (service account) is automatically downgraded to editor
-    by Google Drive when ownership is transferred. An Okta Workflows configuration
-    removes the service account's editor role permissions after 7 days.
-
-    Examples:
-        gsuite docs create "Personal Notes" --owner alice@paradigm.xyz
-        gsuite docs create "Meeting Notes" --channel eng-ai --owner alice@paradigm.xyz
-        gsuite docs create "Doc Title" --channel ai-agent --owner bob@paradigm.xyz --content "Hello"
+    Files created inside a shared drive are owned by the drive, so --owner is
+    optional with --folder and ownership is not transferred.
     """
-    from .client import docs_create, drive_setup_channel_permissions
+    from .client import drive_setup_channel_permissions
+
+    if not owner and not folder:
+        console.print("[red]Error: --owner is required unless --folder is set[/]")
+        raise typer.Exit(1)
 
     try:
-        result = docs_create(title, content)
-        console.print(f"[green]✓ Created document: {result['title']}[/]")
+        result = create()
+        console.print(f"[green]✓ Created {kind}: {result['title']}[/]")
         console.print(f"[cyan]URL: {result['url']}[/]", soft_wrap=True)
-        console.print(f"[dim]ID: {result['document_id']}[/]")
+        console.print(f"[dim]ID: {result[id_key]}[/]")
+
+        owner_to_transfer = owner if not folder else None
+        if not channel and not owner_to_transfer:
+            return
 
         member_emails = _get_channel_member_emails_via_cli(channel) if channel else []
         if channel:
@@ -1584,20 +1651,67 @@ def docs_create_cmd(
             )
 
         perm_result = drive_setup_channel_permissions(
-            file_id=result["document_id"],
+            file_id=result[id_key],
             channel_member_emails=member_emails,
-            requester_email=owner,
+            requester_email=owner_to_transfer,
         )
 
         if channel:
             console.print(
                 f"[green]✓ Shared with {len(perm_result['shared_with'])} channel members[/]"
             )
-        console.print(f"[green]✓ Ownership transferred to {owner}[/]")
+        if owner_to_transfer:
+            console.print(f"[green]✓ Ownership transferred to {owner_to_transfer}[/]")
 
     except Exception as e:
         console.print(f"[red]Error: {e}[/]")
         raise typer.Exit(1)
+
+
+@docs_app.command("create")
+def docs_create_cmd(
+    title: str = typer.Argument(..., help="Document title"),
+    channel: str | None = typer.Option(
+        None, "--channel", help="Optional Slack channel to share with"
+    ),
+    owner: str | None = typer.Option(
+        None, "--owner", help="Email of new owner (required unless --folder is set)"
+    ),
+    folder: str | None = typer.Option(
+        None, "--folder", "-f", help="Parent folder or shared drive ID"
+    ),
+    content: str = typer.Option(None, "--content", "-c", help="Initial content"),
+):
+    """Create a new Google Doc with automatic permission setup.
+
+    This command:
+    1. Creates the document, inside --folder when given
+    2. Shares with all channel members when --channel is provided (writer role)
+    3. Transfers ownership to --owner
+
+    The original owner (service account) is automatically downgraded to editor
+    by Google Drive when ownership is transferred. An Okta Workflows configuration
+    removes the service account's editor role permissions after 7 days.
+
+    Files created inside a shared drive are owned by the drive, so --owner is
+    optional with --folder and ownership is not transferred.
+
+    Examples:
+        gsuite docs create "Personal Notes" --owner alice@paradigm.xyz
+        gsuite docs create "Meeting Notes" --channel eng-ai --owner alice@paradigm.xyz
+        gsuite docs create "Doc Title" --channel ai-agent --owner bob@paradigm.xyz --content "Hello"
+        gsuite docs create "Design Notes" --folder 0ALWnusNQi9yLUk9PVA
+    """
+    from .client import docs_create
+
+    _create_and_share(
+        "document",
+        lambda: docs_create(title, content, folder_id=folder),
+        "document_id",
+        channel,
+        owner,
+        folder,
+    )
 
 
 # Sheets commands
@@ -1720,46 +1834,44 @@ def sheets_update_cmd(
 @sheets_app.command("create")
 def sheets_create_cmd(
     title: str = typer.Argument(..., help="Spreadsheet title"),
-    channel: str = typer.Option(..., "--channel", help="Slack channel to share with (required)"),
-    owner: str = typer.Option(..., "--owner", help="Email of new owner (required)"),
+    channel: str | None = typer.Option(
+        None, "--channel", help="Optional Slack channel to share with"
+    ),
+    owner: str | None = typer.Option(
+        None, "--owner", help="Email of new owner (required unless --folder is set)"
+    ),
+    folder: str | None = typer.Option(
+        None, "--folder", "-f", help="Parent folder or shared drive ID"
+    ),
 ):
     """Create a new Google Sheet with automatic permission setup.
 
     This command:
-    1. Creates the spreadsheet
-    2. Shares with all channel members (writer role)
-    3. Transfers ownership to the specified owner
+    1. Creates the spreadsheet, inside --folder when given
+    2. Shares with all channel members when --channel is provided (writer role)
+    3. Transfers ownership to --owner
 
     The original owner (service account) is automatically downgraded to editor
     by Google Drive when ownership is transferred. An Okta Workflows configuration
     removes the service account's editor role permissions after 7 days.
 
+    Files created inside a shared drive are owned by the drive, so --owner is
+    optional with --folder and ownership is not transferred.
+
     Examples:
         gsuite sheets create "My Spreadsheet" --channel eng-ai --owner alice@paradigm.xyz
+        gsuite sheets create "Budget" --folder 0ALWnusNQi9yLUk9PVA
     """
-    from .client import sheets_create, drive_setup_channel_permissions
+    from .client import sheets_create
 
-    try:
-        result = sheets_create(title)
-        console.print(f"[green]✓ Created spreadsheet: {result['title']}[/]")
-        console.print(f"[cyan]URL: {result['url']}[/]", soft_wrap=True)
-        console.print(f"[dim]ID: {result['spreadsheet_id']}[/]")
-
-        member_emails = _get_channel_member_emails_via_cli(channel)
-        console.print(f"[dim]Setting up permissions for {len(member_emails)} channel members...[/]")
-
-        perm_result = drive_setup_channel_permissions(
-            file_id=result["spreadsheet_id"],
-            channel_member_emails=member_emails,
-            requester_email=owner,
-        )
-
-        console.print(f"[green]✓ Shared with {len(perm_result['shared_with'])} channel members[/]")
-        console.print(f"[green]✓ Ownership transferred to {owner}[/]")
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/]")
-        raise typer.Exit(1)
+    _create_and_share(
+        "spreadsheet",
+        lambda: sheets_create(title, folder_id=folder),
+        "spreadsheet_id",
+        channel,
+        owner,
+        folder,
+    )
 
 
 # Slides commands
@@ -1768,46 +1880,44 @@ def sheets_create_cmd(
 @slides_app.command("create")
 def slides_create_cmd(
     title: str = typer.Argument(..., help="Presentation title"),
-    channel: str = typer.Option(..., "--channel", help="Slack channel to share with (required)"),
-    owner: str = typer.Option(..., "--owner", help="Email of new owner (required)"),
+    channel: str | None = typer.Option(
+        None, "--channel", help="Optional Slack channel to share with"
+    ),
+    owner: str | None = typer.Option(
+        None, "--owner", help="Email of new owner (required unless --folder is set)"
+    ),
+    folder: str | None = typer.Option(
+        None, "--folder", "-f", help="Parent folder or shared drive ID"
+    ),
 ):
     """Create a new Google Slides presentation with automatic permission setup.
 
     This command:
-    1. Creates the presentation
-    2. Shares with all channel members (writer role)
-    3. Transfers ownership to the specified owner
+    1. Creates the presentation, inside --folder when given
+    2. Shares with all channel members when --channel is provided (writer role)
+    3. Transfers ownership to --owner
 
     The original owner (service account) is automatically downgraded to editor
     by Google Drive when ownership is transferred. An Okta Workflows configuration
     removes the service account's editor role permissions after 7 days.
 
+    Files created inside a shared drive are owned by the drive, so --owner is
+    optional with --folder and ownership is not transferred.
+
     Examples:
         gsuite slides create "My Presentation" --channel eng-ai --owner alice@paradigm.xyz
+        gsuite slides create "Roadmap" --folder 0ALWnusNQi9yLUk9PVA
     """
-    from .client import slides_create, drive_setup_channel_permissions
+    from .client import slides_create
 
-    try:
-        result = slides_create(title)
-        console.print(f"[green]✓ Created presentation: {result['title']}[/]")
-        console.print(f"[cyan]URL: {result['url']}[/]", soft_wrap=True)
-        console.print(f"[dim]ID: {result['presentation_id']}[/]")
-
-        member_emails = _get_channel_member_emails_via_cli(channel)
-        console.print(f"[dim]Setting up permissions for {len(member_emails)} channel members...[/]")
-
-        perm_result = drive_setup_channel_permissions(
-            file_id=result["presentation_id"],
-            channel_member_emails=member_emails,
-            requester_email=owner,
-        )
-
-        console.print(f"[green]✓ Shared with {len(perm_result['shared_with'])} channel members[/]")
-        console.print(f"[green]✓ Ownership transferred to {owner}[/]")
-
-    except Exception as e:
-        console.print(f"[red]Error: {e}[/]")
-        raise typer.Exit(1)
+    _create_and_share(
+        "presentation",
+        lambda: slides_create(title, folder_id=folder),
+        "presentation_id",
+        channel,
+        owner,
+        folder,
+    )
 
 
 # Analytics commands
