@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { RustSessionStreamEvent } from '@centaur/harness-events'
 import { isRetryableCodexErrorNotification } from '@centaur/rendering'
 import type { Attachment, LinkPreview, Message } from 'chat'
+import { isHarnessEnabled } from './overrides'
 import { renderSlackDisplayText, slackMessagePromptText } from './slack-display-text'
 import type {
   ForwardSessionInput,
@@ -499,6 +500,9 @@ export async function forwardToSessionApi(
     sessionApiTimeoutMs(options),
     'create session'
   )
+  if (created.harnessType && !isHarnessEnabled(created.harnessType, options.enabledHarnesses)) {
+    throw new Error(`Harness ${created.harnessType} is not enabled for this deployment`)
+  }
   if (created.harnessType) input.metadataHarnessType = created.harnessType
   input.harnessAssignment = created.harnessAssignment
   traceLog(options, 'slackbotv2_session_create_complete', input.trace, {
@@ -564,6 +568,10 @@ export async function forwardToSessionApi(
 }
 
 export const WORKFLOW_ACTION_PREFIX = 'centaur.workflow.action:'
+/** Emitted by api-rs once a follow-up message reaches an active execution. */
+export const SESSION_STEERING_DELIVERED_EVENT = 'session.steering_delivered'
+/** Emitted by api-rs when a follow-up could not reach the still-running execution. */
+export const SESSION_STEERING_FAILED_EVENT = 'session.steering_failed'
 
 export async function dispatchSlackBlockAction(
   options: SlackbotV2Options,
@@ -834,6 +842,9 @@ async function createSession(
   harnessAssignment?: SlackbotV2HarnessAssignment
 ): Promise<CreateSessionOutcome> {
   const requested = harnessType ?? options.defaultHarnessType ?? DEFAULT_HARNESS_TYPE
+  if (!isHarnessEnabled(requested, options.enabledHarnesses)) {
+    throw new Error(`Harness ${requested} is not enabled for this deployment`)
+  }
   // A sticky --claude/--amp/--codex/--nanocodex selection restarts a thread
   // pinned to another harness; the implicit default never forces a switch.
   const response = await postCreateSession(
@@ -861,13 +872,14 @@ async function createSession(
   // harness instead of failing the message.
   const existing = response.status === 409 ? existingHarnessFromConflict(body) : undefined
   if (existing && existing !== requested) {
+    const existingEnabled = isHarnessEnabled(existing, options.enabledHarnesses)
     const retry = await postCreateSession(
       options,
       threadId,
-      existing,
+      existingEnabled ? existing : requested,
       personaId,
       message,
-      undefined,
+      existingEnabled ? undefined : 'restart',
       harnessAssignment
     )
     await ensureApiOk(retry, 'create session')
@@ -2043,7 +2055,13 @@ async function* parseSessionEventStream(
       if (isTerminalCodexOutputLine(event.data)) return
       continue
     }
-    if (event.event === 'session.activity_summary') {
+    // Steering outcomes let the live renderer restore the assistant status
+    // Slack hides when a follow-up message lands in the thread.
+    if (
+      event.event === 'session.activity_summary' ||
+      event.event === SESSION_STEERING_DELIVERED_EVENT ||
+      event.event === SESSION_STEERING_FAILED_EVENT
+    ) {
       yield {
         data: sessionEventData(event),
         event: event.event,
